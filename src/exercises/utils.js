@@ -117,17 +117,56 @@ export function sanitizeClozeItem(item) {
     }
   }
   
-  // Validate that all blanks have required fields
-  const requiredFields = ['index', 'answer', 'hint', 'rationale'];
+  // Determine if this is a ClozeMixed exercise (has options) or regular Cloze (has answer)
+  const isClozeMixed = item.blanks.length > 0 && item.blanks[0].hasOwnProperty('options');
+  
+  // Define required fields based on exercise type
+  const requiredFields = isClozeMixed 
+    ? ['index', 'options', 'correct_index', 'hint', 'rationale']
+    : ['index', 'answer', 'hint', 'rationale'];
+  
   item.blanks.forEach((blank, idx) => {
     requiredFields.forEach(field => {
       // Fix: properly check for undefined/null/empty string, but allow 0 as valid index
       if (blank[field] === undefined || blank[field] === null || blank[field] === '') {
         warnings.push(`Blank ${idx} missing ${field}`);
         if (!sanitizedItem.blanks[idx]) sanitizedItem.blanks[idx] = {};
-        sanitizedItem.blanks[idx][field] = field === 'index' ? idx : `Missing ${field}`;
+        
+        // Provide appropriate default values based on field type
+        if (field === 'index') {
+          sanitizedItem.blanks[idx][field] = idx;
+        } else if (field === 'options' && isClozeMixed) {
+          sanitizedItem.blanks[idx][field] = ['Missing option 1', 'Missing option 2', 'Missing option 3', 'Missing option 4'];
+        } else if (field === 'correct_index' && isClozeMixed) {
+          sanitizedItem.blanks[idx][field] = 0;
+        } else {
+          sanitizedItem.blanks[idx][field] = `Missing ${field}`;
+        }
       }
     });
+    
+    // Additional validation for ClozeMixed exercises
+    if (isClozeMixed) {
+      // Ensure options array has exactly 4 items
+      if (blank.options && Array.isArray(blank.options)) {
+        if (blank.options.length !== 4) {
+          warnings.push(`Blank ${idx} must have exactly 4 options, found ${blank.options.length}`);
+          // Pad or truncate to exactly 4 options
+          while (blank.options.length < 4) {
+            blank.options.push(`Option ${blank.options.length + 1}`);
+          }
+          if (blank.options.length > 4) {
+            blank.options = blank.options.slice(0, 4);
+          }
+        }
+      }
+      
+      // Ensure correct_index is valid
+      if (typeof blank.correct_index === 'number' && (blank.correct_index < 0 || blank.correct_index >= 4)) {
+        warnings.push(`Blank ${idx} has invalid correct_index: ${blank.correct_index}, must be 0-3`);
+        sanitizedItem.blanks[idx].correct_index = 0;
+      }
+    }
   });
   
   // Ensure blank indices are sequential and match their position
