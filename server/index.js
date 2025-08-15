@@ -82,7 +82,7 @@ function assertEnv(condition, message) {
   }
 }
 
-async function callLLM({ system, user, maxTokens = 1500, jsonSchema, schemaName }) {
+async function callLLM({ system, user, maxTokens = 15000, jsonSchema, schemaName }) {
   const provider = runtimeConfig.provider;
   const startedAt = Date.now();
   const logPrefix = `[LLM ${provider}]`;

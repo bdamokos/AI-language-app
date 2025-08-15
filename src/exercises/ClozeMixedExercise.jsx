@@ -89,7 +89,7 @@ export async function generateClozeMixed(topic, count = 2) {
     body: JSON.stringify({
       system,
       user,
-      maxTokens: 3500,
+      maxTokens: 15000,
       jsonSchema: schema,
       schemaName: 'cloze_mixed_list'
     })

@@ -87,7 +87,7 @@ export async function generateMCQ(topic, count = 5) {
     body: JSON.stringify({
       system,
       user,
-      maxTokens: 3000,
+      maxTokens: 15000,
       jsonSchema: schema,
       schemaName: 'mcq_list'
     })
