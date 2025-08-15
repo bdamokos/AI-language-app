@@ -795,6 +795,85 @@ app.get('/api/openrouter/rate-limit', async (req, res) => {
   }
 });
 
+// OpenRouter models cache (24 hour refresh)
+let modelsCache = {
+  data: null,
+  lastFetch: 0,
+  CACHE_DURATION: 24 * 60 * 60 * 1000 // 24 hours in milliseconds
+};
+
+async function fetchOpenRouterModels() {
+  const now = Date.now();
+  if (modelsCache.data && (now - modelsCache.lastFetch) < modelsCache.CACHE_DURATION) {
+    return modelsCache.data;
+  }
+
+  console.log('[MODELS] Fetching OpenRouter models...');
+  const resp = await fetch('https://openrouter.ai/api/v1/models', {
+    headers: { authorization: `Bearer ${runtimeConfig.openrouter.apiKey}` }
+  });
+  
+  if (!resp.ok) {
+    throw new Error(`Models API error ${resp.status}`);
+  }
+  
+  const data = await resp.json();
+  modelsCache.data = data.data || [];
+  modelsCache.lastFetch = now;
+  console.log(`[MODELS] Cached ${modelsCache.data.length} models`);
+  return modelsCache.data;
+}
+
+// OpenRouter: list models with filtering
+app.get('/api/openrouter/models', async (req, res) => {
+  try {
+    assertEnv(runtimeConfig.openrouter.apiKey, 'Missing OPENROUTER_API_KEY');
+    
+    const models = await fetchOpenRouterModels();
+    const { structured_only, free_only } = req.query;
+    
+    let filtered = models;
+    
+    // Filter for structured output support
+    if (structured_only === 'true') {
+      filtered = filtered.filter(model => 
+        model.supported_parameters?.includes('structured_outputs') ||
+        model.supported_parameters?.includes('response_format')
+      );
+    }
+    
+    // Filter for free models
+    if (free_only === 'true') {
+      filtered = filtered.filter(model => {
+        const pricing = model.pricing || {};
+        const isFreeByPrice = pricing.prompt === '0' && pricing.completion === '0';
+        const isFreeByName = model.id?.toLowerCase().includes('free') || 
+                           model.name?.toLowerCase().includes('free');
+        return isFreeByPrice || isFreeByName;
+      });
+    }
+    
+    // Return simplified model info for dropdown
+    const simplified = filtered.map(model => ({
+      id: model.id,
+      name: model.name,
+      description: model.description,
+      context_length: model.context_length,
+      pricing: model.pricing,
+      supported_parameters: model.supported_parameters,
+      architecture: model.architecture,
+      top_provider: model.top_provider,
+      created: model.created,
+      hugging_face_id: model.hugging_face_id
+    }));
+    
+    res.json({ models: simplified, cached_at: modelsCache.lastFetch });
+  } catch (e) {
+    console.error('[MODELS]', e);
+    res.status(500).json({ error: e.message || 'Failed to fetch models' });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {

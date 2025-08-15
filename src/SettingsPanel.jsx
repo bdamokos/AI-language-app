@@ -13,6 +13,10 @@ export default function SettingsPanel() {
   const [showKeys, setShowKeys] = useState(false);
   const [rateInfo, setRateInfo] = useState(null);
   const [ollamaModels, setOllamaModels] = useState([]);
+  const [openrouterModels, setOpenrouterModels] = useState([]);
+  const [modelFilters, setModelFilters] = useState({ structuredOnly: true, freeOnly: false });
+  const [selectedModelInfo, setSelectedModelInfo] = useState(null);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -25,6 +29,11 @@ export default function SettingsPanel() {
           openrouter: { model: data.openrouter?.model || '', apiKey: '', appUrl: data.openrouter?.appUrl || '' },
           ollama: { model: data.ollama?.model || '', host: data.ollama?.host || '' }
         }));
+        
+        // Auto-load models if we're using OpenRouter and have an API key
+        if (data.provider === 'openrouter' && data.openrouter?.hasKey) {
+          setTimeout(() => loadOpenRouterModels(), 100);
+        }
       } catch (e) {
         setError(e.message || 'Failed to load settings');
       } finally {
@@ -32,6 +41,16 @@ export default function SettingsPanel() {
       }
     })();
   }, []);
+
+  // Auto-select model info when openrouter models load and a model is already selected
+  useEffect(() => {
+    if (openrouterModels.length > 0 && config.openrouter.model && !selectedModelInfo) {
+      const model = openrouterModels.find(m => m.id === config.openrouter.model);
+      if (model) {
+        setSelectedModelInfo(model);
+      }
+    }
+  }, [openrouterModels, config.openrouter.model, selectedModelInfo]);
 
   const save = async () => {
     setSaving(true);
@@ -79,6 +98,50 @@ export default function SettingsPanel() {
     }
   };
 
+  const loadOpenRouterModels = async () => {
+    setLoadingModels(true);
+    setError('');
+    try {
+      const params = new URLSearchParams();
+      // Always filter for structured outputs (required for our app)
+      params.set('structured_only', 'true');
+      if (modelFilters.freeOnly) params.set('free_only', 'true');
+      
+      const res = await fetch(`/api/openrouter/models?${params}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load OpenRouter models');
+      setOpenrouterModels(data.models || []);
+    } catch (e) {
+      setError(e.message || 'Failed to load OpenRouter models');
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const handleModelSelect = (modelId) => {
+    const model = openrouterModels.find(m => m.id === modelId);
+    setSelectedModelInfo(model);
+    setConfig({ ...config, openrouter: { ...config.openrouter, model: modelId } });
+  };
+
+  const formatPrice = (price) => {
+    if (!price || price === '0') return 'Free';
+    const num = parseFloat(price);
+    if (num < 0.000001) return `$${(num * 1000000).toFixed(2)}/M tokens`;
+    if (num < 0.001) return `$${(num * 1000).toFixed(2)}/K tokens`;
+    return `$${num.toFixed(6)}/token`;
+  };
+
+  const formatModelDate = (timestamp) => {
+    if (!timestamp) return '';
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleDateString('en-UK', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    });
+  };
+
   const Input = (props) => (
     <input {...props} className={`w-full px-3 py-2 border rounded ${props.className || ''}`} />
   );
@@ -115,20 +178,106 @@ export default function SettingsPanel() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
-          <h3 className="font-medium mb-2">OpenRouter</h3>
-          <label className="block text-xs mb-1">Model</label>
-          <Input value={config.openrouter.model} onChange={e => setConfig({ ...config, openrouter: { ...config.openrouter, model: e.target.value } })} />
-          <label className="block text-xs mt-2 mb-1">API Key</label>
-          <Input type={showKeys ? 'text' : 'password'} value={config.openrouter.apiKey} onChange={e => setConfig({ ...config, openrouter: { ...config.openrouter, apiKey: e.target.value } })} />
-          <label className="block text-xs mt-2 mb-1">App URL (referer)</label>
-          <Input value={config.openrouter.appUrl} onChange={e => setConfig({ ...config, openrouter: { ...config.openrouter, appUrl: e.target.value } })} />
-          <div className="mt-2">
-            <button onClick={checkOpenRouterRate} className="text-sm text-blue-600 underline">Check rate limits</button>
-            {rateInfo && (
-              <div className="text-xs text-gray-700 mt-1">
-                usage: {rateInfo.data?.usage ?? '-'} | limit: {rateInfo.data?.limit ?? '-'} | free tier: {String(rateInfo.data?.is_free_tier)}
+          <h3 className="font-medium mb-3">OpenRouter</h3>
+          
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium">Model</label>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <input 
+                      id="free" 
+                      type="checkbox" 
+                      checked={modelFilters.freeOnly} 
+                      onChange={e => {
+                        const newFilters = {...modelFilters, freeOnly: e.target.checked};
+                        setModelFilters(newFilters);
+                        if (openrouterModels.length > 0) {
+                          // Reload models with new filter
+                          setTimeout(() => loadOpenRouterModels(), 50);
+                        }
+                      }}
+                    />
+                    <label htmlFor="free" className="text-sm">Free only</label>
+                  </div>
+                  <button 
+                    onClick={loadOpenRouterModels} 
+                    disabled={loadingModels} 
+                    className="text-sm text-blue-600 hover:text-blue-800 underline"
+                  >
+                    {loadingModels ? 'Loading...' : 'Load Models'}
+                  </button>
+                </div>
               </div>
-            )}
+              
+              <select
+                className="w-full px-3 py-2 border rounded text-sm"
+                value={config.openrouter.model}
+                onChange={e => handleModelSelect(e.target.value)}
+                disabled={openrouterModels.length === 0}
+              >
+                <option value="">
+                  {openrouterModels.length === 0 ? 'Load models first...' : 'Select a model...'}
+                </option>
+                {openrouterModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name}
+                  </option>
+                ))}
+              </select>
+
+              {selectedModelInfo && (
+                <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-start justify-between">
+                    <div className="font-medium text-sm">{selectedModelInfo.name}</div>
+                    {selectedModelInfo.hugging_face_id && (
+                      <a 
+                        href={`https://huggingface.co/${selectedModelInfo.hugging_face_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 hover:text-blue-800 underline"
+                      >
+                        🤗 Hugging Face
+                      </a>
+                    )}
+                  </div>
+                  <div className="text-gray-600 text-xs mt-1 leading-relaxed">
+                    {selectedModelInfo.description?.slice(0, 200)}...
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div>Context: <span className="font-medium">{selectedModelInfo.context_length?.toLocaleString()}</span> tokens</div>
+                    <div>Input: <span className="font-medium">{formatPrice(selectedModelInfo.pricing?.prompt)}</span></div>
+                    <div>Output: <span className="font-medium">{formatPrice(selectedModelInfo.pricing?.completion)}</span></div>
+                    <div className="text-green-600">✓ Structured outputs</div>
+                    {selectedModelInfo.created && (
+                      <div>Released: <span className="font-medium">{formatModelDate(selectedModelInfo.created)}</span></div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+
+            <div>
+              <label className="block text-sm font-medium mb-1">App URL (referer)</label>
+              <Input 
+                value={config.openrouter.appUrl} 
+                onChange={e => setConfig({ ...config, openrouter: { ...config.openrouter, appUrl: e.target.value } })}
+                placeholder="http://localhost:5173"
+              />
+            </div>
+
+            <div className="pt-2 border-t">
+              <button onClick={checkOpenRouterRate} className="text-sm text-blue-600 hover:text-blue-800 underline">
+                Check rate limits
+              </button>
+              {rateInfo && (
+                <div className="text-sm text-gray-600 mt-2 p-2 bg-gray-50 rounded">
+                  Usage: {rateInfo.data?.usage ?? '-'} | Limit: {rateInfo.data?.limit ?? '-'} | Free tier: {String(rateInfo.data?.is_free_tier)}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div>
