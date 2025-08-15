@@ -79,4 +79,66 @@ export function scoreFIB(item, value, eq) {
   return { correct, total: blanks };
 }
 
+/**
+ * Generate FIB exercises using the generic LLM endpoint
+ * @param {string} topic - The topic to generate exercises about
+ * @param {number} count - Number of exercises to generate (1-20)
+ * @returns {Promise<{items: Array}>} Generated FIB exercises
+ */
+export async function generateFIB(topic, count = 5) {
+  const system = 'Generate Spanish fill-in-the-blank exercises with exactly five underscores (_____) for blanks.';
+  
+  const user = `Create exactly ${count} Spanish fill-in-the-blank exercises about: ${topic}.
+
+Rules:
+- Use exactly _____ (5 underscores) for each blank
+- Put basic hint in parentheses after the blank
+- Provide up to 3 progressive hints in the "hints" array:
+  - First hint: general guidance to help user think
+  - Second hint: more specific clue
+  - Third hint: very specific (e.g., "starts with 'vi...'")
+- If exercise is simple, you can provide fewer hints or make the third hint show first letters
+- "context" field is optional - include interesting cultural notes, regional differences, or usage tips when relevant
+- Make exercises progressively harder`;
+
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array', items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            sentence: { type: 'string' },
+            answers: { type: 'array', items: { type: 'string' } },
+            hint: { type: 'string' },
+            hints: { type: 'array', items: { type: 'string' } },
+            context: { type: 'string' },
+            difficulty: { type: 'string' }
+          },
+          required: ['sentence','answers','difficulty']
+        }
+      }
+    },
+    required: ['items']
+  };
+
+  const response = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system,
+      user,
+      maxTokens: 3000,
+      jsonSchema: schema,
+      schemaName: 'fib_list'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate FIB exercises: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 

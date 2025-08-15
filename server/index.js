@@ -56,7 +56,7 @@ const runtimeConfig = {
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY || '',
     model: DEFAULT_MODELS.openrouter,
-    appUrl: process.env.APP_URL || 'http://localhost:5173'
+    appUrl: process.env.APP_URL || 'Language AI App'
   },
   ollama: {
     host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
@@ -199,6 +199,37 @@ async function getOpenRouterKeyInfo() {
   if (!resp.ok) throw new Error(`Key endpoint error ${resp.status}`);
   return resp.json();
 }
+
+// Generic LLM generation endpoint
+app.post('/api/generate', async (req, res) => {
+  try {
+    const { system, user, maxTokens = 3000, jsonSchema, schemaName } = req.body || {};
+    if (!user || !String(user).trim()) return res.status(400).json({ error: 'User prompt is required' });
+    
+    const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+    const text = await callLLM({ 
+      system, 
+      user, 
+      maxTokens, 
+      jsonSchema: useStructured ? jsonSchema : undefined, 
+      schemaName 
+    });
+    
+    let parsed;
+    try {
+      parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
+    } catch (e) {
+      console.error('[PARSE]', e.message, e.rawPreview || '');
+      return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
+    }
+    
+    return res.json(parsed);
+  } catch (err) {
+    console.error(err);
+    const status = /Missing/i.test(err?.message || '') ? 400 : 500;
+    return res.status(status).json({ error: 'Failed to generate content', details: err?.message, provider: runtimeConfig.provider });
+  }
+});
 
 // Routes
 app.post('/api/generate-exercises', async (req, res) => {

@@ -58,4 +58,55 @@ export function scoreCloze(item, value, eq) {
   return { correct, total };
 }
 
+/**
+ * Generate Cloze exercises using the generic LLM endpoint
+ * @param {string} topic - The topic to generate exercises about
+ * @param {number} count - Number of exercises to generate (1-10)
+ * @returns {Promise<{items: Array}>} Generated Cloze exercises
+ */
+export async function generateCloze(topic, count = 2) {
+  const system = 'Generate Spanish cloze passages with several blanks (_____). Include an answers array with index and answer.';
+  
+  const user = `Create exactly ${count} cloze passages about: ${topic}.`;
+
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array', items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            title: { type: 'string' },
+            passage: { type: 'string' },
+            blanks: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+              index: { type: 'integer' }, answer: { type: 'string' }, hint: { type: 'string' }, rationale: { type: 'string' }
+            }, required: ['index','answer'] }},
+            difficulty: { type: 'string' }
+          },
+          required: ['passage','blanks','difficulty']
+        }
+      }
+    },
+    required: ['items']
+  };
+
+  const response = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system,
+      user,
+      maxTokens: 3500,
+      jsonSchema: schema,
+      schemaName: 'cloze_list'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate Cloze exercises: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 

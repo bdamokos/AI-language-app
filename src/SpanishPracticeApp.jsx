@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import Orchestrator, { scoreLesson } from './exercises/Orchestrator.jsx';
-import { scoreFIB } from './exercises/FIBExercise.jsx';
-import { scoreMCQ } from './exercises/MCQExercise.jsx';
-import { scoreCloze } from './exercises/ClozeExercise.jsx';
-import { scoreClozeMixed } from './exercises/ClozeMixedExercise.jsx';
+import Orchestrator, { scoreLesson, generateLesson } from './exercises/Orchestrator.jsx';
+import { scoreFIB, generateFIB } from './exercises/FIBExercise.jsx';
+import { scoreMCQ, generateMCQ } from './exercises/MCQExercise.jsx';
+import { scoreCloze, generateCloze } from './exercises/ClozeExercise.jsx';
+import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExercise.jsx';
+import { generateExplanation } from './exercises/ExplanationComponent.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
 
 const SpanishPracticeApp = () => {
@@ -193,11 +192,6 @@ const SpanishPracticeApp = () => {
         {lesson.pedagogy?.strategy_notes && (
           <p className="text-sm text-gray-600">Approach: scaffolded+spiral — {lesson.pedagogy.strategy_notes}</p>
         )}
-        {lesson.explanation?.content_markdown && (
-          <div className="mt-2 p-3 bg-gray-50 rounded prose prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{lesson.explanation.content_markdown}</ReactMarkdown>
-          </div>
-        )}
         {/* On-demand exercise generation controls inside the lesson */}
         <div className="mt-3 p-3 bg-gray-50 rounded">
           <div className="font-semibold text-gray-800 mb-2">Add content</div>
@@ -289,36 +283,24 @@ const SpanishPracticeApp = () => {
     }
   };
 
-  const generateLesson = async () => {
+  const generateLessonContent = async () => {
     if (!topic.trim()) return;
     setLoadingLesson(true);
     setErrorMsg('');
     setLesson(null);
     try {
-      const response = await fetch('/api/generate-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic,
-          counts: {
-            explanation: 1,
-            fill_in_blanks: 0,
-            multiple_choice: 0,
-            cloze_passages: 0,
-            cloze_with_mixed_options: 0
-          }
-        })
+      // Only generate explanation initially - exercises generated on-demand
+      const data = await generateLesson(topic, {
+        fill_in_blanks: 0,
+        multiple_choice: 0,
+        cloze_passages: 0,
+        cloze_with_mixed_options: 0
       });
-      const data = await response.json();
-      if (!response.ok) {
-        setErrorMsg(data.details || data.error || 'Failed to generate lesson');
-        return;
-      }
       setLesson(data);
       setOrchestratorValues({});
     } catch (error) {
       console.error('Error generating lesson:', error);
-      alert('Error generating lesson. Please try again.');
+      setErrorMsg(error.message || 'Error generating lesson. Please try again.');
     } finally {
       setLoadingLesson(false);
     }
@@ -359,11 +341,9 @@ const SpanishPracticeApp = () => {
     setLoadingExplOnly(true);
     setErrorMsg('');
     try {
-      const res = await fetch('/api/generate/explanation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic }) });
-      const data = await res.json();
-      if (!res.ok) { setErrorMsg(data.details || data.error || 'Failed to generate explanation'); return; }
+      const explanation = await generateExplanation(topic);
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, explanation: data });
+      mergeLesson({ topic, explanation });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate explanation'); }
     finally { setLoadingExplOnly(false); }
   };
@@ -373,9 +353,7 @@ const SpanishPracticeApp = () => {
     setLoadingFibOnly(true);
     setErrorMsg('');
     try {
-      const res = await fetch('/api/generate/fib', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, count: Number(exerciseCount) }) });
-      const data = await res.json();
-      if (!res.ok) { setErrorMsg(data.details || data.error || 'Failed to generate FIB'); return; }
+      const data = await generateFIB(topic, Number(exerciseCount));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, fill_in_blanks: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate FIB'); }
@@ -387,9 +365,7 @@ const SpanishPracticeApp = () => {
     setLoadingMcqOnly(true);
     setErrorMsg('');
     try {
-      const res = await fetch('/api/generate/mcq', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, count: Number(mcqCount) }) });
-      const data = await res.json();
-      if (!res.ok) { setErrorMsg(data.details || data.error || 'Failed to generate MCQ'); return; }
+      const data = await generateMCQ(topic, Number(mcqCount));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, multiple_choice: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate MCQ'); }
@@ -401,9 +377,7 @@ const SpanishPracticeApp = () => {
     setLoadingClozeOnly(true);
     setErrorMsg('');
     try {
-      const res = await fetch('/api/generate/cloze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, count: Number(clozeCount) }) });
-      const data = await res.json();
-      if (!res.ok) { setErrorMsg(data.details || data.error || 'Failed to generate cloze'); return; }
+      const data = await generateCloze(topic, Number(clozeCount));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, cloze_passages: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze'); }
@@ -415,9 +389,7 @@ const SpanishPracticeApp = () => {
     setLoadingClozeMixOnly(true);
     setErrorMsg('');
     try {
-      const res = await fetch('/api/generate/cloze-mixed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, count: Number(clozeMixCount) }) });
-      const data = await res.json();
-      if (!res.ok) { setErrorMsg(data.details || data.error || 'Failed to generate cloze-mixed'); return; }
+      const data = await generateClozeMixed(topic, Number(clozeMixCount));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, cloze_with_mixed_options: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
@@ -688,7 +660,7 @@ const SpanishPracticeApp = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <button
-              onClick={generateLesson}
+              onClick={generateLessonContent}
               disabled={loadingLesson || !topic.trim()}
               className="w-full bg-purple-600 text-white py-3 px-6 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >

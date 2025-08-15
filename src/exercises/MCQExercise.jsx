@@ -47,4 +47,57 @@ export function scoreMCQ(item, value) {
   return { correct: isCorrect ? 1 : 0, total: 1 };
 }
 
+/**
+ * Generate MCQ exercises using the generic LLM endpoint
+ * @param {string} topic - The topic to generate exercises about
+ * @param {number} count - Number of exercises to generate (1-20)
+ * @returns {Promise<{items: Array}>} Generated MCQ exercises
+ */
+export async function generateMCQ(topic, count = 5) {
+  const system = 'Generate Spanish multiple-choice questions with 4 options, one correct, with rationales.';
+  
+  const user = `Create exactly ${count} MCQs about: ${topic}. Include plausible distractors.`;
+
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array', items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            question: { type: 'string' },
+            options: { type: 'array', minItems: 4, maxItems: 4, items: {
+              type: 'object', additionalProperties: false,
+              properties: { text: { type: 'string' }, correct: { type: 'boolean' }, rationale: { type: 'string' } },
+              required: ['text','correct','rationale']
+            }},
+            explanation: { type: 'string' },
+            difficulty: { type: 'string' }
+          },
+          required: ['question','options','difficulty']
+        }
+      }
+    },
+    required: ['items']
+  };
+
+  const response = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system,
+      user,
+      maxTokens: 3000,
+      jsonSchema: schema,
+      schemaName: 'mcq_list'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate MCQ exercises: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 

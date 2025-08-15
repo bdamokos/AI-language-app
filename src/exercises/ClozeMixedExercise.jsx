@@ -51,4 +51,55 @@ export function scoreClozeMixed(item, value, eq) {
   return { correct, total };
 }
 
+/**
+ * Generate ClozeMixed exercises using the generic LLM endpoint
+ * @param {string} topic - The topic to generate exercises about
+ * @param {number} count - Number of exercises to generate (1-10)
+ * @returns {Promise<{items: Array}>} Generated ClozeMixed exercises
+ */
+export async function generateClozeMixed(topic, count = 2) {
+  const system = 'Generate Spanish cloze passages where each blank has a set of options including the target concept and closely-related distractors.';
+  
+  const user = `Create exactly ${count} cloze-with-options passages about: ${topic}.`;
+
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array', items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            title: { type: 'string' },
+            passage: { type: 'string' },
+            blanks: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+              index: { type: 'integer' }, options: { type: 'array', items: { type: 'string' }, minItems: 3 }, correct_index: { type: 'integer' }
+            }, required: ['index','options','correct_index'] }},
+            difficulty: { type: 'string' }
+          },
+          required: ['passage','blanks','difficulty']
+        }
+      }
+    },
+    required: ['items']
+  };
+
+  const response = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system,
+      user,
+      maxTokens: 3500,
+      jsonSchema: schema,
+      schemaName: 'cloze_mixed_list'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate ClozeMixed exercises: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 

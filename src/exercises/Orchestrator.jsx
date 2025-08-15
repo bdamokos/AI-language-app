@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
-import FIBExercise, { scoreFIB } from './FIBExercise.jsx';
-import MCQExercise, { scoreMCQ } from './MCQExercise.jsx';
-import ClozeExercise, { scoreCloze } from './ClozeExercise.jsx';
-import ClozeMixedExercise, { scoreClozeMixed } from './ClozeMixedExercise.jsx';
+import FIBExercise, { scoreFIB, generateFIB } from './FIBExercise.jsx';
+import MCQExercise, { scoreMCQ, generateMCQ } from './MCQExercise.jsx';
+import ClozeExercise, { scoreCloze, generateCloze } from './ClozeExercise.jsx';
+import ClozeMixedExercise, { scoreClozeMixed, generateClozeMixed } from './ClozeMixedExercise.jsx';
+import ExplanationComponent, { generateExplanation } from './ExplanationComponent.jsx';
 import { normalizeText } from './utils.js';
 
 /**
@@ -27,6 +28,9 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
 
   return (
     <div className="space-y-3">
+      {lesson?.explanation && (
+        <ExplanationComponent explanation={lesson.explanation} />
+      )}
       {sections.map(([type, items]) => (
         <div key={type} className="space-y-3">
           {type === 'fib' && items.length > 0 && <h3 className="font-semibold text-gray-800">Fill in the blanks</h3>}
@@ -103,6 +107,48 @@ export function scoreLesson(lesson, values, strictAccents = true) {
     });
   }
   return { correct, total };
+}
+
+/**
+ * Generate a complete lesson using component-driven generation
+ * @param {string} topic - The topic to generate exercises about
+ * @param {Object} counts - Exercise counts: { fill_in_blanks, multiple_choice, cloze_passages, cloze_with_mixed_options }
+ * @param {string} language - Language for examples (default: 'es')
+ * @returns {Promise<Object>} Generated lesson bundle
+ */
+export async function generateLesson(topic, counts = {}, language = 'es') {
+  const safeCounts = {
+    explanation: 1,
+    fill_in_blanks: Math.max(0, Math.min(20, Number(counts?.fill_in_blanks ?? 0))),
+    multiple_choice: Math.max(0, Math.min(20, Number(counts?.multiple_choice ?? 0))),
+    cloze_passages: Math.max(0, Math.min(10, Number(counts?.cloze_passages ?? 0))),
+    cloze_with_mixed_options: Math.max(0, Math.min(10, Number(counts?.cloze_with_mixed_options ?? 0)))
+  };
+
+  // Generate all exercise types in parallel using component generation functions
+  const [explanation, fibData, mcqData, clozeData, clozeMixData] = await Promise.all([
+    generateExplanation(topic, language),
+    safeCounts.fill_in_blanks > 0 ? generateFIB(topic, safeCounts.fill_in_blanks) : Promise.resolve({ items: [] }),
+    safeCounts.multiple_choice > 0 ? generateMCQ(topic, safeCounts.multiple_choice) : Promise.resolve({ items: [] }),
+    safeCounts.cloze_passages > 0 ? generateCloze(topic, safeCounts.cloze_passages) : Promise.resolve({ items: [] }),
+    safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options) : Promise.resolve({ items: [] })
+  ]);
+
+  // Build lesson bundle
+  return {
+    version: '1.0',
+    language,
+    topic,
+    pedagogy: { 
+      approach: 'scaffolded+spiral', 
+      strategy_notes: 'Component-driven generation with distributed prompts' 
+    },
+    explanation,
+    fill_in_blanks: fibData.items || [],
+    multiple_choice: mcqData.items || [],
+    cloze_passages: clozeData.items || [],
+    cloze_with_mixed_options: clozeMixData.items || []
+  };
 }
 
 
