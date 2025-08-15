@@ -8,12 +8,22 @@ export default function SettingsPanel() {
   const [config, setConfig] = useState({
     provider: 'openrouter',
     openrouter: { model: '', apiKey: '', appUrl: '' },
-    ollama: { model: '', host: '' }
+    ollama: { model: '', host: '' },
+    runware: { 
+      model: '', 
+      apiKey: '', 
+      enabled: false, 
+      width: 512, 
+      height: 512, 
+      steps: 20, 
+      cfgScale: 7 
+    }
   });
   const [showKeys, setShowKeys] = useState(false);
   const [rateInfo, setRateInfo] = useState(null);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [openrouterModels, setOpenrouterModels] = useState([]);
+  const [runwareModels, setRunwareModels] = useState([]);
   const [modelFilters, setModelFilters] = useState({ structuredOnly: true, freeOnly: false });
   const [selectedModelInfo, setSelectedModelInfo] = useState(null);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -27,7 +37,16 @@ export default function SettingsPanel() {
         setConfig(cfg => ({
           provider: data.provider,
           openrouter: { model: data.openrouter?.model || '', apiKey: '', appUrl: data.openrouter?.appUrl || '' },
-          ollama: { model: data.ollama?.model || '', host: data.ollama?.host || '' }
+          ollama: { model: data.ollama?.model || '', host: data.ollama?.host || '' },
+          runware: { 
+            model: data.runware?.model || '', 
+            apiKey: '', 
+            enabled: data.runware?.enabled || false,
+            width: data.runware?.width || 512,
+            height: data.runware?.height || 512,
+            steps: data.runware?.steps || 20,
+            cfgScale: data.runware?.cfgScale || 7
+          }
         }));
         
         // Auto-load models if we're using OpenRouter and have an API key
@@ -95,6 +114,21 @@ export default function SettingsPanel() {
       setOllamaModels(data.models || []);
     } catch (e) {
       setError(e.message || 'Failed to load Ollama models');
+    }
+  };
+
+  const loadRunwareModels = async () => {
+    setLoadingModels(true);
+    setError('');
+    try {
+      const res = await fetch('/api/runware/models');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load Runware models');
+      setRunwareModels(data.models || data || []);
+    } catch (e) {
+      setError(e.message || 'Failed to load Runware models');
+    } finally {
+      setLoadingModels(false);
     }
   };
 
@@ -300,6 +334,117 @@ export default function SettingsPanel() {
                 ))}
               </select>
             )}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3">
+        <div>
+          <h3 className="font-medium mb-3">Runware (Image Generation)</h3>
+          
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <input 
+                id="runwareEnabled" 
+                type="checkbox" 
+                checked={config.runware.enabled} 
+                onChange={e => setConfig({ ...config, runware: { ...config.runware, enabled: e.target.checked } })}
+              />
+              <label htmlFor="runwareEnabled" className="text-sm font-medium">Enable image generation</label>
+            </div>
+
+            {showKeys && (
+              <div>
+                <label className="block text-sm font-medium mb-1">API Key</label>
+                <Input 
+                  type="password"
+                  value={config.runware.apiKey} 
+                  onChange={e => setConfig({ ...config, runware: { ...config.runware, apiKey: e.target.value } })}
+                  placeholder="Enter Runware API key"
+                />
+              </div>
+            )}
+            
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium">Model</label>
+                <button 
+                  onClick={loadRunwareModels} 
+                  disabled={loadingModels || !config.runware.enabled} 
+                  className="text-sm text-blue-600 hover:text-blue-800 underline disabled:text-gray-400"
+                >
+                  {loadingModels ? 'Loading...' : 'Load Models'}
+                </button>
+              </div>
+              
+              <div className="flex gap-2">
+                <Input 
+                  value={config.runware.model} 
+                  onChange={e => setConfig({ ...config, runware: { ...config.runware, model: e.target.value } })}
+                  placeholder="runware:100@1"
+                />
+                {runwareModels.length > 0 && (
+                  <select
+                    className="px-2 py-2 border rounded text-sm"
+                    value={config.runware.model}
+                    onChange={e => setConfig({ ...config, runware: { ...config.runware, model: e.target.value } })}
+                  >
+                    <option value="">Select...</option>
+                    {runwareModels.map((model) => (
+                      <option key={model.id || model} value={model.id || model}>
+                        {model.name || model}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Width</label>
+                <Input 
+                  type="number" 
+                  min="64" 
+                  max="2048" 
+                  step="64"
+                  value={config.runware.width} 
+                  onChange={e => setConfig({ ...config, runware: { ...config.runware, width: Number(e.target.value) } })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Height</label>
+                <Input 
+                  type="number" 
+                  min="64" 
+                  max="2048" 
+                  step="64"
+                  value={config.runware.height} 
+                  onChange={e => setConfig({ ...config, runware: { ...config.runware, height: Number(e.target.value) } })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Steps</label>
+                <Input 
+                  type="number" 
+                  min="1" 
+                  max="100"
+                  value={config.runware.steps} 
+                  onChange={e => setConfig({ ...config, runware: { ...config.runware, steps: Number(e.target.value) } })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">CFG Scale</label>
+                <Input 
+                  type="number" 
+                  min="1" 
+                  max="20" 
+                  step="0.1"
+                  value={config.runware.cfgScale} 
+                  onChange={e => setConfig({ ...config, runware: { ...config.runware, cfgScale: Number(e.target.value) } })}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>

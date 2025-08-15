@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 
 dotenv.config();
 
@@ -91,7 +92,7 @@ const runtimeConfig = {
   runware: {
     apiKey: process.env.RUNWARE_API_KEY || '',
     model: process.env.RUNWARE_MODEL || 'runware:100@1',
-    enabled: process.env.RUNWARE_ENABLED === 'true' || false,
+    enabled: process.env.RUNWARE_ENABLED === 'true',
     width: Number(process.env.RUNWARE_WIDTH || 512),
     height: Number(process.env.RUNWARE_HEIGHT || 512),
     steps: Number(process.env.RUNWARE_STEPS || 20),
@@ -841,22 +842,27 @@ app.post('/api/runware/generate', async (req, res) => {
     }
     
     // Use provided values or fallback to configured defaults
-    const taskUUID = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const taskUUID = crypto.randomUUID();
     const requestBody = [{
       taskType: 'imageInference',
       taskUUID,
       includeCost: true,
       positivePrompt: String(prompt).trim(),
       model: model || runtimeConfig.runware.model,
+      numberResults: 1,
+      outputFormat: 'WEBP',
       width: width || runtimeConfig.runware.width,
       height: height || runtimeConfig.runware.height,
       steps: steps || runtimeConfig.runware.steps,
       CFGScale: cfgScale || runtimeConfig.runware.cfgScale,
+      outputType: 'URL',
       ...(seed && { seed }),
       ...(scheduler && { scheduler })
     }];
     
-    console.log(`[RUNWARE] Generating image with model=${requestBody[0].model} size=${requestBody[0].width}x${requestBody[0].height} steps=${requestBody[0].steps}`);
+    const startedAt = Date.now();
+    const promptPreview = String(prompt).slice(0, 80).replace(/\s+/g, ' ');
+    console.log(`[RUNWARE] model=${requestBody[0].model} size=${requestBody[0].width}x${requestBody[0].height} steps=${requestBody[0].steps} promptPreview="${promptPreview}..."`);
     
     const response = await fetch('https://api.runware.ai/v1', {
       method: 'POST',
@@ -877,7 +883,29 @@ app.post('/api/runware/generate', async (req, res) => {
     }
     
     const data = await response.json();
-    console.log(`[RUNWARE] Generation completed for task ${taskUUID}`);
+    
+    const responseTime = Date.now() - startedAt;
+    
+    // Log response structure for debugging
+    console.log(`[RUNWARE] Response structure:`, JSON.stringify(data, null, 2));
+    
+    // Log cost information if available
+    if (Array.isArray(data) && data.length > 0) {
+      const result = data[0];
+      if (result.cost !== undefined) {
+        console.log(`[RUNWARE] ok in ${responseTime}ms | cost: $${Number(result.cost).toFixed(6)} | model: ${requestBody[0].model} | size: ${requestBody[0].width}x${requestBody[0].height} | id: ${taskUUID}`);
+      } else {
+        console.log(`[RUNWARE] ok in ${responseTime}ms | model: ${requestBody[0].model} | size: ${requestBody[0].width}x${requestBody[0].height} | id: ${taskUUID}`);
+      }
+      
+      // Log any additional cost details if present
+      if (result.costDetails) {
+        console.log(`[RUNWARE] Cost breakdown: ${JSON.stringify(result.costDetails)}`);
+      }
+    } else {
+      console.log(`[RUNWARE] ok in ${responseTime}ms | id: ${taskUUID}`);
+      console.log(`[RUNWARE] Unexpected response format:`, data);
+    }
     
     // Return the generated image data
     res.json({
@@ -920,7 +948,7 @@ app.get('/api/runware/models', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('[RUNWARE] Models fetch error:', err);
-    const status = /Missing/i.test(err?.message || '') ? 400 : 500;
+    const status = /Missing|not configured/i.test(err?.message || '') ? 400 : 500;
     res.status(status).json({ 
       error: 'Failed to fetch Runware models', 
       details: err?.message 
@@ -1007,6 +1035,8 @@ if (process.env.NODE_ENV === 'production') {
 }
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT} (provider=${runtimeConfig.provider})`);
+  console.log(`[RUNWARE] Startup - API key loaded: ${!!runtimeConfig.runware.apiKey}, enabled: ${runtimeConfig.runware.enabled}`);
+  console.log(`[RUNWARE] Environment - API key: ${!!process.env.RUNWARE_API_KEY}, enabled: ${process.env.RUNWARE_ENABLED}`);
 });
 
 

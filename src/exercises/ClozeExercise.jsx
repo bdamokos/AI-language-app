@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem } from './utils.js';
+import useRunware from '../hooks/useRunware.js';
 
 /**
  * Cloze passage with free-text blanks
@@ -11,6 +12,11 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
   const [showRationale, setShowRationale] = useState({});
   const [sanitizedItem, setSanitizedItem] = useState(item);
   const [warnings, setWarnings] = useState([]);
+  const [generatedImage, setGeneratedImage] = useState(null);
+  const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
+  const { generateImage, loading: imageLoading, error: imageError } = useRunware();
+  const isGeneratingRef = useRef(false);
+  const lastItemRef = useRef(null);
   
   // Sanitize the item when it changes
   useEffect(() => {
@@ -33,6 +39,91 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
       }
     }
   }, [item]);
+
+  // Check if image generation is enabled once on mount
+  useEffect(() => {
+    const checkImageGenerationEnabled = async () => {
+      try {
+        const settingsRes = await fetch('/api/settings');
+        const settings = await settingsRes.json();
+        setImageGenerationEnabled(settings.runware?.enabled || false);
+      } catch (error) {
+        console.log('[CLOZE] Could not check image generation settings:', error.message);
+        setImageGenerationEnabled(false);
+      }
+    };
+    
+    checkImageGenerationEnabled();
+  }, []);
+
+  // Generate image when item changes (if image generation is enabled)
+  useEffect(() => {
+    const generateContextualImage = async () => {
+      // Skip if image generation is not enabled
+      if (!imageGenerationEnabled) {
+        console.log('[CLOZE] Image generation not enabled, skipping');
+        return;
+      }
+      
+      // Skip if no title or passage
+      if (!sanitizedItem?.title || !sanitizedItem?.passage) {
+        console.log('[CLOZE] No title or passage, skipping image generation');
+        return;
+      }
+      
+      // Skip if this is the same item we already processed
+      const currentItemKey = `${sanitizedItem.title}-${sanitizedItem.passage.substring(0, 100)}`;
+      if (lastItemRef.current === currentItemKey) {
+        console.log('[CLOZE] Same item, skipping duplicate image generation');
+        return;
+      }
+      
+      // Prevent duplicate requests
+      if (isGeneratingRef.current) {
+        console.log('[CLOZE] Image generation already in progress, skipping');
+        return;
+      }
+      
+      // Reset previous image
+      setGeneratedImage(null);
+      isGeneratingRef.current = true;
+      lastItemRef.current = currentItemKey;
+      
+      try {
+        // Clean the passage text by removing blanks for better image generation
+        const cleanPassage = sanitizedItem.passage.replace(/_____/g, '[blank]');
+        const prompt = `Create a stock photo that goes along with this topic: ${sanitizedItem.title}\n${cleanPassage}`;
+        
+        console.log('[CLOZE] Starting image generation for:', sanitizedItem.title);
+        
+        const imageData = await generateImage(prompt, {
+          model: "runware:101@1",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfgScale: 3.5,
+          scheduler: "FlowMatchEulerDiscreteScheduler"
+        });
+        
+        // Log cost information in development mode
+        if (imageData?.data?.[0]?.cost !== undefined) {
+          console.log(`[CLOZE] Image generated with cost: $${Number(imageData.data[0].cost).toFixed(6)}`);
+        }
+        
+        // Debug the response structure
+        console.log('[CLOZE] Image data received:', imageData);
+        
+        setGeneratedImage(imageData);
+      } catch (error) {
+        // Silently fail - image generation is optional
+        console.log('[CLOZE] Image generation failed:', error.message);
+      } finally {
+        isGeneratingRef.current = false;
+      }
+    };
+    
+    generateContextualImage();
+  }, [sanitizedItem?.title, sanitizedItem?.passage, imageGenerationEnabled]); // Only depend on the actual values, not the entire object
   
   const parts = splitByBlanks(sanitizedItem?.passage || '');
   const blanks = Array.isArray(sanitizedItem?.blanks) ? sanitizedItem.blanks : [];
@@ -107,6 +198,15 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
     }
   }
   
+  // Helper function to get the correct image source
+  const getImageSource = (imageData) => {
+    if (!imageData?.data?.[0]) return null;
+    
+    const image = imageData.data[0];
+    // Prefer URL, fallback to dataURI, then base64
+    return image.imageURL || image.imageDataURI || image.imageBase64Data;
+  };
+  
   return (
     <div className="border rounded p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
@@ -140,7 +240,54 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         </div>
       )}
       
-      <div className="text-gray-800 leading-relaxed">{nodes}</div>
+      {/* Main content area with text and optional image */}
+      <div className="flex flex-col lg:flex-row gap-4">
+        {/* Text passage */}
+        <div className="flex-1">
+          <div className="text-gray-800 leading-relaxed">{nodes}</div>
+        </div>
+        
+        {/* Generated image */}
+        {imageGenerationEnabled && (imageLoading || generatedImage || imageError) && (
+          <div className="lg:w-64 xl:w-80 flex-shrink-0">
+            {imageLoading && (
+              <div className="w-full aspect-square bg-gray-100 border border-gray-200 rounded-lg flex items-center justify-center">
+                <div className="text-center">
+                  <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                  <p className="text-sm text-gray-600">Generating image...</p>
+                </div>
+              </div>
+            )}
+            
+            {generatedImage && getImageSource(generatedImage) && (
+              <div className="w-full">
+                <img 
+                  src={getImageSource(generatedImage)}
+                  alt={`Illustration for: ${item?.title || 'Cloze passage'}`}
+                  className="w-full aspect-square object-cover rounded-lg border border-gray-200 shadow-sm"
+                  onError={(e) => {
+                    console.error('[CLOZE] Failed to load generated image:', e);
+                    e.target.style.display = 'none';
+                  }}
+                />
+                <p className="text-xs text-gray-500 mt-1 text-center">
+                  AI-generated illustration
+                  {generatedImage.data?.[0]?.cost && ` • $${Number(generatedImage.data[0].cost).toFixed(4)}`}
+                </p>
+              </div>
+            )}
+            
+            {imageError && !imageLoading && (
+              <div className="w-full aspect-square bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-center">
+                <div className="text-center p-4">
+                  <p className="text-sm text-gray-500">Image generation failed</p>
+                  <p className="text-xs text-gray-400 mt-1">{imageError}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
