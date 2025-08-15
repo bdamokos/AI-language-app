@@ -40,6 +40,32 @@ function tryParseJsonLoose(raw) {
   }
 }
 
+function coerceSchemaRequiredAll(inputSchema) {
+  try {
+    const schema = JSON.parse(JSON.stringify(inputSchema));
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'object' && node.properties && typeof node.properties === 'object') {
+        node.required = Object.keys(node.properties);
+        for (const key of Object.keys(node.properties)) {
+          walk(node.properties[key]);
+        }
+      }
+      if (node.type === 'array' && node.items) {
+        walk(node.items);
+      }
+      // Also process common nested container keywords if present
+      for (const k of ['oneOf','anyOf','allOf']) {
+        if (Array.isArray(node[k])) node[k].forEach(walk);
+      }
+    };
+    walk(schema);
+    return schema;
+  } catch {
+    return inputSchema;
+  }
+}
+
 // Provider selection via env (initial default)
 // One of: openrouter | ollama
 const INITIAL_PROVIDER = (process.env.PROVIDER || 'openrouter').toLowerCase();
@@ -139,6 +165,26 @@ class LRUCache {
 // Create explanation cache instance
 const explanationCache = new LRUCache(1000);
 
+// In-memory debug store for last N LLM requests/responses
+const DEBUG_CAPACITY = 100;
+const debugLogs = new Map();
+const debugOrder = [];
+function addDebugLog(entry) {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const record = {
+    id,
+    timestamp: Date.now(),
+    ...entry
+  };
+  debugLogs.set(id, record);
+  debugOrder.push(id);
+  if (debugOrder.length > DEBUG_CAPACITY) {
+    const oldest = debugOrder.shift();
+    if (oldest) debugLogs.delete(oldest);
+  }
+  return id;
+}
+
 async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
   // Enforce application-level token cap regardless of caller
   maxTokens = runtimeConfig.maxTokens;
@@ -152,38 +198,109 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
   } maxTokens=${maxTokens} promptPreview="${preview}..." structured=${jsonSchema ? 'yes' : 'no'}`);
   if (provider === 'openrouter') {
     assertEnv(runtimeConfig.openrouter.apiKey, 'Missing OPENROUTER_API_KEY');
-    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'authorization': `Bearer ${runtimeConfig.openrouter.apiKey}`,
-        'http-referer': runtimeConfig.openrouter.appUrl || 'http://localhost:5173',
-        'x-title': 'Language AI App'
-      },
-      body: JSON.stringify({
-        model: runtimeConfig.openrouter.model,
-        messages: [
-          system ? { role: 'system', content: system } : null,
-          { role: 'user', content: user }
-        ].filter(Boolean),
-        max_tokens: maxTokens,
-        reasoning: {
-          exclude: true
-        },
-
-
-        ...(jsonSchema ? {
-          response_format: {
-            type: 'json_schema',
-            json_schema: {
-              name: schemaName || 'structured_output',
-              strict: true,
-              schema: jsonSchema
-            }
+    const buildOpenRouterPayload = (maxTokensValue) => ({
+      model: runtimeConfig.openrouter.model,
+      messages: [
+        system ? { role: 'system', content: system } : null,
+        { role: 'user', content: user }
+      ].filter(Boolean),
+      max_tokens: maxTokensValue,
+      reasoning: { exclude: true, effort: 'low', enabled: false },
+      ...(jsonSchema ? {
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: schemaName || 'structured_output',
+            strict: true,
+            // Some providers (e.g., OpenAI) require `required` to include all properties recursively
+            schema: coerceSchemaRequiredAll(jsonSchema)
           }
-        } : {})
-      })
+        }
+      } : {})
     });
+
+    const doOpenRouterRequest = async (maxTokensValue) => {
+      const payload = buildOpenRouterPayload(maxTokensValue);
+      let resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'authorization': `Bearer ${runtimeConfig.openrouter.apiKey}`,
+          'http-referer': runtimeConfig.openrouter.appUrl || 'http://localhost:5173',
+          'x-title': 'Language AI App'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) {
+        // Capture error body for diagnostics
+        const errorText = await resp.text().catch(() => '');
+        const debugId = addDebugLog({
+          provider: 'openrouter',
+          model: runtimeConfig.openrouter.model,
+          status: resp.status,
+          request: payload,
+          responseText: errorText
+        });
+        console.error(`${logPrefix} HTTP ${resp.status} body: ${errorText || '(empty)'} | debug=/api/debug/${debugId}`);
+        // If provider requires reasoning enabled, retry once with reasoning enabled
+        if (/Reasoning is mandatory/i.test(errorText || '') && payload?.reasoning?.exclude === true) {
+          console.warn(`${logPrefix} enabling reasoning and retrying once`);
+          const enabledPayload = { ...payload, reasoning: { effort: 'low' } };
+          resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'authorization': `Bearer ${runtimeConfig.openrouter.apiKey}`,
+              'http-referer': runtimeConfig.openrouter.appUrl || 'http://localhost:5173',
+              'x-title': 'Language AI App'
+            },
+            body: JSON.stringify(enabledPayload)
+          });
+          if (!resp.ok) {
+            const secondBody = await resp.text().catch(() => '');
+            const debugId2 = addDebugLog({
+              provider: 'openrouter',
+              model: runtimeConfig.openrouter.model,
+              status: resp.status,
+              request: enabledPayload,
+              responseText: secondBody
+            });
+            console.error(`${logPrefix} HTTP ${resp.status} after enabling reasoning: ${secondBody || '(empty)'} | debug=/api/debug/${debugId2}`);
+          }
+        }
+        // Log exact JSON payload and a curl template to reproduce
+        try {
+          const payloadStr = JSON.stringify(payload);
+          const curlDebugId = addDebugLog({ provider: 'openrouter', model: runtimeConfig.openrouter.model, curlPayload: payload });
+          console.error(`${logPrefix} request payload: ${payloadStr} | curl=/api/debug/${curlDebugId}`);
+          const curl = [
+            'curl -X POST https://openrouter.ai/api/v1/chat/completions',
+            "-H 'Content-Type: application/json'",
+            "-H 'Authorization: Bearer $OPENROUTER_API_KEY'",
+            `-H 'HTTP-Referer: ${runtimeConfig.openrouter.appUrl || 'http://localhost:5173'}'`,
+            "-H 'X-Title: Language AI App'",
+            '--data @payload.json'
+          ].join(' \\\n');
+          console.error(`${logPrefix} repro: save payload from curl debug endpoint above to payload.json then run:\n${curl}`);
+        } catch {}
+      }
+      return resp;
+    };
+
+    let resp = await doOpenRouterRequest(maxTokens);
+    if (!resp.ok && resp.status === 400) {
+      const fallbackOrder = [8000, 4000, 2000].filter(t => t < maxTokens);
+      let tried = [maxTokens];
+      for (const t of fallbackOrder) {
+        console.warn(`${logPrefix} 400 with max_tokens=${tried[tried.length-1]}; retrying with max_tokens=${t}`);
+        resp = await doOpenRouterRequest(t);
+        tried.push(t);
+        if (resp.ok) {
+          maxTokens = t;
+          break;
+        }
+      }
+    }
     if (!resp.ok) {
       console.error(`${logPrefix} HTTP ${resp.status}`);
       if (resp.status === 429) {
@@ -671,6 +788,19 @@ app.get('/api/openrouter/models', async (req, res) => {
     console.error('[MODELS]', e);
     res.status(500).json({ error: e.message || 'Failed to fetch models' });
   }
+});
+
+// Debug endpoints: expose last N LLM debug records
+app.get('/api/debug/:id', (req, res) => {
+  const id = req.params.id;
+  const record = debugLogs.get(id);
+  if (!record) return res.status(404).json({ error: 'Not found' });
+  res.json(record);
+});
+
+app.get('/api/debug', (req, res) => {
+  const list = debugOrder.slice().reverse().map(id => debugLogs.get(id));
+  res.json({ count: list.length, items: list });
 });
 
 const PORT = process.env.PORT || 3000;
