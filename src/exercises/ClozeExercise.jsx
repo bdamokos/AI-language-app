@@ -163,10 +163,48 @@ export function scoreCloze(item, value, eq) {
  * @returns {Promise<{items: Array}>} Generated Cloze exercises
  */
 export async function generateCloze(topic, count = 2) {
-  const system = `Generate Spanish cloze passages that are engaging and educational. Each passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence). 
+  // For single passage, use the original approach
+  if (count === 1) {
+    return generateSingleClozePassage(topic);
+  }
+  
+  // For multiple passages, generate them in parallel
+  const promises = Array.from({ length: count }, (_, i) => 
+    generateSingleClozePassage(topic, i + 1)
+  );
+  
+  try {
+    const results = await Promise.all(promises);
+    
+    // Combine all results into a single items array
+    const allItems = [];
+    results.forEach(result => {
+      if (result && result.items && Array.isArray(result.items)) {
+        allItems.push(...result.items);
+      }
+    });
+    
+    return { items: allItems };
+  } catch (error) {
+    console.error('Error generating cloze passages in parallel:', error);
+    // Fallback to single generation if parallel fails
+    return generateSingleClozePassage(topic);
+  }
+}
+
+/**
+ * Generate a single Cloze passage
+ * @param {string} topic - The topic to generate exercise about
+ * @param {number} passageNumber - Optional passage number for context
+ * @returns {Promise<{items: Array}>} Generated Cloze exercise
+ */
+async function generateSingleClozePassage(topic, passageNumber = null) {
+  const passageContext = passageNumber ? ` (Passage ${passageNumber})` : '';
+  
+  const system = `Generate a single Spanish cloze passage that is engaging and educational. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence). 
 
 Key requirements:
-- Create longer, more engaging passages that tell a story or explain a concept
+- Create a longer, more engaging passage that tells a story or explains a concept
 - Use exactly 5 underscores (_____) to represent each blank - no more, no less
 - Provide helpful hints that guide students without giving away the answer
 - Include rationale explaining why the answer is correct
@@ -188,7 +226,7 @@ Complete solution: "María vive en Madrid. Ella trabaja como profesora. Su casa 
 
 Provide a clear student instruction as a separate field named studentInstructions. Do not include the instruction text inside the passage itself.`;
   
-  const user = `Create exactly ${count} cloze passages about: ${topic}. Each passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: each blank must use exactly 5 underscores (_____).`;
+  const user = `Create exactly 1 cloze passage about: ${topic}${passageContext}. The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: each blank must use exactly 5 underscores (_____).`;
 
   const schema = {
     type: 'object', additionalProperties: false,
@@ -218,7 +256,9 @@ Provide a clear student instruction as a separate field named studentInstruction
             }
           },
           required: ['studentInstructions', 'passage', 'blanks']
-        }
+        },
+        minItems: 1,
+        maxItems: 1
       }
     },
     required: ['items']
@@ -231,12 +271,12 @@ Provide a clear student instruction as a separate field named studentInstruction
       system,
       user,
       jsonSchema: schema,
-      schemaName: 'cloze_list'
+      schemaName: `cloze_single_${passageNumber || 'passage'}`
     })
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to generate Cloze exercises: ${response.status}`);
+    throw new Error(`Failed to generate Cloze exercise: ${response.status}`);
   }
 
   return response.json();
