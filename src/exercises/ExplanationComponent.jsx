@@ -75,8 +75,16 @@ export default function ExplanationComponent({ explanation }) {
  */
 export async function generateExplanation(topic, language = 'es') {
   const system = 'You are a language pedagogy expert. Provide a concise, insightful explanation of a Spanish grammar concept with examples. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.';
-  
-  const user = `Explain the grammar concept: ${topic}. Language for examples: ${language}. Keep it 200-600 words.`;
+
+  const normalizeTopic = (input) => {
+    if (typeof input === 'string') return input.trim();
+    if (input && typeof input.topic === 'string') return input.topic.trim();
+    if (input && typeof input.text === 'string') return input.text.trim();
+    return '';
+  };
+  const safeTopic = normalizeTopic(topic);
+
+  const user = `Explain the grammar concept: ${safeTopic}. Language for examples: ${language}. Keep it 200-600 words.`;
 
   const schema = {
     type: 'object', additionalProperties: false,

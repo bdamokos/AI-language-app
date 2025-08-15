@@ -127,9 +127,7 @@ export default function SettingsPanel() {
   const formatPrice = (price) => {
     if (!price || price === '0') return 'Free';
     const num = parseFloat(price);
-    if (num < 0.000001) return `$${(num * 1000000).toFixed(2)}/M tokens`;
-    if (num < 0.001) return `$${(num * 1000).toFixed(2)}/K tokens`;
-    return `$${num.toFixed(6)}/token`;
+    return `$${(num * 1000000).toFixed(2)}/M tokens`;
   };
 
   const formatModelDate = (timestamp) => {

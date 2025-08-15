@@ -283,19 +283,21 @@ const SpanishPracticeApp = () => {
     }
   };
 
-  const generateLessonContent = async () => {
-    if (!topic.trim()) return;
+  const generateLessonContent = async (t) => {
+    const topicToUse = (typeof t === 'string' && t.trim()) ? t.trim() : String(topic || '').trim();
+    if (!topicToUse) return;
     setLoadingLesson(true);
     setErrorMsg('');
     setLesson(null);
     try {
       // Only generate explanation initially - exercises generated on-demand
-      const data = await generateLesson(topic, {
+      const data = await generateLesson(topicToUse, {
         fill_in_blanks: 0,
         multiple_choice: 0,
         cloze_passages: 0,
         cloze_with_mixed_options: 0
       });
+      setTopic(topicToUse);
       setLesson(data);
       setOrchestratorValues({});
     } catch (error) {
@@ -557,10 +559,11 @@ const SpanishPracticeApp = () => {
   };
 
   const practiceRecommendedTopic = () => {
-    if (recommendation) {
+    if (recommendation && recommendation.recommendation) {
       setExercises([]);
-      setTopic(recommendation.recommendation);
-      generateExercises();
+      const nextTopic = String(recommendation.recommendation || '').trim();
+      if (!nextTopic) return;
+      generateLessonContent(nextTopic);
     }
   };
 
@@ -604,7 +607,7 @@ const SpanishPracticeApp = () => {
               type="text"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && generateExercises()}
+              onKeyPress={(e) => e.key === 'Enter' && generateLessonContent()}
               placeholder="e.g., present tense conjugation, past tense of irregular verbs, subjunctive mood..."
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
