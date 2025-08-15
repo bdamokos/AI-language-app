@@ -133,7 +133,34 @@ async function callLLM({ system, user, maxTokens = 1500, jsonSchema, schemaName 
       throw new Error(`OpenRouter error ${resp.status}`);
     }
     const data = await resp.json();
-    console.log(`${logPrefix} ok in ${Date.now() - startedAt}ms`);
+    const responseTime = Date.now() - startedAt;
+    
+    // Log token usage and attempt to get cost info
+    const usage = data.usage || {};
+    const generationId = data.id;
+    console.log(`${logPrefix} ok in ${responseTime}ms | tokens: ${usage.prompt_tokens || 0}→${usage.completion_tokens || 0} (${usage.total_tokens || 0} total)${generationId ? ` | id: ${generationId}` : ''}`);
+    
+    // Fetch detailed cost information asynchronously (non-blocking)
+    if (generationId) {
+      (async () => {
+        try {
+          await new Promise(resolve => setTimeout(resolve, 500)); // Longer delay to allow generation to be processed
+          const costResp = await fetch(`https://openrouter.ai/api/v1/generation?id=${generationId}`, {
+            headers: { authorization: `Bearer ${runtimeConfig.openrouter.apiKey}` }
+          });
+          if (costResp.ok) {
+            const costData = await costResp.json();
+            if (costData.data && typeof costData.data.total_cost === 'number') {
+              console.log(`${logPrefix} cost: $${Number(costData.data.total_cost).toFixed(6)} | native tokens: ${costData.data.tokens_prompt || 0}→${costData.data.tokens_completion || 0} | provider: ${costData.data.provider_name || 'unknown'}`);
+            }
+          }
+          // Note: Cost data may not be immediately available for all models (especially free tiers)
+        } catch (e) {
+          // Silently ignore cost fetch errors to avoid disrupting the main flow
+        }
+      })();
+    }
+    
     return data.choices?.[0]?.message?.content || '';
   }
   if (provider === 'ollama') {
