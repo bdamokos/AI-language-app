@@ -205,20 +205,28 @@ app.post('/api/generate-exercises', async (req, res) => {
   try {
     const { topic, exerciseCount = 10 } = req.body || {};
     if (!topic || !String(topic).trim()) return res.status(400).json({ error: 'Topic is required' });
-    const prompt = `Generate exactly ${exerciseCount} Spanish fill-in-the-blank exercises for the topic: "${topic}".
-
-IMPORTANT: Respond ONLY with a valid JSON object in this exact format:
-{
-  "exercises": [
-    {
-      "sentence": "Complete sentence with _____ for each blank",
-      "answer": "correct answer (or comma-separated answers for multiple blanks)",
-      "hint": "verb infinitive or hint in parentheses",
-      "hints": ["First hint", "Second hint", "Third hint"],
-      "context": "Optional cultural or linguistic context"
-    }
-  ]
-}
+    const c = buildCounts(exerciseCount, 1, 20, 10);
+    const system = `Generate Spanish fill-in-the-blank exercises with exactly five underscores (_____) for blanks.`;
+    const schema = {
+      type: 'object', additionalProperties: false,
+      properties: {
+        exercises: {
+          type: 'array', items: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              sentence: { type: 'string' },
+              answer: { type: 'string' },
+              hint: { type: 'string' },
+              hints: { type: 'array', items: { type: 'string' } },
+              context: { type: 'string' }
+            },
+            required: ['sentence', 'answer']
+          }
+        }
+      },
+      required: ['exercises']
+    };
+    const user = `Create exactly ${c} Spanish fill-in-the-blank exercises about: ${topic}.
 
 Rules:
 - Use exactly _____ (5 underscores) for each blank
@@ -229,15 +237,13 @@ Rules:
   - Third hint: very specific (e.g., "starts with 'vi...'")
 - If exercise is simple, you can provide fewer hints or make the third hint show first letters
 - "context" field is optional - include interesting cultural notes, regional differences, or usage tips when relevant
-- Make exercises progressively harder
-- Focus specifically on: ${topic}
-
-DO NOT include any text outside the JSON object.`;
-
-    const text = await callLLM({ user: prompt, maxTokens: 4000 });
+- Make exercises progressively harder`;
+    
+    const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+    const text = await callLLM({ system, user, maxTokens: 4000, jsonSchema: useStructured ? schema : undefined, schemaName: 'exercise_list' });
     let parsed;
     try {
-      parsed = tryParseJsonLoose(text);
+      parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
     } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
@@ -275,7 +281,7 @@ app.post('/api/generate/explanation', async (req, res) => {
     const text = await callLLM({ system, user, maxTokens: 2500, jsonSchema: useStructured ? schema : undefined, schemaName: 'explanation' });
     console.log('[EXPLANATION RAW]', (text || '').slice(0, 500));
     let parsed;
-    try { parsed = tryParseJsonLoose(text); } catch (e) {
+    try { parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text); } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
@@ -319,7 +325,7 @@ app.post('/api/generate/fib', async (req, res) => {
     const text = await callLLM({ system, user, maxTokens: 3000, jsonSchema: useStructured ? schema : undefined, schemaName: 'fib_list' });
     console.log('[FIB RAW]', (text || '').slice(0, 500));
     let parsed;
-    try { parsed = tryParseJsonLoose(text); } catch (e) {
+    try { parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text); } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
@@ -365,7 +371,7 @@ app.post('/api/generate/mcq', async (req, res) => {
     const text = await callLLM({ system, user, maxTokens: 3000, jsonSchema: useStructured ? schema : undefined, schemaName: 'mcq_list' });
     console.log('[MCQ RAW]', (text || '').slice(0, 500));
     let parsed;
-    try { parsed = tryParseJsonLoose(text); } catch (e) {
+    try { parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text); } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
@@ -410,7 +416,7 @@ app.post('/api/generate/cloze', async (req, res) => {
     const text = await callLLM({ system, user, maxTokens: 3500, jsonSchema: useStructured ? schema : undefined, schemaName: 'cloze_list' });
     console.log('[CLOZE RAW]', (text || '').slice(0, 500));
     let parsed;
-    try { parsed = tryParseJsonLoose(text); } catch (e) {
+    try { parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text); } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
@@ -454,7 +460,7 @@ app.post('/api/generate/cloze-mixed', async (req, res) => {
     const text = await callLLM({ system, user, maxTokens: 3500, jsonSchema: useStructured ? schema : undefined, schemaName: 'cloze_mixed_list' });
     console.log('[CLOZE MIX RAW]', (text || '').slice(0, 500));
     let parsed;
-    try { parsed = tryParseJsonLoose(text); } catch (e) {
+    try { parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text); } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
@@ -479,11 +485,10 @@ app.post('/api/generate-content', async (req, res) => {
       cloze_with_mixed_options: Math.max(0, Math.min(10, Number(counts?.cloze_with_mixed_options ?? 2))),
     };
 
-    const system = `You are a language pedagogy expert and curriculum designer. Create high-quality, level-appropriate Spanish learning content using:\n\n- Scaffolding: start simple, gradually increase complexity\n- Spiraling: revisit the same concept in varied contexts to deepen understanding\n- Retrieval practice: reinforce memory through spaced repetition and varied prompts\n- Clear, concise explanations with examples and counterexamples\n\nStrictly follow the JSON schema below. Return ONLY JSON, no prose, no backticks. Use exactly five underscores \"_____\" for blanks. Keep content culturally neutral unless context is requested. Avoid offensive or sensitive topics.`;
+    const system = `You are a language pedagogy expert and curriculum designer. Create high-quality, level-appropriate Spanish learning content using:\n\n- Scaffolding: start simple, gradually increase complexity\n- Spiraling: revisit the same concept in varied contexts to deepen understanding\n- Retrieval practice: reinforce memory through spaced repetition and varied prompts\n- Clear, concise explanations with examples and counterexamples\n\nUse exactly five underscores \"_____\" for blanks. Keep content culturally neutral unless context is requested. Avoid offensive or sensitive topics.`;
 
-    const schema = `TypeScript types to follow exactly:\n\ninterface LessonBundle {\n  version: '1.0';\n  language: 'es';\n  topic: string;\n  pedagogy: { approach: 'scaffolded+spiral'; strategy_notes: string };\n  explanation: { title: string; content_markdown: string };\n  fill_in_blanks: Array<FillInBlank>;\n  multiple_choice: Array<MCQ>;\n  cloze_passages: Array<ClozePassage>;\n  cloze_with_mixed_options: Array<ClozeMixed>;\n}\n\ninterface FillInBlank {\n  sentence: string; // includes one or more blanks as _____\n  answers: string[]; // answers in order of blanks (length 1 if single blank)\n  hint?: string;\n  hints?: string[];\n  context?: string;\n  difficulty: 'A1'|'A2'|'B1'|'B2'|'C1'|'C2';\n}\n\ninterface MCQ {\n  question: string;\n  options: Array<{ text: string; correct: boolean; rationale: string }>; // exactly 4 options; 1 correct\n  explanation?: string;\n  difficulty: 'A1'|'A2'|'B1'|'B2'|'C1'|'C2';\n}\n\ninterface ClozePassage {\n  title?: string;\n  passage: string; // includes blanks as _____\n  blanks: Array<{ index: number; answer: string; hint?: string; rationale?: string }>; // index = order of blank starting from 0\n  context?: string;\n  difficulty: 'A1'|'A2'|'B1'|'B2'|'C1'|'C2';\n}\n\ninterface ClozeMixed {\n  title?: string;\n  passage: string; // includes blanks as _____\n  blanks: Array<{ index: number; options: string[]; correct_index: number; rationale?: string }>; // include target concept and closely-related distractors\n  notes?: string;\n  difficulty: 'A1'|'A2'|'B1'|'B2'|'C1'|'C2';\n}`;
 
-    const constraints = `Requirements:\n- Provide exactly ${safeCounts.explanation} explanation section(s)\n- Provide exactly ${safeCounts.fill_in_blanks} fill_in_blanks items\n- Provide exactly ${safeCounts.multiple_choice} multiple_choice items (if 0, provide empty array)\n- Provide exactly ${safeCounts.cloze_passages} cloze_passages items (if 0, provide empty array)\n- Provide exactly ${safeCounts.cloze_with_mixed_options} cloze_with_mixed_options items (if 0, provide empty array)\n- MCQ: exactly 4 options per question, 1 correct, distractors should be plausible (common learner confusions)\n- Use grammar-focused content specifically about: ${topic}\n- Progression: start simpler (A2/B1) and reach more complex usage (B2/C1) where applicable\n- Keep explanations concise but insightful (200-400 words)\n- Use Spanish for examples; English is allowed for meta-explanations in explanation.content_markdown\n- DO NOT include any text outside the JSON object`;
+    const constraints = `Requirements:\n- Provide exactly ${safeCounts.explanation} explanation section(s)\n- Provide exactly ${safeCounts.fill_in_blanks} fill_in_blanks items\n- Provide exactly ${safeCounts.multiple_choice} multiple_choice items (if 0, provide empty array)\n- Provide exactly ${safeCounts.cloze_passages} cloze_passages items (if 0, provide empty array)\n- Provide exactly ${safeCounts.cloze_with_mixed_options} cloze_with_mixed_options items (if 0, provide empty array)\n- MCQ: exactly 4 options per question, 1 correct, distractors should be plausible (common learner confusions)\n- Use grammar-focused content specifically about: ${topic}\n- Progression: start simpler (A2/B1) and reach more complex usage (B2/C1) where applicable\n- Keep explanations concise but insightful (200-400 words)\n- Use Spanish for examples; English is allowed for meta-explanations in explanation.content_markdown`;
 
     const user = `${schema}\n\n${constraints}`;
 
@@ -618,7 +623,7 @@ app.post('/api/generate-content', async (req, res) => {
     });
     let parsed;
     try {
-      parsed = tryParseJsonLoose(text);
+      parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
     } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
@@ -644,7 +649,15 @@ app.post('/api/explain', async (req, res) => {
   try {
     const { topic, exercise, userAnswer } = req.body || {};
     if (!exercise?.sentence) return res.status(400).json({ error: 'exercise is required' });
-    const prompt = `Spanish exercise explanation needed:
+    const system = `You are a Spanish language tutor. Provide clear, helpful explanations for exercise mistakes using markdown formatting.`;
+    const schema = {
+      type: 'object', additionalProperties: false,
+      properties: {
+        explanation: { type: 'string', description: 'Detailed explanation in markdown format' }
+      },
+      required: ['explanation']
+    };
+    const user = `Spanish exercise explanation needed:
 
 Topic: ${topic}
 Exercise: ${exercise.sentence}
@@ -658,8 +671,21 @@ Please explain:
 4. Tips to remember this
 
 Use markdown formatting for clarity (bold for **important terms**, code blocks for conjugations, ### for headers, etc.).`;
-    const text = await callLLM({ user: prompt, maxTokens: 2000 });
-    return res.json({ explanation: text });
+    
+    const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+    const text = await callLLM({ system, user, maxTokens: 2000, jsonSchema: useStructured ? schema : undefined, schemaName: 'explanation' });
+    let parsed;
+    if (useStructured) {
+      try {
+        parsed = JSON.parse(text);
+        return res.json({ explanation: parsed.explanation });
+      } catch (e) {
+        console.error('[PARSE]', e.message);
+        return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
+      }
+    } else {
+      return res.json({ explanation: text });
+    }
   } catch (err) {
     console.error(err);
     const status = /Missing/i.test(err?.message || '') ? 400 : 500;
@@ -670,7 +696,16 @@ Use markdown formatting for clarity (bold for **important terms**, code blocks f
 app.post('/api/recommend', async (req, res) => {
   try {
     const { topic, score, percentage, wrongExercises } = req.body || {};
-    const prompt = `Analyze the user's Spanish practice results and suggest a next topic:
+    const system = `You are a Spanish language learning advisor. Analyze user performance and recommend the next optimal practice topic.`;
+    const schema = {
+      type: 'object', additionalProperties: false,
+      properties: {
+        recommendation: { type: 'string', description: 'Specific topic to practice next' },
+        reasoning: { type: 'string', description: 'Brief explanation of why this topic would help' }
+      },
+      required: ['recommendation', 'reasoning']
+    };
+    const user = `Analyze the user's Spanish practice results and suggest a next topic:
 
 Current topic: ${topic}
 Score: ${score?.correct}/${score?.total} (${Number(percentage).toFixed(1)}%)
@@ -679,19 +714,13 @@ Wrong answers: ${JSON.stringify(wrongExercises)}
 Based on their performance, suggest ONE specific practice topic. Consider:
 - If score > 80%: suggest a more advanced related topic
 - If score 60-80%: suggest focused practice on their weak areas
-- If score < 60%: suggest an easier or more fundamental topic
-
-Respond ONLY with a JSON object:
-{
-  "recommendation": "specific topic to practice next",
-  "reasoning": "brief explanation of why this topic would help"
-}
-
-DO NOT include any text outside the JSON object.`;
-    const text = await callLLM({ user: prompt, maxTokens: 2000 });
+- If score < 60%: suggest an easier or more fundamental topic`;
+    
+    const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+    const text = await callLLM({ system, user, maxTokens: 2000, jsonSchema: useStructured ? schema : undefined, schemaName: 'recommendation' });
     let parsed;
     try {
-      parsed = tryParseJsonLoose(text);
+      parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
     } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
