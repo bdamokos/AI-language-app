@@ -613,22 +613,6 @@ const SpanishPracticeApp = () => {
             </p>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Number of exercises
-            </label>
-            <div className="flex items-center gap-4">
-              <input
-                type="range"
-                min="5"
-                max="15"
-                value={exerciseCount}
-                onChange={(e) => setExerciseCount(e.target.value)}
-                className="flex-1"
-              />
-              <span className="text-lg font-medium text-gray-700 w-8 text-center">{exerciseCount}</span>
-            </div>
-          </div>
 
           <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-700">Settings</label>

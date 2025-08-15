@@ -74,7 +74,7 @@ export default function ExplanationComponent({ explanation }) {
  * @returns {Promise<{title: string, content_markdown: string}>} Generated explanation
  */
 export async function generateExplanation(topic, language = 'es') {
-  const system = 'You are a language pedagogy expert. Provide a concise, insightful explanation of a Spanish grammar concept with examples and counterexamples.';
+  const system = 'You are a language pedagogy expert. Provide a concise, insightful explanation of a Spanish grammar concept with examples. Where relevant, add a section on common mistakes and how to avoid them.';
   
   const user = `Explain the grammar concept: ${topic}. Language for examples: ${language}. Keep it 200-400 words.`;
 
