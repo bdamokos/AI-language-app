@@ -83,12 +83,19 @@ export function scoreFIB(item, value, eq) {
  * Generate FIB exercises using the generic LLM endpoint
  * @param {string} topic - The topic to generate exercises about
  * @param {number} count - Number of exercises to generate (1-20)
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<{items: Array}>} Generated FIB exercises
  */
-export async function generateFIB(topic, count = 5) {
-  const system = 'Generate Spanish fill-in-the-blank exercises with exactly five underscores (_____) for blanks.';
+export async function generateFIB(topic, count = 5, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+  const languageName = languageContext.language;
+  const level = languageContext.level;
+  const challengeMode = languageContext.challengeMode;
   
-  const user = `Create exactly ${count} Spanish fill-in-the-blank exercises about: ${topic}.
+  const system = `Generate ${languageName} fill-in-the-blank exercises with exactly five underscores (_____) for blanks. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+  
+  const user = `Create exactly ${count} ${languageName} fill-in-the-blank exercises about: ${topic}.
+
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
 Rules:
 - Use exactly _____ (5 underscores) for each blank
@@ -99,7 +106,8 @@ Rules:
   - Third hint: very specific (e.g., "starts with 'vi...'")
 - If exercise is simple, you can provide fewer hints or make the third hint show first letters
 - "context" field is optional - include interesting cultural notes, regional differences, or usage tips when relevant
-- Make exercises progressively harder`;
+- Make exercises progressively harder
+- Ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}`;
 
   const schema = {
     type: 'object', additionalProperties: false,

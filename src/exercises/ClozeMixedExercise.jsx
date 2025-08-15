@@ -160,17 +160,18 @@ export function scoreClozeMixed(item, value, eq) {
  * Generate ClozeMixed exercises using the generic LLM endpoint
  * @param {string} topic - The topic to generate exercises about
  * @param {number} count - Number of exercises to generate (1-10)
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<{items: Array}>} Generated ClozeMixed exercises
  */
-export async function generateClozeMixed(topic, count = 2) {
+export async function generateClozeMixed(topic, count = 2, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
   // For single passage, use the original approach
   if (count === 1) {
-    return generateSingleClozeMixedPassage(topic);
+    return generateSingleClozeMixedPassage(topic, null, languageContext);
   }
   
   // For multiple passages, generate them in parallel
   const promises = Array.from({ length: count }, (_, i) => 
-    generateSingleClozeMixedPassage(topic, i + 1)
+    generateSingleClozeMixedPassage(topic, i + 1, languageContext)
   );
   
   try {
@@ -198,10 +199,14 @@ export async function generateClozeMixed(topic, count = 2) {
  * @param {number} passageNumber - Optional passage number for context
  * @returns {Promise<{items: Array}>} Generated ClozeMixed exercise
  */
-async function generateSingleClozeMixedPassage(topic, passageNumber = null) {
+async function generateSingleClozeMixedPassage(topic, passageNumber = null, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
   const passageContext = passageNumber ? ` (Passage ${passageNumber})` : '';
   
-  const system = `Generate a single Spanish cloze passage with multiple-choice options for each blank. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence).
+  const languageName = languageContext.language;
+  const level = languageContext.level;
+  const challengeMode = languageContext.challengeMode;
+  
+  const system = `Generate a single ${languageName} cloze passage with multiple-choice options for each blank. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence).
 
 Key requirements:
 - Create a longer, more engaging passage that tells a story or explains a concept
@@ -213,6 +218,7 @@ Key requirements:
 - Make the content culturally relevant and age-appropriate
 - Distractors should be plausible but clearly incorrect to avoid confusion
 - Maximum of 2 blanks per sentence to maintain readability
+- Ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}
 
 IMPORTANT: Each blank must be represented by exactly 5 underscores (_____). Do not use fewer or more underscores.
 
@@ -228,7 +234,11 @@ Complete solution: "María vive en Madrid. Ella trabaja como profesora. Su casa 
 
 Provide a clear student instruction as a separate field named studentInstructions. Do not include the instruction text inside the passage itself.`;
   
-  const user = `Create exactly 1 cloze-with-options passage about: ${topic}${passageContext}. The passage should be substantial (3-5 paragraphs) with 8-16 blanks (maximum two per sentence), each having 4 options. Remember: each blank must use exactly 5 underscores (_____).`;
+  const user = `Create exactly 1 ${languageName} cloze-with-options passage about: ${topic}${passageContext}. 
+
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+
+The passage should be substantial (3-5 paragraphs) with 8-16 blanks (maximum two per sentence), each having 4 options. Remember: each blank must use exactly 5 underscores (_____).`;
 
   const schema = {
     type: 'object', additionalProperties: false,

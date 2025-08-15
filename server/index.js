@@ -88,6 +88,15 @@ const runtimeConfig = {
     host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
     model: DEFAULT_MODELS.ollama
   },
+  runware: {
+    apiKey: process.env.RUNWARE_API_KEY || '',
+    model: process.env.RUNWARE_MODEL || 'runware:100@1',
+    enabled: process.env.RUNWARE_ENABLED === 'true' || false,
+    width: Number(process.env.RUNWARE_WIDTH || 512),
+    height: Number(process.env.RUNWARE_HEIGHT || 512),
+    steps: Number(process.env.RUNWARE_STEPS || 20),
+    cfgScale: Number(process.env.RUNWARE_CFG_SCALE || 7)
+  },
   // Centralized max token cap for all generations
   maxTokens: Number(process.env.MAX_TOKENS || 15000)
 };
@@ -647,7 +656,16 @@ app.get('/api/settings', (req, res) => {
   const sanitized = {
     provider: runtimeConfig.provider,
     openrouter: { model: runtimeConfig.openrouter.model, hasKey: !!runtimeConfig.openrouter.apiKey, appUrl: runtimeConfig.openrouter.appUrl },
-    ollama: { model: runtimeConfig.ollama.model, host: runtimeConfig.ollama.host }
+    ollama: { model: runtimeConfig.ollama.model, host: runtimeConfig.ollama.host },
+    runware: { 
+      model: runtimeConfig.runware.model, 
+      enabled: runtimeConfig.runware.enabled,
+      hasKey: !!runtimeConfig.runware.apiKey,
+      width: runtimeConfig.runware.width,
+      height: runtimeConfig.runware.height,
+      steps: runtimeConfig.runware.steps,
+      cfgScale: runtimeConfig.runware.cfgScale
+    }
   };
   res.json(sanitized);
 });
@@ -664,6 +682,15 @@ app.post('/api/settings', (req, res) => {
   if (body.ollama) {
     if (typeof body.ollama.host === 'string') runtimeConfig.ollama.host = body.ollama.host;
     if (typeof body.ollama.model === 'string') runtimeConfig.ollama.model = body.ollama.model;
+  }
+  if (body.runware) {
+    if (typeof body.runware.apiKey === 'string' && body.runware.apiKey.trim()) runtimeConfig.runware.apiKey = body.runware.apiKey;
+    if (typeof body.runware.model === 'string') runtimeConfig.runware.model = body.runware.model;
+    if (typeof body.runware.enabled === 'boolean') runtimeConfig.runware.enabled = body.runware.enabled;
+    if (typeof body.runware.width === 'number' && body.runware.width > 0) runtimeConfig.runware.width = body.runware.width;
+    if (typeof body.runware.height === 'number' && body.runware.height > 0) runtimeConfig.runware.height = body.runware.height;
+    if (typeof body.runware.steps === 'number' && body.runware.steps > 0) runtimeConfig.runware.steps = body.runware.steps;
+    if (typeof body.runware.cfgScale === 'number' && body.runware.cfgScale > 0) runtimeConfig.runware.cfgScale = body.runware.cfgScale;
   }
 
   // Persist to .env
@@ -683,12 +710,21 @@ app.post('/api/settings', (req, res) => {
         if (k) map.set(k, v);
       }
       const set = (k, v) => { if (typeof v === 'string') map.set(k, v); };
+      const setNum = (k, v) => { if (typeof v === 'number') map.set(k, v.toString()); };
+      const setBool = (k, v) => { if (typeof v === 'boolean') map.set(k, v.toString()); };
       set('PROVIDER', runtimeConfig.provider);
       set('OPENROUTER_API_KEY', runtimeConfig.openrouter.apiKey || map.get('OPENROUTER_API_KEY') || '');
       set('OPENROUTER_MODEL', runtimeConfig.openrouter.model);
       set('APP_URL', runtimeConfig.openrouter.appUrl);
       set('OLLAMA_HOST', runtimeConfig.ollama.host);
       set('OLLAMA_MODEL', runtimeConfig.ollama.model);
+      set('RUNWARE_API_KEY', runtimeConfig.runware.apiKey || map.get('RUNWARE_API_KEY') || '');
+      set('RUNWARE_MODEL', runtimeConfig.runware.model);
+      setBool('RUNWARE_ENABLED', runtimeConfig.runware.enabled);
+      setNum('RUNWARE_WIDTH', runtimeConfig.runware.width);
+      setNum('RUNWARE_HEIGHT', runtimeConfig.runware.height);
+      setNum('RUNWARE_STEPS', runtimeConfig.runware.steps);
+      setNum('RUNWARE_CFG_SCALE', runtimeConfig.runware.cfgScale);
       const lines = Array.from(map.entries()).map(([k, v]) => `${k}=${v}`);
       await fs.writeFile(envPath, lines.join('\n') + '\n', 'utf8');
       console.log('[SETTINGS] Persisted to .env at', envPath);
@@ -787,6 +823,108 @@ app.get('/api/openrouter/models', async (req, res) => {
   } catch (e) {
     console.error('[MODELS]', e);
     res.status(500).json({ error: e.message || 'Failed to fetch models' });
+  }
+});
+
+// Runware: text-to-image generation
+app.post('/api/runware/generate', async (req, res) => {
+  try {
+    if (!runtimeConfig.runware.enabled) {
+      return res.status(400).json({ error: 'Runware image generation is disabled' });
+    }
+    
+    assertEnv(runtimeConfig.runware.apiKey, 'Missing RUNWARE_API_KEY');
+    
+    const { prompt, model, width, height, steps, cfgScale, seed, scheduler } = req.body || {};
+    if (!prompt || !String(prompt).trim()) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+    
+    // Use provided values or fallback to configured defaults
+    const taskUUID = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const requestBody = [{
+      taskType: 'imageInference',
+      taskUUID,
+      includeCost: true,
+      positivePrompt: String(prompt).trim(),
+      model: model || runtimeConfig.runware.model,
+      width: width || runtimeConfig.runware.width,
+      height: height || runtimeConfig.runware.height,
+      steps: steps || runtimeConfig.runware.steps,
+      CFGScale: cfgScale || runtimeConfig.runware.cfgScale,
+      ...(seed && { seed }),
+      ...(scheduler && { scheduler })
+    }];
+    
+    console.log(`[RUNWARE] Generating image with model=${requestBody[0].model} size=${requestBody[0].width}x${requestBody[0].height} steps=${requestBody[0].steps}`);
+    
+    const response = await fetch('https://api.runware.ai/v1', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${runtimeConfig.runware.apiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.error(`[RUNWARE] HTTP ${response.status} ${errorText}`);
+      return res.status(response.status).json({ 
+        error: `Runware API error ${response.status}`,
+        details: errorText
+      });
+    }
+    
+    const data = await response.json();
+    console.log(`[RUNWARE] Generation completed for task ${taskUUID}`);
+    
+    // Return the generated image data
+    res.json({
+      taskUUID,
+      success: true,
+      data
+    });
+  } catch (err) {
+    console.error('[RUNWARE]', err);
+    const status = /Missing/i.test(err?.message || '') ? 400 : 500;
+    res.status(status).json({ 
+      error: 'Failed to generate image', 
+      details: err?.message 
+    });
+  }
+});
+
+// Runware: list available models
+app.get('/api/runware/models', async (req, res) => {
+  try {
+    assertEnv(runtimeConfig.runware.apiKey, 'Missing RUNWARE_API_KEY');
+    
+    const response = await fetch('https://api.runware.ai/v1/models', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${runtimeConfig.runware.apiKey}`
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.error(`[RUNWARE] Models API HTTP ${response.status} ${errorText}`);
+      return res.status(response.status).json({ 
+        error: `Runware models API error ${response.status}`,
+        details: errorText
+      });
+    }
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[RUNWARE] Models fetch error:', err);
+    const status = /Missing/i.test(err?.message || '') ? 400 : 500;
+    res.status(status).json({ 
+      error: 'Failed to fetch Runware models', 
+      details: err?.message 
+    });
   }
 });
 

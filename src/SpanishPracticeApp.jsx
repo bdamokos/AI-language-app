@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight } from 'lucide-react';
+import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight, Globe, GraduationCap } from 'lucide-react';
 import Orchestrator, { scoreLesson, generateLesson } from './exercises/Orchestrator.jsx';
 import { scoreFIB, generateFIB } from './exercises/FIBExercise.jsx';
 import { scoreMCQ, generateMCQ } from './exercises/MCQExercise.jsx';
@@ -7,8 +7,12 @@ import { scoreCloze, generateCloze } from './exercises/ClozeExercise.jsx';
 import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExercise.jsx';
 import { generateExplanation } from './exercises/ExplanationComponent.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
+import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 
 const SpanishPracticeApp = () => {
+  // Language and level context
+  const [languageContext, setLanguageContext] = useState(null);
+  
   const [topic, setTopic] = useState('');
   const [exerciseCount, setExerciseCount] = useState(10);
   const [exercises, setExercises] = useState([]); // simple FIB list (legacy)
@@ -38,6 +42,83 @@ const SpanishPracticeApp = () => {
   const [clozeMixCount, setClozeMixCount] = useState(2);
 
   const normalizeText = (text) => normalizeTextUtil(text, strictAccents);
+
+  // Helper function to get language display name
+  const getLanguageDisplayName = (languageName) => {
+    // If it's a known language code, return the proper name
+    const languageMap = {
+      'es': 'Spanish',
+      'fr': 'French', 
+      'de': 'German',
+      'it': 'Italian',
+      'pt': 'Portuguese',
+      'en': 'English',
+      'ja': 'Japanese',
+      'ko': 'Korean',
+      'zh': 'Chinese',
+      'ru': 'Russian',
+      'hu': 'Hungarian',
+    };
+    
+    // If it's a known code, return the proper name
+    if (languageMap[languageName]) {
+      return languageMap[languageName];
+    }
+    
+    // Otherwise, capitalize the first letter and return as-is
+    return languageName.charAt(0).toUpperCase() + languageName.slice(1);
+  };
+
+  // Handle language and level selection
+  const handleLanguageLevelStart = async (context) => {
+    setLanguageContext(context);
+    setTopic(context.topic || '');
+    
+    // Set accent settings from context
+    if (context.strictAccents !== undefined) {
+      setStrictAccents(context.strictAccents);
+    }
+    if (context.showAccentBar !== undefined) {
+      setShowAccentBar(context.showAccentBar);
+    }
+    
+    // Automatically start lesson generation
+    if (context.topic) {
+      setLoadingLesson(true);
+      setErrorMsg('');
+      setLesson(null);
+      try {
+        const data = await generateLesson(context.topic, {
+          fill_in_blanks: 0,
+          multiple_choice: 0,
+          cloze_passages: 0,
+          cloze_with_mixed_options: 0
+        }, context);
+        setLesson(data);
+        setOrchestratorValues({});
+      } catch (error) {
+        console.error('Error generating lesson:', error);
+        setErrorMsg(error.message || 'Error generating lesson. Please try again.');
+      } finally {
+        setLoadingLesson(false);
+      }
+    }
+  };
+
+  // Reset to language selection
+  const resetToLanguageSelection = () => {
+    setLanguageContext(null);
+    setTopic('');
+    setExercises([]);
+    setUserAnswers({});
+    setSubmitted(false);
+    setExplanations({});
+    setRecommendation(null);
+    setVisibleHints({});
+    setShowContext({});
+    setLesson(null);
+    setOrchestratorValues({});
+  };
 
   const insertAccent = (accent) => {
     if (!lastFocusedInput) return;
@@ -296,7 +377,7 @@ const SpanishPracticeApp = () => {
         multiple_choice: 0,
         cloze_passages: 0,
         cloze_with_mixed_options: 0
-      });
+      }, languageContext);
       setTopic(topicToUse);
       setLesson(data);
       setOrchestratorValues({});
@@ -310,7 +391,7 @@ const SpanishPracticeApp = () => {
 
   const ensureLessonSkeleton = () => ({
     version: '1.0',
-    language: 'es',
+    language: languageContext?.language || 'es',
     topic: topic || (lesson?.topic || ''),
     pedagogy: { approach: 'scaffolded+spiral', strategy_notes: '' },
     explanation: lesson?.explanation || null,
@@ -343,7 +424,7 @@ const SpanishPracticeApp = () => {
     setLoadingExplOnly(true);
     setErrorMsg('');
     try {
-      const explanation = await generateExplanation(topic);
+      const explanation = await generateExplanation(topic, languageContext);
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, explanation });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate explanation'); }
@@ -355,7 +436,7 @@ const SpanishPracticeApp = () => {
     setLoadingFibOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateFIB(topic, Number(exerciseCount));
+      const data = await generateFIB(topic, Number(exerciseCount), languageContext);
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, fill_in_blanks: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate FIB'); }
@@ -367,10 +448,10 @@ const SpanishPracticeApp = () => {
     setLoadingMcqOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateMCQ(topic, Number(mcqCount));
+      const data = await generateMCQ(topic, Number(mcqCount), languageContext);
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, multiple_choice: data.items || [] });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate MCQ'); }
+      } catch (e) { console.error(e); setErrorMsg('Failed to generate MCQ'); }
     finally { setLoadingMcqOnly(false); }
   };
 
@@ -379,7 +460,7 @@ const SpanishPracticeApp = () => {
     setLoadingClozeOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateCloze(topic, Number(clozeCount));
+      const data = await generateCloze(topic, Number(clozeCount), languageContext);
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, cloze_passages: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze'); }
@@ -391,10 +472,10 @@ const SpanishPracticeApp = () => {
     setLoadingClozeMixOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateClozeMixed(topic, Number(clozeMixCount));
+      const data = await generateClozeMixed(topic, Number(clozeMixCount), languageContext);
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, cloze_with_mixed_options: data.items || [] });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
+      } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
     finally { setLoadingClozeMixOnly(false); }
   };
 
@@ -584,254 +665,277 @@ const SpanishPracticeApp = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-2">
-          <BookOpen className="text-blue-600" />
-          Spanish Practice with AI
-        </h1>
-        <p className="text-gray-600">Practice Spanish with AI-generated exercises and personalized explanations</p>
-      </div>
-
-      {!lesson ? (
-        <div className="space-y-4">
-          {errorMsg && (
-            <div className="bg-red-50 text-red-700 border border-red-200 p-3 rounded">
-              {errorMsg}
-            </div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              What topic would you like to practice?
-            </label>
-            <input
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && generateLessonContent()}
-              placeholder="e.g., present tense conjugation, past tense of irregular verbs, subjunctive mood..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-sm text-gray-500 mt-1">
-              Be specific! Examples: "ser vs estar", "preterite tense", "reflexive verbs", "conditional mood"
+      {!languageContext ? (
+        <LanguageLevelSelector onStart={handleLanguageLevelStart} />
+      ) : (
+        <>
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+              <BookOpen className="text-blue-600" />
+              {getLanguageDisplayName(languageContext.language)} Practice with AI
+            </h1>
+            <p className="text-gray-600">
+              Practice {getLanguageDisplayName(languageContext.language)} with AI-generated exercises tailored to your {languageContext.level} level
+              {languageContext.challengeMode && ' (Challenge Mode)'}
             </p>
-          </div>
-
-
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Settings</label>
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="strictAccents"
-                checked={strictAccents}
-                onChange={(e) => setStrictAccents(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="strictAccents" className="text-sm text-gray-700">
-                Strict accent checking (á ≠ a)
-              </label>
-            </div>
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="showAccentBar"
-                checked={showAccentBar}
-                onChange={(e) => setShowAccentBar(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="showAccentBar" className="text-sm text-gray-700">
-                Show accent toolbar
-              </label>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <button
-              onClick={generateLessonContent}
-              disabled={loadingLesson || !topic.trim()}
-              className="w-full bg-purple-600 text-white py-3 px-6 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-            >
-              {loadingLesson ? (
+            <div className="mt-3 flex items-center gap-4 text-sm text-gray-600">
+              <span className="flex items-center gap-2">
+                <Globe className="text-blue-600" size={16} />
+                {getLanguageDisplayName(languageContext.language)}
+              </span>
+              <span className="text-gray-400">•</span>
+              <span className="flex items-center gap-2">
+                <GraduationCap className="text-green-600" size={16} />
+                {languageContext.level}
+              </span>
+              {languageContext.challengeMode && (
                 <>
-                  <RefreshCw className="animate-spin" size={20} />
-                  Starting lesson with explanation...
-                </>
-              ) : (
-                <>
-                  <Send size={20} />
-                  Start Lesson 
+                  <span className="text-gray-400">•</span>
+                  <span className="text-amber-600 font-medium">Challenge Mode</span>
                 </>
               )}
-            </button>
-          </div>
-
-          {/* On-demand generation controls are now inside the lesson panel once started */}
-
-          {lesson && (
-            <div className="mt-4">{renderLessonPanel()}</div>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-6">
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <h2 className="text-lg font-semibold text-blue-900 mb-1">Topic: {topic}</h2>
-            <p className="text-sm text-blue-700">Complete the sentences by filling in the blanks</p>
-            {!strictAccents && (
-              <p className="text-xs text-blue-600 mt-1">Accent marks are optional (á = a)</p>
-            )}
-          </div>
-
-          {showAccentBar && !submitted && (
-            <div className="bg-gray-100 p-3 rounded-lg">
-              <p className="text-xs text-gray-600 mb-2">Click to insert accented characters:</p>
-              <div className="flex flex-wrap gap-2">
-                {['á', 'é', 'í', 'ó', 'ú', 'ñ', 'ü', '¿', '¡'].map((char) => (
-                  <button
-                    key={char}
-                    onClick={() => insertAccent(char)}
-                    className="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-lg font-medium"
-                  >
-                    {char}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-gray-500 mt-2">Tip: Click in an input field first, then click the character to insert</p>
             </div>
-          )}
+          </div>
 
-          <div className="space-y-4">
-            {renderLessonPanel()}
-            {!lesson && exercises.map((exercise, index) => {
-              const isCorrect = submitted && isExerciseCorrect(index);
-              const hasWrongAnswer = submitted && !isCorrect;
-              const visibleHintCount = visibleHints[index] || 0;
-              const availableHints = exercise.hints?.filter(h => h) || [];
-              return (
-                <div key={index} className="border rounded-lg p-4 space-y-3">
-                  <div className="flex items-start gap-3">
-                    <span className="text-sm font-medium text-gray-500 mt-1">{index + 1}.</span>
-                    <div className="flex-1 space-y-2">
-                      <div className="text-gray-800 leading-relaxed">
-                        {parseExerciseSentence(exercise.sentence, index)}
-                      </div>
-                      {!submitted && availableHints.length > 0 && (
-                        <div className="space-y-2">
-                          {visibleHintCount > 0 && (
-                            <div className="space-y-1">
-                              {availableHints.slice(0, visibleHintCount).map((hint, hintIndex) => (
-                                <div key={hintIndex} className="text-sm text-blue-700 bg-blue-50 p-2 rounded flex items-start gap-2">
-                                  <HelpCircle size={14} className="mt-0.5 flex-shrink-0" />
-                                  <span>{hint}</span>
+          {!lesson ? (
+            <div className="space-y-4">
+              {errorMsg && (
+                <div className="bg-red-50 text-red-700 border border-red-200 p-3 rounded">
+                  {errorMsg}
+                </div>
+              )}
+              
+              {loadingLesson ? (
+                <div className="text-center py-12">
+                  <RefreshCw className="animate-spin mx-auto text-blue-600 mb-4" size={32} />
+                  <h3 className="text-xl font-semibold text-gray-800 mb-2">Generating your lesson...</h3>
+                  <p className="text-gray-600">Creating explanation and exercises for "{topic}"</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-blue-50 p-4 rounded-lg">
+                    <h3 className="text-lg font-semibold text-blue-900 mb-2">Ready to start your lesson?</h3>
+                    <p className="text-blue-700">
+                      Topic: <strong>{topic}</strong>
+                    </p>
+                    <p className="text-sm text-blue-600 mt-1">
+                      Click "Start Lesson" below to begin with an explanation and exercises.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-gray-700">Settings</label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="strictAccents"
+                        checked={strictAccents}
+                        onChange={(e) => setStrictAccents(e.target.checked)}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="strictAccents" className="text-sm text-gray-700">
+                        Strict accent checking (á ≠ a)
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="showAccentBar"
+                        checked={showAccentBar}
+                        onChange={(e) => setShowAccentBar(e.target.checked)}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="showAccentBar" className="text-sm text-gray-700">
+                        Show accent toolbar
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      onClick={generateLessonContent}
+                      disabled={loadingLesson || !topic.trim()}
+                      className="w-full bg-purple-600 text-white py-3 px-6 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+                    >
+                      {loadingLesson ? (
+                        <>
+                          <RefreshCw className="animate-spin" size={20} />
+                          Starting lesson with explanation...
+                        </>
+                      ) : (
+                        <>
+                          <Send size={20} />
+                          Start Lesson 
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <h2 className="text-lg font-semibold text-blue-900 mb-1">Topic: {topic}</h2>
+                <p className="text-sm text-blue-700">Complete the sentences by filling in the blanks</p>
+                {!strictAccents && (
+                  <p className="text-xs text-blue-600 mt-1">Accent marks are optional (á = a)</p>
+                )}
+              </div>
+
+              {showAccentBar && !submitted && (
+                <div className="bg-gray-100 p-3 rounded-lg">
+                  <p className="text-xs text-gray-600 mb-2">Click to insert accented characters:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {['á', 'é', 'í', 'ó', 'ú', 'ñ', 'ü', '¿', '¡'].map((char) => (
+                      <button
+                        key={char}
+                        onClick={() => insertAccent(char)}
+                        className="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-lg font-medium"
+                      >
+                        {char}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">Tip: Click in an input field first, then click the character to insert</p>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                {renderLessonPanel()}
+                {!lesson && exercises.map((exercise, index) => {
+                  const isCorrect = submitted && isExerciseCorrect(index);
+                  const hasWrongAnswer = submitted && !isCorrect;
+                  const visibleHintCount = visibleHints[index] || 0;
+                  const availableHints = exercise.hints?.filter(h => h) || [];
+                  return (
+                    <div key={index} className="border rounded-lg p-4 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <span className="text-sm font-medium text-gray-500 mt-1">{index + 1}.</span>
+                        <div className="flex-1 space-y-2">
+                          <div className="text-gray-800 leading-relaxed">
+                            {parseExerciseSentence(exercise.sentence, index)}
+                          </div>
+                          {!submitted && availableHints.length > 0 && (
+                            <div className="space-y-2">
+                              {visibleHintCount > 0 && (
+                                <div className="space-y-1">
+                                  {availableHints.slice(0, visibleHintCount).map((hint, hintIndex) => (
+                                    <div key={hintIndex} className="text-sm text-blue-700 bg-blue-50 p-2 rounded flex items-start gap-2">
+                                      <HelpCircle size={14} className="mt-0.5 flex-shrink-0" />
+                                      <span>{hint}</span>
+                                    </div>
+                                  ))}
                                 </div>
-                              ))}
+                              )}
+                              {visibleHintCount < availableHints.length && (
+                                <button
+                                  onClick={() => showNextHint(index)}
+                                  className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                                >
+                                  <HelpCircle size={14} />
+                                  {visibleHintCount === 0 ? 'Need a hint?' : `Show hint ${visibleHintCount + 1}/${availableHints.length}`}
+                                </button>
+                              )}
                             </div>
                           )}
-                          {visibleHintCount < availableHints.length && (
+                          {exercise.context && (
+                            <div className="mt-2">
+                              <button
+                                onClick={() => toggleContext(index)}
+                                className="text-sm text-purple-600 hover:text-purple-800 flex items-center gap-1"
+                              >
+                                <Info size={14} />
+                                {showContext[index] ? 'Hide' : 'Show'} cultural context
+                              </button>
+                              {showContext[index] && (
+                                <div className="mt-2 text-sm text-purple-700 bg-purple-50 p-3 rounded">
+                                  {exercise.context}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {submitted && hasWrongAnswer && (
                             <button
-                              onClick={() => showNextHint(index)}
-                              className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                              onClick={() => requestExplanation(index)}
+                              disabled={loadingExplanation[index]}
+                              className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-2"
                             >
-                              <HelpCircle size={14} />
-                              {visibleHintCount === 0 ? 'Need a hint?' : `Show hint ${visibleHintCount + 1}/${availableHints.length}`}
+                              <ChevronRight size={14} />
+                              {loadingExplanation[index] ? 'Loading explanation...' : 
+                               explanations[index] ? 'Show explanation' : 'Why is this wrong?'}
                             </button>
                           )}
-                        </div>
-                      )}
-                      {exercise.context && (
-                        <div className="mt-2">
-                          <button
-                            onClick={() => toggleContext(index)}
-                            className="text-sm text-purple-600 hover:text-purple-800 flex items-center gap-1"
-                          >
-                            <Info size={14} />
-                            {showContext[index] ? 'Hide' : 'Show'} cultural context
-                          </button>
-                          {showContext[index] && (
-                            <div className="mt-2 text-sm text-purple-700 bg-purple-50 p-3 rounded">
-                              {exercise.context}
+                          {explanations[index] && (
+                            <div className="mt-3 p-4 bg-gray-50 rounded-md text-sm text-gray-700">
+                              {parseMarkdown(explanations[index])}
                             </div>
                           )}
                         </div>
-                      )}
-                      {submitted && hasWrongAnswer && (
-                        <button
-                          onClick={() => requestExplanation(index)}
-                          disabled={loadingExplanation[index]}
-                          className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-2"
-                        >
-                          <ChevronRight size={14} />
-                          {loadingExplanation[index] ? 'Loading explanation...' : 
-                           explanations[index] ? 'Show explanation' : 'Why is this wrong?'}
-                        </button>
-                      )}
-                      {explanations[index] && (
-                        <div className="mt-3 p-4 bg-gray-50 rounded-md text-sm text-gray-700">
-                          {parseMarkdown(explanations[index])}
-                        </div>
-                      )}
+                      </div>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {!submitted ? (
-            <button
-              onClick={checkAnswers}
-              className="w-full bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition-colors"
-            >
-              Check Answers
-            </button>
-          ) : (
-            <div className="space-y-4">
-              <div className="bg-gray-100 p-4 rounded-lg text-center">
-                <p className="text-2xl font-bold text-gray-800">
-                  Score: {score.correct}/{score.total}
-                </p>
-                <p className="text-gray-600">
-                  {score.correct === score.total ? '¡Excelente! Perfect score!' :
-                   score.correct >= score.total * 0.8 ? '¡Muy bien! Great job!' :
-                   score.correct >= score.total * 0.6 ? 'Good effort! Keep practicing!' :
-                   'Keep studying! You\'ll get there!'}
-                </p>
+                  );
+                })}
               </div>
-              {recommendation && (
-                <div className="bg-amber-50 border border-amber-200 p-4 rounded-lg">
-                  <div className="flex items-start gap-3">
-                    <Lightbulb className="text-amber-600 mt-1" size={20} />
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-amber-900 mb-1">AI Recommendation</h3>
-                      <p className="text-sm text-amber-800 mb-2">{recommendation.reasoning}</p>
-                      <p className="text-sm font-medium text-amber-900 mb-3">
-                        Suggested topic: <strong>{recommendation.recommendation}</strong>
-                      </p>
-                      <button
-                        onClick={practiceRecommendedTopic}
-                        className="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 transition-colors text-sm"
-                      >
-                        Practice This Topic
-                      </button>
-                    </div>
+
+              {!submitted ? (
+                <button
+                  onClick={checkAnswers}
+                  className="w-full bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  Check Answers
+                </button>
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-gray-100 p-4 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-gray-800">
+                      Score: {score.correct}/{score.total}
+                    </p>
+                    <p className="text-gray-600">
+                      {score.correct === score.total ? '¡Excelente! Perfect score!' :
+                       score.correct >= score.total * 0.8 ? '¡Muy bien! Great job!' :
+                       score.correct >= score.total * 0.6 ? 'Good effort! Keep practicing!' :
+                       'Keep studying! You\'ll get there!'}
+                    </p>
                   </div>
-                </div>
-              )}
-              {loadingRecommendation && (
-                <div className="bg-gray-50 p-4 rounded-lg text-center">
-                  <RefreshCw className="animate-spin mx-auto text-gray-600" size={20} />
-                  <p className="text-sm text-gray-600 mt-2">Analyzing your performance...</p>
-                </div>
-              )}
-              <button
-                onClick={reset}
+                  {recommendation && (
+                    <div className="bg-amber-50 border border-amber-200 p-4 rounded-lg">
+                      <div className="flex items-start gap-3">
+                        <Lightbulb className="text-amber-600 mt-1" size={20} />
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-amber-900 mb-1">AI Recommendation</h3>
+                          <p className="text-sm text-amber-800 mb-2">{recommendation.reasoning}</p>
+                          <p className="text-sm font-medium text-amber-900 mb-3">
+                            Suggested topic: <strong>{recommendation.recommendation}</strong>
+                          </p>
+                          <button
+                            onClick={practiceRecommendedTopic}
+                            className="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 transition-colors text-sm"
+                          >
+                            Practice This Topic
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {loadingRecommendation && (
+                    <div className="bg-gray-50 p-4 rounded-lg text-center">
+                      <RefreshCw className="animate-spin mx-auto text-gray-600" size={20} />
+                      <p className="text-sm text-gray-600 mt-2">Analyzing your performance...</p>
+                    </div>
+                  )}
+                                <button
+                onClick={resetToLanguageSelection}
                 className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
               >
                 <RefreshCw size={20} />
-                Practice Another Topic
+                Choose Different Language/Level
               </button>
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

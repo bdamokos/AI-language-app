@@ -70,11 +70,15 @@ export default function ExplanationComponent({ explanation }) {
 /**
  * Generate explanation using the generic LLM endpoint
  * @param {string} topic - The topic to explain
- * @param {string} language - Language for examples (default: 'es')
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<{title: string, content_markdown: string}>} Generated explanation
  */
-export async function generateExplanation(topic, language = 'es') {
-  const system = 'You are a language pedagogy expert. Provide a concise, insightful explanation of a Spanish grammar concept with examples. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.';
+export async function generateExplanation(topic, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+  const languageName = languageContext.language;
+  const level = languageContext.level;
+  const challengeMode = languageContext.challengeMode;
+  
+  const system = `You are a language pedagogy expert. Provide a concise, insightful explanation of a ${languageName} grammar concept with examples. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.`;
 
   const normalizeTopic = (input) => {
     if (typeof input === 'string') return input.trim();
@@ -84,7 +88,12 @@ export async function generateExplanation(topic, language = 'es') {
   };
   const safeTopic = normalizeTopic(topic);
 
-  const user = `Explain the grammar concept: ${safeTopic}. Language for examples: ${language}. Keep it 200-600 words.`;
+  const user = `Explain the grammar concept: ${safeTopic}. 
+
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+
+Keep it 200-600 words and ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with separate advanced explanations for more eager learners' : ''}.`;
 
   const schema = {
     type: 'object', additionalProperties: false,

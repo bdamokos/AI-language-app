@@ -113,10 +113,10 @@ export function scoreLesson(lesson, values, strictAccents = true) {
  * Generate a complete lesson using component-driven generation
  * @param {string} topic - The topic to generate exercises about
  * @param {Object} counts - Exercise counts: { fill_in_blanks, multiple_choice, cloze_passages, cloze_with_mixed_options }
- * @param {string} language - Language for examples (default: 'es')
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<Object>} Generated lesson bundle
  */
-export async function generateLesson(topic, counts = {}, language = 'es') {
+export async function generateLesson(topic, counts = {}, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
   const safeCounts = {
     explanation: 1,
     fill_in_blanks: Math.max(0, Math.min(20, Number(counts?.fill_in_blanks ?? 0))),
@@ -127,17 +127,17 @@ export async function generateLesson(topic, counts = {}, language = 'es') {
 
   // Generate all exercise types in parallel using component generation functions
   const [explanation, fibData, mcqData, clozeData, clozeMixData] = await Promise.all([
-    generateExplanation(topic, language),
-    safeCounts.fill_in_blanks > 0 ? generateFIB(topic, safeCounts.fill_in_blanks) : Promise.resolve({ items: [] }),
-    safeCounts.multiple_choice > 0 ? generateMCQ(topic, safeCounts.multiple_choice) : Promise.resolve({ items: [] }),
-    safeCounts.cloze_passages > 0 ? generateCloze(topic, safeCounts.cloze_passages) : Promise.resolve({ items: [] }),
-    safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options) : Promise.resolve({ items: [] })
+    generateExplanation(topic, languageContext),
+    safeCounts.fill_in_blanks > 0 ? generateFIB(topic, safeCounts.fill_in_blanks, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.multiple_choice > 0 ? generateMCQ(topic, safeCounts.multiple_choice, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.cloze_passages > 0 ? generateCloze(topic, safeCounts.cloze_passages, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options, languageContext) : Promise.resolve({ items: [] })
   ]);
 
   // Build lesson bundle
   return {
     version: '1.0',
-    language,
+    language: languageContext.language,
     topic,
     pedagogy: { 
       approach: 'scaffolded+spiral', 

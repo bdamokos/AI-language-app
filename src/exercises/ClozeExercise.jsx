@@ -160,17 +160,18 @@ export function scoreCloze(item, value, eq) {
  * Generate Cloze exercises using the generic LLM endpoint
  * @param {string} topic - The topic to generate exercises about
  * @param {number} count - Number of exercises to generate (1-10)
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<{items: Array}>} Generated Cloze exercises
  */
-export async function generateCloze(topic, count = 2) {
+export async function generateCloze(topic, count = 2, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
   // For single passage, use the original approach
   if (count === 1) {
-    return generateSingleClozePassage(topic);
+    return generateSingleClozePassage(topic, null, languageContext);
   }
   
   // For multiple passages, generate them in parallel
   const promises = Array.from({ length: count }, (_, i) => 
-    generateSingleClozePassage(topic, i + 1)
+    generateSingleClozePassage(topic, i + 1, languageContext)
   );
   
   try {
@@ -198,10 +199,14 @@ export async function generateCloze(topic, count = 2) {
  * @param {number} passageNumber - Optional passage number for context
  * @returns {Promise<{items: Array}>} Generated Cloze exercise
  */
-async function generateSingleClozePassage(topic, passageNumber = null) {
+async function generateSingleClozePassage(topic, passageNumber = null, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
   const passageContext = passageNumber ? ` (Passage ${passageNumber})` : '';
   
-  const system = `Generate a single Spanish cloze passage that is engaging and educational. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence). 
+  const languageName = languageContext.language;
+  const level = languageContext.level;
+  const challengeMode = languageContext.challengeMode;
+  
+  const system = `Generate a single ${languageName} cloze passage that is engaging and educational. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence). 
 
 Key requirements:
 - Create a longer, more engaging passage that tells a story or explains a concept
@@ -211,6 +216,7 @@ Key requirements:
 - Ensure blanks test different aspects: vocabulary, grammar, verb conjugations, etc.
 - Make the content culturally relevant and age-appropriate
 - Maximum of 2 blanks per sentence to maintain readability
+- Ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}
 
 IMPORTANT: Each blank must be represented by exactly 5 underscores (_____). Do not use fewer or more underscores.
 
@@ -226,7 +232,11 @@ Complete solution: "María vive en Madrid. Ella trabaja como profesora. Su casa 
 
 Provide a clear student instruction as a separate field named studentInstructions. Do not include the instruction text inside the passage itself.`;
   
-  const user = `Create exactly 1 cloze passage about: ${topic}${passageContext}. The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: each blank must use exactly 5 underscores (_____).`;
+  const user = `Create exactly 1 ${languageName} cloze passage about: ${topic}${passageContext}. 
+
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+
+The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: each blank must use exactly 5 underscores (_____).`;
 
   const schema = {
     type: 'object', additionalProperties: false,

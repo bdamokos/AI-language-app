@@ -51,12 +51,21 @@ export function scoreMCQ(item, value) {
  * Generate MCQ exercises using the generic LLM endpoint
  * @param {string} topic - The topic to generate exercises about
  * @param {number} count - Number of exercises to generate (1-20)
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<{items: Array}>} Generated MCQ exercises
  */
-export async function generateMCQ(topic, count = 5) {
-  const system = 'Generate Spanish multiple-choice questions with 4 options, one correct, with rationales.';
+export async function generateMCQ(topic, count = 5, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+  const languageName = languageContext.language;
+  const level = languageContext.level;
+  const challengeMode = languageContext.challengeMode;
   
-  const user = `Create exactly ${count} MCQs about: ${topic}. Include plausible distractors.`;
+  const system = `Generate ${languageName} multiple-choice questions with 4 options, one correct, with rationales. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+  
+  const user = `Create exactly ${count} ${languageName} MCQs about: ${topic}. 
+
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+
+Include plausible distractors and ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}.`;
 
   const schema = {
     type: 'object', additionalProperties: false,
