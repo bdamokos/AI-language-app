@@ -82,6 +82,61 @@ function assertEnv(condition, message) {
   }
 }
 
+// LRU Cache implementation for explanations
+class LRUCache {
+  constructor(capacity = 1000) {
+    this.capacity = capacity;
+    this.cache = new Map();
+  }
+
+  get(key) {
+    if (this.cache.has(key)) {
+      // Move to end (mark as recently used)
+      const value = this.cache.get(key);
+      this.cache.delete(key);
+      this.cache.set(key, value);
+      return value;
+    }
+    return undefined;
+  }
+
+  set(key, value) {
+    if (this.cache.has(key)) {
+      // Update existing key
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.capacity) {
+      // Remove least recently used item (first item in Map)
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    
+    this.cache.set(key, value);
+  }
+
+  has(key) {
+    return this.cache.has(key);
+  }
+
+  clear() {
+    this.cache.clear();
+  }
+
+  size() {
+    return this.cache.size;
+  }
+
+  stats() {
+    return {
+      size: this.cache.size,
+      capacity: this.capacity,
+      utilizationPercent: Math.round((this.cache.size / this.capacity) * 100)
+    };
+  }
+}
+
+// Create explanation cache instance
+const explanationCache = new LRUCache(1000);
+
 async function callLLM({ system, user, maxTokens = 15000, jsonSchema, schemaName }) {
   const provider = runtimeConfig.provider;
   const startedAt = Date.now();
@@ -206,6 +261,29 @@ app.post('/api/generate', async (req, res) => {
     const { system, user, maxTokens = 3000, jsonSchema, schemaName } = req.body || {};
     if (!user || !String(user).trim()) return res.status(400).json({ error: 'User prompt is required' });
     
+    // Generate cache key for explanations
+    const isExplanation = schemaName === 'explanation';
+    let cacheKey = null;
+    if (isExplanation) {
+      const currentModel = runtimeConfig.provider === 'openrouter' 
+        ? runtimeConfig.openrouter.model 
+        : runtimeConfig.ollama.model;
+      
+      // Extract topic from user prompt (assuming format "Explain the grammar concept: TOPIC. Language...")
+      const topicMatch = user.match(/Explain the grammar concept:\s*([^.]+)/i);
+      if (topicMatch) {
+        const topic = topicMatch[1].trim();
+        cacheKey = `${topic}:${currentModel}`;
+        
+        // Check cache first
+        const cached = explanationCache.get(cacheKey);
+        if (cached) {
+          console.log(`[CACHE HIT] explanation for topic="${topic}" model="${currentModel}"`);
+          return res.json(cached);
+        }
+      }
+    }
+    
     const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
     const text = await callLLM({ 
       system, 
@@ -221,6 +299,12 @@ app.post('/api/generate', async (req, res) => {
     } catch (e) {
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
+    }
+    
+    // Cache explanation responses
+    if (isExplanation && cacheKey && parsed) {
+      explanationCache.set(cacheKey, parsed);
+      console.log(`[CACHE SET] explanation for topic="${cacheKey}" (cache size: ${explanationCache.size()}/${explanationCache.capacity})`);
     }
     
     return res.json(parsed);
