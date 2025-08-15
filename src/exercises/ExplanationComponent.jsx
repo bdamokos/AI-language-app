@@ -11,10 +11,55 @@ export default function ExplanationComponent({ explanation }) {
   if (!explanation) return null;
 
   return (
-    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-      <h2 className="text-xl font-semibold text-blue-900 mb-3">{explanation.title}</h2>
-      <div className="prose prose-sm max-w-none text-blue-800">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+    <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 mb-4">
+      <h2 className="text-xl font-semibold text-slate-900 mb-4">{explanation.title}</h2>
+      <div className="prose prose-slate prose-sm max-w-none">
+        <ReactMarkdown 
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // Override paragraph styling for better spacing
+            p: ({children}) => <p className="mb-4 leading-relaxed text-slate-700">{children}</p>,
+            // Style tables properly
+            table: ({children}) => (
+              <div className="overflow-x-auto my-4">
+                <table className="min-w-full border-collapse border border-slate-300 bg-white rounded-lg shadow-sm">
+                  {children}
+                </table>
+              </div>
+            ),
+            thead: ({children}) => <thead className="bg-slate-100">{children}</thead>,
+            th: ({children}) => (
+              <th className="border border-slate-300 px-4 py-3 text-left font-semibold text-slate-900 bg-slate-50">
+                {children}
+              </th>
+            ),
+            td: ({children}) => (
+              <td className="border border-slate-300 px-4 py-3 text-slate-700">
+                {children}
+              </td>
+            ),
+            // Style headings
+            h3: ({children}) => <h3 className="text-lg font-semibold text-slate-900 mt-6 mb-3">{children}</h3>,
+            h4: ({children}) => <h4 className="text-base font-semibold text-slate-800 mt-4 mb-2">{children}</h4>,
+            // Style lists
+            ul: ({children}) => <ul className="mb-4 pl-6 list-disc text-slate-700">{children}</ul>,
+            ol: ({children}) => <ol className="mb-4 pl-6 list-decimal text-slate-700">{children}</ol>,
+            li: ({children}) => <li className="mb-1">{children}</li>,
+            // Style strong text
+            strong: ({children}) => <strong className="font-semibold text-slate-900">{children}</strong>,
+            // Style code blocks
+            code: ({children, className}) => {
+              const isInline = !className;
+              return isInline ? (
+                <code className="bg-slate-200 px-1.5 py-0.5 rounded text-sm font-mono text-slate-800">
+                  {children}
+                </code>
+              ) : (
+                <code className={className}>{children}</code>
+              );
+            }
+          }}
+        >
           {explanation.content_markdown}
         </ReactMarkdown>
       </div>
