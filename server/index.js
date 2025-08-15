@@ -790,6 +790,59 @@ app.get('/api/openrouter/models', async (req, res) => {
   }
 });
 
+// Logging endpoint for frontend validation warnings and errors
+app.post('/api/log', (req, res) => {
+  try {
+    const { level = 'info', message, data } = req.body;
+    
+    // Validate log level
+    const validLevels = ['debug', 'info', 'warn', 'error'];
+    const logLevel = validLevels.includes(level) ? level : 'info';
+    
+    // Format the log message
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [${logLevel.toUpperCase()}] ${message}`;
+    
+    // Log to console with appropriate level
+    switch (logLevel) {
+      case 'error':
+        console.error(logMessage, data || '');
+        break;
+      case 'warn':
+        console.warn(logMessage, data || '');
+        break;
+      case 'debug':
+        console.debug(logMessage, data || '');
+        break;
+      default:
+        console.log(logMessage, data || '');
+    }
+    
+    // Store in debug logs for debugging purposes
+    const id = Math.random().toString(36).slice(2, 8);
+    debugLogs.set(id, {
+      id,
+      timestamp,
+      level: logLevel,
+      message,
+      data,
+      source: 'frontend'
+    });
+    debugOrder.push(id);
+    
+    // Keep only last 100 debug records
+    if (debugOrder.length > 100) {
+      const oldId = debugOrder.shift();
+      debugLogs.delete(oldId);
+    }
+    
+    res.json({ success: true, logged: true, id });
+  } catch (e) {
+    console.error('[LOG] Failed to process log entry:', e);
+    res.status(500).json({ error: 'Failed to log entry' });
+  }
+});
+
 // Debug endpoints: expose last N LLM debug records
 app.get('/api/debug/:id', (req, res) => {
   const id = req.params.id;

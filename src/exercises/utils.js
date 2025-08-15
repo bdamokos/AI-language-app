@@ -40,4 +40,107 @@ export function countBlanks(text) {
   return matches ? matches.length : 0;
 }
 
+/**
+ * Attempts to recover malformed blanks by converting various underscore patterns to standard blanks
+ * @param {string} text - The text with potentially malformed blanks
+ * @returns {string} - Text with recovered blanks
+ */
+export function recoverBlanks(text) {
+  if (!text) return text;
+  
+  // First, try to find any underscore patterns and convert them to standard blanks
+  // Look for patterns like: _, __, ___, ____, _____, ______, etc.
+  let recovered = text.replace(/_+/g, '_____');
+  
+  // Also handle cases where there might be spaces or other characters mixed in
+  recovered = recovered.replace(/[_ ]{3,}/g, '_____');
+  
+  return recovered;
+}
+
+/**
+ * Validates that the number of blanks in text matches the expected count from blanks array
+ * @param {string} text - The passage text
+ * @param {Array} blanks - Array of blank objects
+ * @returns {Object} - { isValid: boolean, expectedCount: number, actualCount: number, recoveredText?: string }
+ */
+export function validateClozePassage(text, blanks) {
+  if (!text || !Array.isArray(blanks)) {
+    return { isValid: false, expectedCount: 0, actualCount: 0 };
+  }
+  
+  const expectedCount = blanks.length;
+  const actualCount = countBlanks(text);
+  
+  if (expectedCount === actualCount) {
+    return { isValid: true, expectedCount, actualCount };
+  }
+  
+  // Try to recover the text
+  const recoveredText = recoverBlanks(text);
+  const recoveredCount = countBlanks(recoveredText);
+  
+  return {
+    isValid: recoveredCount === expectedCount,
+    expectedCount,
+    actualCount,
+    recoveredCount,
+    recoveredText: recoveredCount === expectedCount ? recoveredText : undefined
+  };
+}
+
+/**
+ * Sanitizes a cloze passage by ensuring proper blank formatting and validation
+ * @param {Object} item - The cloze item with passage and blanks
+ * @returns {Object} - { sanitized: boolean, item: Object, warnings: Array<string> }
+ */
+export function sanitizeClozeItem(item) {
+  if (!item || !item.passage || !Array.isArray(item.blanks)) {
+    return { sanitized: false, item, warnings: ['Invalid item structure'] };
+  }
+  
+  const warnings = [];
+  let sanitizedItem = { ...item };
+  
+  // Validate blank count
+  const validation = validateClozePassage(item.passage, item.blanks);
+  
+  if (!validation.isValid) {
+    warnings.push(`Blank count mismatch: expected ${validation.expectedCount}, found ${validation.actualCount}`);
+    
+    // Try to recover if possible
+    if (validation.recoveredText) {
+      sanitizedItem.passage = validation.recoveredText;
+      warnings.push('Passage recovered by fixing malformed blanks');
+    } else {
+      warnings.push('Could not recover passage - blank count mismatch remains');
+    }
+  }
+  
+  // Validate that all blanks have required fields
+  const requiredFields = ['index', 'answer', 'hint', 'rationale'];
+  item.blanks.forEach((blank, idx) => {
+    requiredFields.forEach(field => {
+      // Fix: properly check for undefined/null/empty string, but allow 0 as valid index
+      if (blank[field] === undefined || blank[field] === null || blank[field] === '') {
+        warnings.push(`Blank ${idx} missing ${field}`);
+        if (!sanitizedItem.blanks[idx]) sanitizedItem.blanks[idx] = {};
+        sanitizedItem.blanks[idx][field] = field === 'index' ? idx : `Missing ${field}`;
+      }
+    });
+  });
+  
+  // Ensure blank indices are sequential and match their position
+  sanitizedItem.blanks = sanitizedItem.blanks.map((blank, idx) => ({
+    ...blank,
+    index: idx
+  }));
+  
+  return {
+    sanitized: warnings.length === 0 || validation.recoveredText,
+    item: sanitizedItem,
+    warnings
+  };
+}
+
 
