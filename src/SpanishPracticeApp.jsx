@@ -651,7 +651,7 @@ const SpanishPracticeApp = () => {
               {loadingLesson ? (
                 <>
                   <RefreshCw className="animate-spin" size={20} />
-                  Starting empty lesson...
+                  Starting lesson with explanation...
                 </>
               ) : (
                 <>
