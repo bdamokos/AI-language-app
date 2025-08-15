@@ -128,7 +128,6 @@ Rules:
     body: JSON.stringify({
       system,
       user,
-      maxTokens: 15000,
       jsonSchema: schema,
       schemaName: 'fib_list'
     })

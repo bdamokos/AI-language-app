@@ -101,7 +101,6 @@ export async function generateExplanation(topic, language = 'es') {
     body: JSON.stringify({
       system,
       user,
-      maxTokens: 15000,
       jsonSchema: schema,
       schemaName: 'explanation'
     })

@@ -61,7 +61,9 @@ const runtimeConfig = {
   ollama: {
     host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
     model: DEFAULT_MODELS.ollama
-  }
+  },
+  // Centralized max token cap for all generations
+  maxTokens: Number(process.env.MAX_TOKENS || 15000)
 };
 
 // Basic request logging
@@ -137,7 +139,9 @@ class LRUCache {
 // Create explanation cache instance
 const explanationCache = new LRUCache(1000);
 
-async function callLLM({ system, user, maxTokens = 15000, jsonSchema, schemaName }) {
+async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
+  // Enforce application-level token cap regardless of caller
+  maxTokens = runtimeConfig.maxTokens;
   const provider = runtimeConfig.provider;
   const startedAt = Date.now();
   const logPrefix = `[LLM ${provider}]`;
@@ -260,10 +264,73 @@ async function getOpenRouterKeyInfo() {
   return resp.json();
 }
 
+// Attempt to recover from truncated JSON that should be { items: [...] }
+function recoverItemsFromPartialJson(raw) {
+  try {
+    const txt = cleanFence(raw);
+    const itemsKeyIdx = txt.search(/"items"\s*:\s*\[|items\s*:\s*\[/);
+    if (itemsKeyIdx === -1) return null;
+    const bracketStart = txt.indexOf('[', itemsKeyIdx);
+    if (bracketStart === -1) return null;
+    const items = [];
+    let i = bracketStart + 1;
+    const len = txt.length;
+    while (i < len) {
+      // Skip whitespace and commas
+      while (i < len && /[\s,]/.test(txt[i])) i++;
+      if (i >= len) break;
+      if (txt[i] === ']') break; // end of array
+      if (txt[i] !== '{') { i++; continue; }
+      const startObj = i;
+      let depth = 0;
+      let inStr = false;
+      let esc = false;
+      while (i < len) {
+        const ch = txt[i];
+        if (inStr) {
+          if (esc) {
+            esc = false;
+          } else if (ch === '\\') {
+            esc = true;
+          } else if (ch === '"') {
+            inStr = false;
+          }
+        } else {
+          if (ch === '"') {
+            inStr = true;
+          } else if (ch === '{') {
+            depth++;
+          } else if (ch === '}') {
+            depth--;
+            if (depth === 0) {
+              const objText = txt.slice(startObj, i + 1);
+              const cleaned = objText.replace(/,(\s*[}\]])/g, '$1');
+              try {
+                items.push(JSON.parse(cleaned));
+              } catch (_) {
+                // Ignore malformed object
+              }
+              i++;
+              break;
+            }
+          }
+        }
+        i++;
+      }
+      // If we exited because of truncation (unclosed object/string), stop without adding
+      if (inStr || depth > 0) break;
+    }
+    if (items.length > 0) return { items };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Generic LLM generation endpoint
 app.post('/api/generate', async (req, res) => {
   try {
-    const { system, user, maxTokens = 3000, jsonSchema, schemaName } = req.body || {};
+    const { system, user, jsonSchema, schemaName } = req.body || {};
     if (!user || !String(user).trim()) return res.status(400).json({ error: 'User prompt is required' });
     
     // Generate cache key for explanations
@@ -293,7 +360,6 @@ app.post('/api/generate', async (req, res) => {
     const text = await callLLM({ 
       system, 
       user, 
-      maxTokens, 
       jsonSchema: useStructured ? jsonSchema : undefined, 
       schemaName 
     });
@@ -302,6 +368,15 @@ app.post('/api/generate', async (req, res) => {
     try {
       parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
     } catch (e) {
+      // Attempt recovery for list payloads: salvage completed items and discard last partial
+      const expectsItems = !!(jsonSchema && jsonSchema.properties && jsonSchema.properties.items);
+      if (expectsItems) {
+        const recovered = recoverItemsFromPartialJson(text);
+        if (recovered && Array.isArray(recovered.items) && recovered.items.length > 0) {
+          console.warn('[PARSE-RECOVER] Returning salvaged items from truncated JSON:', recovered.items.length);
+          return res.json(recovered);
+        }
+      }
       console.error('[PARSE]', e.message, e.rawPreview || '');
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
@@ -368,7 +443,7 @@ Please explain:
 Use markdown formatting for clarity (bold for **important terms**, code blocks for conjugations, ### for headers, etc.).`;
     
     const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
-    const text = await callLLM({ system, user, maxTokens: 2000, jsonSchema: useStructured ? schema : undefined, schemaName: 'explanation' });
+    const text = await callLLM({ system, user, jsonSchema: useStructured ? schema : undefined, schemaName: 'explanation' });
     let parsed;
     if (useStructured) {
       try {
@@ -412,7 +487,7 @@ Based on their performance, suggest ONE specific practice topic. Consider:
 - If score < 60%: suggest an easier or more fundamental topic`;
     
     const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
-    const text = await callLLM({ system, user, maxTokens: 2000, jsonSchema: useStructured ? schema : undefined, schemaName: 'recommendation' });
+    const text = await callLLM({ system, user, jsonSchema: useStructured ? schema : undefined, schemaName: 'recommendation' });
     let parsed;
     try {
       parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);

@@ -3,7 +3,7 @@ import { normalizeText, splitByBlanks } from './utils.js';
 
 /**
  * Cloze with mixed options per blank (dropdowns)
- * item: { title?, passage, blanks: [{ index, options: string[], correct_index: number }], difficulty }
+ * item: { title?, studentInstructions?, passage, blanks: [{ index, options: string[], correct_index: number }], difficulty }
  * value: Record<string,string>
  */
 export default function ClozeMixedExercise({ item, value, onChange, checked, strictAccents = true, idPrefix }) {
@@ -35,6 +35,11 @@ export default function ClozeMixedExercise({ item, value, onChange, checked, str
   return (
     <div className="border rounded p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
+      {item?.studentInstructions && (
+        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2">
+          {item.studentInstructions}
+        </p>
+      )}
       <div className="text-gray-800 leading-relaxed">{nodes}</div>
     </div>
   );
@@ -58,7 +63,7 @@ export function scoreClozeMixed(item, value, eq) {
  * @returns {Promise<{items: Array}>} Generated ClozeMixed exercises
  */
 export async function generateClozeMixed(topic, count = 2) {
-  const system = 'Generate Spanish cloze passages where each blank has a set of options including the target concept and closely-related distractors.';
+  const system = 'Generate Spanish cloze passages where each blank has a set of options including the target concept and closely-related distractors. Provide a concise student instruction telling what to choose (e.g., "Choose the correct adjective"), as a separate field named studentInstructions. Do not include the instruction text inside the passage itself.';
   
   const user = `Create exactly ${count} cloze-with-options passages about: ${topic}.`;
 
@@ -70,13 +75,14 @@ export async function generateClozeMixed(topic, count = 2) {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string' },
+            studentInstructions: { type: 'string', description: 'Concise directive for the student about what to select for blanks' },
             passage: { type: 'string' },
             blanks: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
               index: { type: 'integer' }, options: { type: 'array', items: { type: 'string' }, minItems: 3 }, correct_index: { type: 'integer' }
-            }, required: ['index','options','correct_index'] }},
-            difficulty: { type: 'string' }
+            }, required: ['index','options','correct_index'] }}
+            
           },
-          required: ['passage','blanks','difficulty']
+          required: ['studentInstructions','passage','blanks']
         }
       }
     },
@@ -89,7 +95,6 @@ export async function generateClozeMixed(topic, count = 2) {
     body: JSON.stringify({
       system,
       user,
-      maxTokens: 15000,
       jsonSchema: schema,
       schemaName: 'cloze_mixed_list'
     })

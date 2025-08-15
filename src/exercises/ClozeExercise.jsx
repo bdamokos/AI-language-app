@@ -3,7 +3,7 @@ import { normalizeText, countBlanks, splitByBlanks } from './utils.js';
 
 /**
  * Cloze passage with free-text blanks
- * item: { title?, passage, blanks: [{ index, answer }], difficulty }
+ * item: { title?, studentInstructions?, passage, blanks: [{ index, answer }], difficulty }
  * value: Record<string,string>
  */
 export default function ClozeExercise({ item, value, onChange, checked, strictAccents = true, idPrefix, onFocusKey }) {
@@ -42,6 +42,11 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
   return (
     <div className="border rounded p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
+      {item?.studentInstructions && (
+        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2">
+          {item.studentInstructions}
+        </p>
+      )}
       <div className="text-gray-800 leading-relaxed">{nodes}</div>
     </div>
   );
@@ -65,7 +70,7 @@ export function scoreCloze(item, value, eq) {
  * @returns {Promise<{items: Array}>} Generated Cloze exercises
  */
 export async function generateCloze(topic, count = 2) {
-  const system = 'Generate Spanish cloze passages with several blanks (_____). Include an answers array with index and answer.';
+  const system = 'Generate Spanish cloze passages with several blanks (_____). Provide a concise student instruction telling what to fill in (e.g., "Fill in the missing verbs in present tense"), as a separate field named studentInstructions. Do not include the instruction text inside the passage itself. Include an answers array with index and answer.';
   
   const user = `Create exactly ${count} cloze passages about: ${topic}.`;
 
@@ -77,13 +82,14 @@ export async function generateCloze(topic, count = 2) {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string' },
+            studentInstructions: { type: 'string', description: 'Concise directive for the student about what to fill in' },
             passage: { type: 'string' },
             blanks: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
               index: { type: 'integer' }, answer: { type: 'string' }, hint: { type: 'string' }, rationale: { type: 'string' }
-            }, required: ['index','answer'] }},
-            difficulty: { type: 'string' }
+            }, required: ['index','answer'] }}
+
           },
-          required: ['passage','blanks','difficulty']
+          required: ['studentInstructions','passage','blanks']
         }
       }
     },
@@ -96,7 +102,6 @@ export async function generateCloze(topic, count = 2) {
     body: JSON.stringify({
       system,
       user,
-        maxTokens: 15000,
       jsonSchema: schema,
       schemaName: 'cloze_list'
     })
