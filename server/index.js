@@ -41,32 +41,22 @@ function tryParseJsonLoose(raw) {
 }
 
 // Provider selection via env (initial default)
-// One of: anthropic | openrouter | openai | ollama
-const INITIAL_PROVIDER = (process.env.PROVIDER || 'anthropic').toLowerCase();
+// One of: openrouter | ollama
+const INITIAL_PROVIDER = (process.env.PROVIDER || 'openrouter').toLowerCase();
 
 // Default models per provider
 const DEFAULT_MODELS = {
-  anthropic: process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20240620',
   openrouter: process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet',
-  openai: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   ollama: process.env.OLLAMA_MODEL || 'qwen2.5:14b'
 };
 
 // Runtime-configurable settings (overrides env without server restart)
 const runtimeConfig = {
   provider: INITIAL_PROVIDER,
-  anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: DEFAULT_MODELS.anthropic
-  },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY || '',
     model: DEFAULT_MODELS.openrouter,
     appUrl: process.env.APP_URL || 'http://localhost:5173'
-  },
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY || '',
-    model: DEFAULT_MODELS.openai
   },
   ollama: {
     host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
@@ -98,35 +88,9 @@ async function callLLM({ system, user, maxTokens = 1500, jsonSchema, schemaName 
   const logPrefix = `[LLM ${provider}]`;
   const preview = String(user || '').slice(0, 160).replace(/\s+/g, ' ');
   console.log(`${logPrefix} model=${
-    provider === 'anthropic' ? runtimeConfig.anthropic.model :
     provider === 'openrouter' ? runtimeConfig.openrouter.model :
-    provider === 'openai' ? runtimeConfig.openai.model :
     runtimeConfig.ollama.model
   } maxTokens=${maxTokens} promptPreview="${preview}..." structured=${jsonSchema ? 'yes' : 'no'}`);
-  if (provider === 'anthropic') {
-    assertEnv(runtimeConfig.anthropic.apiKey, 'Missing ANTHROPIC_API_KEY');
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': runtimeConfig.anthropic.apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: runtimeConfig.anthropic.model,
-        max_tokens: maxTokens,
-        system: system || undefined,
-        messages: [{ role: 'user', content: user }]
-      })
-    });
-    if (!resp.ok) {
-      console.error(`${logPrefix} HTTP ${resp.status}`);
-      throw new Error(`Anthropic error ${resp.status}`);
-    }
-    const data = await resp.json();
-    console.log(`${logPrefix} ok in ${Date.now() - startedAt}ms`);
-    return data.content?.[0]?.text || '';
-  }
   if (provider === 'openrouter') {
     assertEnv(runtimeConfig.openrouter.apiKey, 'Missing OPENROUTER_API_KEY');
     const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -167,31 +131,6 @@ async function callLLM({ system, user, maxTokens = 1500, jsonSchema, schemaName 
         }
       }
       throw new Error(`OpenRouter error ${resp.status}`);
-    }
-    const data = await resp.json();
-    console.log(`${logPrefix} ok in ${Date.now() - startedAt}ms`);
-    return data.choices?.[0]?.message?.content || '';
-  }
-  if (provider === 'openai') {
-    assertEnv(runtimeConfig.openai.apiKey, 'Missing OPENAI_API_KEY');
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'authorization': `Bearer ${runtimeConfig.openai.apiKey}`
-      },
-      body: JSON.stringify({
-        model: runtimeConfig.openai.model,
-        messages: [
-          system ? { role: 'system', content: system } : null,
-          { role: 'user', content: user }
-        ].filter(Boolean),
-        max_tokens: maxTokens
-      })
-    });
-    if (!resp.ok) {
-      console.error(`${logPrefix} HTTP ${resp.status}`);
-      throw new Error(`OpenAI error ${resp.status}`);
     }
     const data = await resp.json();
     console.log(`${logPrefix} ok in ${Date.now() - startedAt}ms`);
@@ -764,9 +703,7 @@ app.get('/api/ollama/models', async (req, res) => {
 app.get('/api/settings', (req, res) => {
   const sanitized = {
     provider: runtimeConfig.provider,
-    anthropic: { model: runtimeConfig.anthropic.model, hasKey: !!runtimeConfig.anthropic.apiKey },
     openrouter: { model: runtimeConfig.openrouter.model, hasKey: !!runtimeConfig.openrouter.apiKey, appUrl: runtimeConfig.openrouter.appUrl },
-    openai: { model: runtimeConfig.openai.model, hasKey: !!runtimeConfig.openai.apiKey },
     ollama: { model: runtimeConfig.ollama.model, host: runtimeConfig.ollama.host }
   };
   res.json(sanitized);
@@ -776,18 +713,10 @@ app.get('/api/settings', (req, res) => {
 app.post('/api/settings', (req, res) => {
   const body = req.body || {};
   if (body.provider) runtimeConfig.provider = String(body.provider).toLowerCase();
-  if (body.anthropic) {
-    if (typeof body.anthropic.apiKey === 'string' && body.anthropic.apiKey.trim()) runtimeConfig.anthropic.apiKey = body.anthropic.apiKey;
-    if (typeof body.anthropic.model === 'string') runtimeConfig.anthropic.model = body.anthropic.model;
-  }
   if (body.openrouter) {
     if (typeof body.openrouter.apiKey === 'string' && body.openrouter.apiKey.trim()) runtimeConfig.openrouter.apiKey = body.openrouter.apiKey;
     if (typeof body.openrouter.model === 'string') runtimeConfig.openrouter.model = body.openrouter.model;
     if (typeof body.openrouter.appUrl === 'string') runtimeConfig.openrouter.appUrl = body.openrouter.appUrl;
-  }
-  if (body.openai) {
-    if (typeof body.openai.apiKey === 'string' && body.openai.apiKey.trim()) runtimeConfig.openai.apiKey = body.openai.apiKey;
-    if (typeof body.openai.model === 'string') runtimeConfig.openai.model = body.openai.model;
   }
   if (body.ollama) {
     if (typeof body.ollama.host === 'string') runtimeConfig.ollama.host = body.ollama.host;
@@ -812,13 +741,9 @@ app.post('/api/settings', (req, res) => {
       }
       const set = (k, v) => { if (typeof v === 'string') map.set(k, v); };
       set('PROVIDER', runtimeConfig.provider);
-      set('ANTHROPIC_API_KEY', runtimeConfig.anthropic.apiKey || map.get('ANTHROPIC_API_KEY') || '');
-      set('ANTHROPIC_MODEL', runtimeConfig.anthropic.model);
       set('OPENROUTER_API_KEY', runtimeConfig.openrouter.apiKey || map.get('OPENROUTER_API_KEY') || '');
       set('OPENROUTER_MODEL', runtimeConfig.openrouter.model);
       set('APP_URL', runtimeConfig.openrouter.appUrl);
-      set('OPENAI_API_KEY', runtimeConfig.openai.apiKey || map.get('OPENAI_API_KEY') || '');
-      set('OPENAI_MODEL', runtimeConfig.openai.model);
       set('OLLAMA_HOST', runtimeConfig.ollama.host);
       set('OLLAMA_MODEL', runtimeConfig.ollama.model);
       const lines = Array.from(map.entries()).map(([k, v]) => `${k}=${v}`);

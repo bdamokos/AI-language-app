@@ -6,10 +6,8 @@ export default function SettingsPanel() {
   const [error, setError] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [config, setConfig] = useState({
-    provider: 'anthropic',
-    anthropic: { model: '', apiKey: '' },
+    provider: 'openrouter',
     openrouter: { model: '', apiKey: '', appUrl: '' },
-    openai: { model: '', apiKey: '' },
     ollama: { model: '', host: '' }
   });
   const [showKeys, setShowKeys] = useState(false);
@@ -24,9 +22,7 @@ export default function SettingsPanel() {
         const data = await res.json();
         setConfig(cfg => ({
           provider: data.provider,
-          anthropic: { model: data.anthropic?.model || '', apiKey: '' },
           openrouter: { model: data.openrouter?.model || '', apiKey: '', appUrl: data.openrouter?.appUrl || '' },
-          openai: { model: data.openai?.model || '', apiKey: '' },
           ollama: { model: data.ollama?.model || '', host: data.ollama?.host || '' }
         }));
       } catch (e) {
@@ -107,9 +103,7 @@ export default function SettingsPanel() {
             onChange={(e) => setConfig({ ...config, provider: e.target.value })}
             className="w-full px-3 py-2 border rounded"
           >
-            <option value="anthropic">Anthropic</option>
             <option value="openrouter">OpenRouter</option>
-            <option value="openai">OpenAI</option>
             <option value="ollama">Ollama</option>
           </select>
         </div>
@@ -120,13 +114,6 @@ export default function SettingsPanel() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <h3 className="font-medium mb-2">Anthropic</h3>
-          <label className="block text-xs mb-1">Model</label>
-          <Input value={config.anthropic.model} onChange={e => setConfig({ ...config, anthropic: { ...config.anthropic, model: e.target.value } })} />
-          <label className="block text-xs mt-2 mb-1">API Key</label>
-          <Input type={showKeys ? 'text' : 'password'} value={config.anthropic.apiKey} onChange={e => setConfig({ ...config, anthropic: { ...config.anthropic, apiKey: e.target.value } })} />
-        </div>
         <div>
           <h3 className="font-medium mb-2">OpenRouter</h3>
           <label className="block text-xs mb-1">Model</label>
@@ -143,16 +130,6 @@ export default function SettingsPanel() {
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <h3 className="font-medium mb-2">OpenAI</h3>
-          <label className="block text-xs mb-1">Model</label>
-          <Input value={config.openai.model} onChange={e => setConfig({ ...config, openai: { ...config.openai, model: e.target.value } })} />
-          <label className="block text-xs mt-2 mb-1">API Key</label>
-          <Input type={showKeys ? 'text' : 'password'} value={config.openai.apiKey} onChange={e => setConfig({ ...config, openai: { ...config.openai, apiKey: e.target.value } })} />
         </div>
         <div>
           <h3 className="font-medium mb-2">Ollama</h3>

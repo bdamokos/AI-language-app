@@ -1,6 +1,6 @@
 # Language AI App
 
-AI-powered Spanish practice app with multi-provider LLM backend (Anthropic, OpenRouter, OpenAI-compatible, Ollama).
+AI-powered Spanish practice app with multi-provider LLM backend (OpenRouter, Ollama).
 
 ## Run locally
 
@@ -8,20 +8,12 @@ AI-powered Spanish practice app with multi-provider LLM backend (Anthropic, Open
 
 ```
 PORT=3000
-PROVIDER=anthropic # or openrouter | openai | ollama
-
-# Anthropic
-ANTHROPIC_API_KEY=your_key
-ANTHROPIC_MODEL=claude-3-5-sonnet-20240620
+PROVIDER=openrouter # or ollama
 
 # OpenRouter
 OPENROUTER_API_KEY=your_key
 OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
 APP_URL=http://localhost:5173
-
-# OpenAI-compatible
-OPENAI_API_KEY=your_key
-OPENAI_MODEL=gpt-4o-mini
 
 # Ollama local
 OLLAMA_HOST=http://127.0.0.1:11434
@@ -55,8 +47,8 @@ Build and run with Docker:
 docker build -t language-ai-app .
 docker run --rm -p 3000:3000 \
   -e NODE_ENV=production \
-  -e PROVIDER=anthropic \
-  -e ANTHROPIC_API_KEY=your_key \
+  -e PROVIDER=openrouter \
+  -e OPENROUTER_API_KEY=your_key \
   language-ai-app
 ```
 
@@ -72,9 +64,7 @@ For Ollama, ensure Ollama is running on your host (default `127.0.0.1:11434`). O
 
 Set `PROVIDER` to one of:
 
-- `anthropic`
 - `openrouter`
-- `openai`
 - `ollama`
 
 Optionally override the default model via corresponding `*_MODEL` env vars.
