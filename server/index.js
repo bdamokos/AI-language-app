@@ -16,12 +16,16 @@ app.use(express.json({ limit: '1mb' }));
 
 // Persistent cache directories (lazy-init)
 const CACHE_DIR = getCacheDir(process.env.CACHE_DIR, '/data');
+// Register static image route immediately to avoid being shadowed by SPA fallback
+try {
+  const imagesDirAbsolute = path.join(CACHE_DIR, 'images');
+  app.use('/cache/images', express.static(imagesDirAbsolute, { fallthrough: false }));
+  console.log('[CACHE] Static image route mounted at /cache/images ->', imagesDirAbsolute);
+} catch {}
 let cacheLayout = null;
 const initCache = (async () => {
   try {
     cacheLayout = await ensureCacheLayout(CACHE_DIR);
-    // Static serving for cached images
-    app.use('/cache/images', express.static(cacheLayout.imagesDir));
     console.log('[CACHE] Initialized at', CACHE_DIR);
     try {
       console.log('[CACHE] Directories', {
@@ -1127,8 +1131,8 @@ app.post('/api/runware/generate', async (req, res) => {
     
     // Validate prompt to prevent injection attacks
     const cleanPrompt = String(prompt).trim();
-    if (cleanPrompt.length > 1000) {
-      return res.status(400).json({ error: 'Prompt too long (max 1000 characters)' });
+    if (cleanPrompt.length > 5000) {
+      return res.status(400).json({ error: 'Prompt too long (max 5000 characters)' });
     }
     
     // Validate numeric parameters
@@ -1299,8 +1303,8 @@ app.post('/api/falai/generate', async (req, res) => {
     
     // Validate prompt to prevent injection attacks
     const cleanPrompt = prompt.trim();
-    if (cleanPrompt.length > 1000) {
-      return res.status(400).json({ error: 'Prompt too long (max 1000 characters)' });
+    if (cleanPrompt.length > 5000) {
+      return res.status(400).json({ error: 'Prompt too long (max 5000 characters)' });
     }
     
     // Validate numeric parameters
