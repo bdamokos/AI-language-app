@@ -46,28 +46,8 @@ const SpanishPracticeApp = () => {
 
   // Helper function to get language display name
   const getLanguageDisplayName = (languageName) => {
-    // If it's a known language code, return the proper name
-    const languageMap = {
-      'es': 'Spanish',
-      'fr': 'French', 
-      'de': 'German',
-      'it': 'Italian',
-      'pt': 'Portuguese',
-      'en': 'English',
-      'ja': 'Japanese',
-      'ko': 'Korean',
-      'zh': 'Chinese',
-      'ru': 'Russian',
-      'hu': 'Hungarian',
-    };
-    
-    // If it's a known code, return the proper name
-    if (languageMap[languageName]) {
-      return languageMap[languageName];
-    }
-    
-    // Otherwise, capitalize the first letter and return as-is
-    return languageName.charAt(0).toUpperCase() + languageName.slice(1);
+    // Ensure proper capitalization
+    return String(languageName || '').charAt(0).toUpperCase() + String(languageName || '').slice(1);
   };
 
   // Handle language and level selection

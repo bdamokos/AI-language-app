@@ -45,7 +45,8 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
   };
 
   const handleStart = () => {
-    const finalLanguage = selectedLanguage === 'custom' ? customLanguage : selectedLanguage;
+    const finalLanguage = selectedLanguage === 'custom' ? customLanguage : 
+      POPULAR_LANGUAGES.find(l => l.code === selectedLanguage)?.name || selectedLanguage;
     if (!finalLanguage.trim() || !topic.trim()) return;
     
     onStart({
