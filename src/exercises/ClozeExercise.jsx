@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem } from './utils.js';
-import useRunware from '../hooks/useRunware.js';
+import useImageGeneration from '../hooks/useImageGeneration.js';
 
 /**
  * Cloze passage with free-text blanks
@@ -14,7 +14,7 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
   const [warnings, setWarnings] = useState([]);
   const [generatedImage, setGeneratedImage] = useState(null);
   const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
-  const { generateImage, loading: imageLoading, error: imageError } = useRunware();
+  const { generateImage, loading: imageLoading, error: imageError } = useImageGeneration();
   const isGeneratingRef = useRef(false);
   const lastItemRef = useRef(null);
   
@@ -46,7 +46,8 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
       try {
         const settingsRes = await fetch('/api/settings');
         const settings = await settingsRes.json();
-        setImageGenerationEnabled(settings.runware?.enabled || false);
+        const imageProvider = settings.imageProvider || 'runware';
+        setImageGenerationEnabled(settings[imageProvider]?.enabled || false);
       } catch (error) {
         console.log('[CLOZE] Could not check image generation settings:', error.message);
         setImageGenerationEnabled(false);
@@ -97,12 +98,10 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         console.log('[CLOZE] Starting image generation for:', sanitizedItem.title);
         
         const imageData = await generateImage(prompt, {
-          model: "runware:101@1",
           width: 1024,
           height: 1024,
           steps: 28,
-          cfgScale: 3.5,
-          scheduler: "FlowMatchEulerDiscreteScheduler"
+          cfgScale: 3.5
         });
         
         // Log cost information in development mode
@@ -203,8 +202,8 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
     if (!imageData?.data?.[0]) return null;
     
     const image = imageData.data[0];
-    // Prefer URL, fallback to dataURI, then base64
-    return image.imageURL || image.imageDataURI || image.imageBase64Data;
+    // Support both fal.ai (url) and Runware (imageURL) formats
+    return image.url || image.imageURL || image.imageDataURI || image.imageBase64Data;
   };
   
   return (
@@ -259,23 +258,25 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
               </div>
             )}
             
-            {generatedImage && getImageSource(generatedImage) && (
-              <div className="w-full">
-                <img 
-                  src={getImageSource(generatedImage)}
-                  alt={`Illustration for: ${item?.title || 'Cloze passage'}`}
-                  className="w-full aspect-square object-cover rounded-lg border border-gray-200 shadow-sm"
-                  onError={(e) => {
-                    console.error('[CLOZE] Failed to load generated image:', e);
-                    e.target.style.display = 'none';
-                  }}
-                />
-                <p className="text-xs text-gray-500 mt-1 text-center">
-                  AI-generated illustration
-                  {generatedImage.data?.[0]?.cost && ` • $${Number(generatedImage.data[0].cost).toFixed(4)}`}
-                </p>
-              </div>
-            )}
+                    {generatedImage && getImageSource(generatedImage) && (
+          <div className="w-full">
+            <img 
+              src={getImageSource(generatedImage)}
+              alt={`Illustration for: ${item?.title || 'Cloze passage'}`}
+              className="w-full aspect-square object-cover rounded-lg border border-gray-200 shadow-sm"
+              onError={(e) => {
+                console.error('[CLOZE] Failed to load generated image:', e);
+                e.target.style.display = 'none';
+              }}
+            />
+            <p className="text-xs text-gray-500 mt-1 text-center">
+              AI-generated illustration
+              {generatedImage.data?.[0]?.cost && ` • $${Number(generatedImage.data[0].cost).toFixed(4)}`}
+            </p>
+          </div>
+        )}
+        
+
             
             {imageError && !imageLoading && (
               <div className="w-full aspect-square bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-center">

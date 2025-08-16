@@ -17,13 +17,24 @@ export default function SettingsPanel() {
       height: 512, 
       steps: 20, 
       cfgScale: 7 
-    }
+    },
+    falai: { 
+      model: '', 
+      apiKey: '', 
+      enabled: false, 
+      width: 512, 
+      height: 512, 
+      steps: 20, 
+      cfgScale: 7 
+    },
+    imageProvider: 'runware'
   });
   const [showKeys, setShowKeys] = useState(false);
   const [rateInfo, setRateInfo] = useState(null);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [openrouterModels, setOpenrouterModels] = useState([]);
   const [runwareModels, setRunwareModels] = useState([]);
+  const [falaiModels, setFalaiModels] = useState([]);
   const [modelFilters, setModelFilters] = useState({ structuredOnly: true, freeOnly: false });
   const [selectedModelInfo, setSelectedModelInfo] = useState(null);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -46,7 +57,17 @@ export default function SettingsPanel() {
             height: data.runware?.height || 512,
             steps: data.runware?.steps || 20,
             cfgScale: data.runware?.cfgScale || 7
-          }
+          },
+          falai: { 
+            model: data.falai?.model || '', 
+            apiKey: '', 
+            enabled: data.falai?.enabled || false,
+            width: data.falai?.width || 512,
+            height: data.falai?.height || 512,
+            steps: data.falai?.steps || 20,
+            cfgScale: data.falai?.cfgScale || 7
+          },
+          imageProvider: data.imageProvider || 'runware'
         }));
         
         // Auto-load models if we're using OpenRouter and have an API key
@@ -127,6 +148,21 @@ export default function SettingsPanel() {
       setRunwareModels(data.models || data || []);
     } catch (e) {
       setError(e.message || 'Failed to load Runware models');
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const loadFalaiModels = async () => {
+    setLoadingModels(true);
+    setError('');
+    try {
+      const res = await fetch('/api/falai/models');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load fal.ai models');
+      setFalaiModels(data.models || data || []);
+    } catch (e) {
+      setError(e.message || 'Failed to load fal.ai models');
     } finally {
       setLoadingModels(false);
     }
@@ -340,7 +376,25 @@ export default function SettingsPanel() {
 
       <div className="grid grid-cols-1 gap-3">
         <div>
-          <h3 className="font-medium mb-3">Runware (Image Generation)</h3>
+          <h3 className="font-medium mb-3">Image Generation</h3>
+          
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium mb-2">Image Provider</label>
+              <select
+                value={config.imageProvider}
+                onChange={(e) => setConfig({ ...config, imageProvider: e.target.value })}
+                className="w-full px-3 py-2 border rounded"
+              >
+                <option value="runware">Runware</option>
+                <option value="falai">fal.ai</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        
+                <div>
+          <h3 className="font-medium mb-3">Runware Configuration</h3>
           
           <div className="space-y-3">
             <div className="flex items-center gap-2">
@@ -442,6 +496,115 @@ export default function SettingsPanel() {
                   step="0.1"
                   value={config.runware.cfgScale} 
                   onChange={e => setConfig({ ...config, runware: { ...config.runware, cfgScale: Number(e.target.value) } })}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div>
+          <h3 className="font-medium mb-3">fal.ai Configuration</h3>
+          
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <input 
+                id="falaiEnabled" 
+                type="checkbox" 
+                checked={config.falai.enabled} 
+                onChange={e => setConfig({ ...config, falai: { ...config.falai, enabled: e.target.checked } })}
+              />
+              <label htmlFor="falaiEnabled" className="text-sm font-medium">Enable fal.ai image generation</label>
+            </div>
+
+            {showKeys && (
+              <div>
+                <label className="block text-sm font-medium mb-1">API Key</label>
+                <Input 
+                  type="password"
+                  value={config.falai.apiKey} 
+                  onChange={e => setConfig({ ...config, falai: { ...config.falai, apiKey: e.target.value } })}
+                  placeholder="Enter fal.ai API key"
+                />
+              </div>
+            )}
+            
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium">Model</label>
+                <button 
+                  onClick={loadFalaiModels} 
+                  disabled={loadingModels || !config.falai.enabled} 
+                  className="text-sm text-blue-600 hover:text-blue-800 underline disabled:text-gray-400"
+                >
+                  {loadingModels ? 'Loading...' : 'Load Models'}
+                </button>
+              </div>
+              
+              <div className="flex gap-2">
+                <Input 
+                  value={config.falai.model} 
+                  onChange={e => setConfig({ ...config, falai: { ...config.falai, model: e.target.value } })}
+                  placeholder="fal-ai/fast-sdxl"
+                />
+                {falaiModels.length > 0 && (
+                  <select
+                    className="px-2 py-2 border rounded text-sm"
+                    value={config.falai.model}
+                    onChange={e => setConfig({ ...config, falai: { ...config.falai, model: e.target.value } })}
+                  >
+                    <option value="">Select...</option>
+                    {falaiModels.map((model) => (
+                      <option key={model.id || model} value={model.id || model}>
+                        {model.name || model}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Width</label>
+                <Input 
+                  type="number" 
+                  min="64" 
+                  max="2048" 
+                  step="64"
+                  value={config.falai.width} 
+                  onChange={e => setConfig({ ...config, falai: { ...config.falai, width: Number(e.target.value) } })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Height</label>
+                <Input 
+                  type="number" 
+                  min="64" 
+                  max="2048" 
+                  step="64"
+                  value={config.falai.height} 
+                  onChange={e => setConfig({ ...config, falai: { ...config.falai, height: Number(e.target.value) } })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Steps</label>
+                <Input 
+                  type="number" 
+                  min="1" 
+                  max="100"
+                  value={config.falai.steps} 
+                  onChange={e => setConfig({ ...config, falai: { ...config.falai, steps: Number(e.target.value) } })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">CFG Scale</label>
+                <Input 
+                  type="number" 
+                  min="1" 
+                  max="20" 
+                  step="0.1"
+                  value={config.falai.cfgScale} 
+                  onChange={e => setConfig({ ...config, falai: { ...config.falai, cfgScale: Number(e.target.value) } })}
                 />
               </div>
             </div>

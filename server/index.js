@@ -98,6 +98,16 @@ const runtimeConfig = {
     steps: Number(process.env.RUNWARE_STEPS || 20),
     cfgScale: Number(process.env.RUNWARE_CFG_SCALE || 7)
   },
+  falai: {
+    apiKey: process.env.FALAI_API_KEY || '',
+    model: process.env.FALAI_MODEL || 'fal-ai/fast-sdxl',
+    enabled: process.env.FALAI_ENABLED === 'true',
+    width: Number(process.env.FALAI_WIDTH || 512),
+    height: Number(process.env.FALAI_HEIGHT || 512),
+    steps: Number(process.env.FALAI_STEPS || 20),
+    cfgScale: Number(process.env.FALAI_CFG_SCALE || 7)
+  },
+  imageProvider: process.env.IMAGE_PROVIDER || 'runware',
   // Centralized max token cap for all generations
   maxTokens: Number(process.env.MAX_TOKENS || 15000)
 };
@@ -658,15 +668,25 @@ app.get('/api/settings', (req, res) => {
     provider: runtimeConfig.provider,
     openrouter: { model: runtimeConfig.openrouter.model, hasKey: !!runtimeConfig.openrouter.apiKey, appUrl: runtimeConfig.openrouter.appUrl },
     ollama: { model: runtimeConfig.ollama.model, host: runtimeConfig.ollama.host },
-    runware: { 
-      model: runtimeConfig.runware.model, 
-      enabled: runtimeConfig.runware.enabled,
-      hasKey: !!runtimeConfig.runware.apiKey,
-      width: runtimeConfig.runware.width,
-      height: runtimeConfig.runware.height,
-      steps: runtimeConfig.runware.steps,
-      cfgScale: runtimeConfig.runware.cfgScale
-    }
+            runware: {
+          model: runtimeConfig.runware.model,
+          enabled: runtimeConfig.runware.enabled,
+          hasKey: !!runtimeConfig.runware.apiKey,
+          width: runtimeConfig.runware.width,
+          height: runtimeConfig.runware.height,
+          steps: runtimeConfig.runware.steps,
+          cfgScale: runtimeConfig.runware.cfgScale
+        },
+        falai: {
+          model: runtimeConfig.falai.model,
+          enabled: runtimeConfig.falai.enabled,
+          hasKey: !!runtimeConfig.falai.apiKey,
+          width: runtimeConfig.falai.width,
+          height: runtimeConfig.falai.height,
+          steps: runtimeConfig.falai.steps,
+          cfgScale: runtimeConfig.falai.cfgScale
+        },
+        imageProvider: runtimeConfig.imageProvider || 'runware'
   };
   res.json(sanitized);
 });
@@ -684,15 +704,25 @@ app.post('/api/settings', (req, res) => {
     if (typeof body.ollama.host === 'string') runtimeConfig.ollama.host = body.ollama.host;
     if (typeof body.ollama.model === 'string') runtimeConfig.ollama.model = body.ollama.model;
   }
-  if (body.runware) {
-    if (typeof body.runware.apiKey === 'string' && body.runware.apiKey.trim()) runtimeConfig.runware.apiKey = body.runware.apiKey;
-    if (typeof body.runware.model === 'string') runtimeConfig.runware.model = body.runware.model;
-    if (typeof body.runware.enabled === 'boolean') runtimeConfig.runware.enabled = body.runware.enabled;
-    if (typeof body.runware.width === 'number' && body.runware.width > 0) runtimeConfig.runware.width = body.runware.width;
-    if (typeof body.runware.height === 'number' && body.runware.height > 0) runtimeConfig.runware.height = body.runware.height;
-    if (typeof body.runware.steps === 'number' && body.runware.steps > 0) runtimeConfig.runware.steps = body.runware.steps;
-    if (typeof body.runware.cfgScale === 'number' && body.runware.cfgScale > 0) runtimeConfig.runware.cfgScale = body.runware.cfgScale;
-  }
+      if (body.runware) {
+      if (typeof body.runware.apiKey === 'string' && body.runware.apiKey.trim()) runtimeConfig.runware.apiKey = body.runware.apiKey;
+      if (typeof body.runware.model === 'string') runtimeConfig.runware.model = body.runware.model;
+      if (typeof body.runware.enabled === 'boolean') runtimeConfig.runware.enabled = body.runware.enabled;
+      if (typeof body.runware.width === 'number' && body.runware.width > 0) runtimeConfig.runware.width = body.runware.width;
+      if (typeof body.runware.height === 'number' && body.runware.height > 0) runtimeConfig.runware.height = body.runware.height;
+      if (typeof body.runware.steps === 'number' && body.runware.steps > 0) runtimeConfig.runware.steps = body.runware.steps;
+      if (typeof body.runware.cfgScale === 'number' && body.runware.cfgScale > 0) runtimeConfig.runware.cfgScale = body.runware.cfgScale;
+    }
+    if (body.falai) {
+      if (typeof body.falai.apiKey === 'string' && body.falai.apiKey.trim()) runtimeConfig.falai.apiKey = body.falai.apiKey;
+      if (typeof body.falai.model === 'string') runtimeConfig.falai.model = body.falai.model;
+      if (typeof body.falai.enabled === 'boolean') runtimeConfig.falai.enabled = body.falai.enabled;
+      if (typeof body.falai.width === 'number' && body.falai.width > 0) runtimeConfig.falai.width = body.falai.width;
+      if (typeof body.falai.height === 'number' && body.falai.height > 0) runtimeConfig.falai.height = body.falai.height;
+      if (typeof body.falai.steps === 'number' && body.falai.steps > 0) runtimeConfig.falai.steps = body.falai.steps;
+      if (typeof body.falai.cfgScale === 'number' && body.falai.cfgScale > 0) runtimeConfig.falai.cfgScale = body.falai.cfgScale;
+    }
+    if (typeof body.imageProvider === 'string') runtimeConfig.imageProvider = body.imageProvider;
 
   // Persist to .env
   (async () => {
@@ -719,13 +749,21 @@ app.post('/api/settings', (req, res) => {
       set('APP_URL', runtimeConfig.openrouter.appUrl);
       set('OLLAMA_HOST', runtimeConfig.ollama.host);
       set('OLLAMA_MODEL', runtimeConfig.ollama.model);
-      set('RUNWARE_API_KEY', runtimeConfig.runware.apiKey || map.get('RUNWARE_API_KEY') || '');
-      set('RUNWARE_MODEL', runtimeConfig.runware.model);
-      setBool('RUNWARE_ENABLED', runtimeConfig.runware.enabled);
-      setNum('RUNWARE_WIDTH', runtimeConfig.runware.width);
-      setNum('RUNWARE_HEIGHT', runtimeConfig.runware.height);
-      setNum('RUNWARE_STEPS', runtimeConfig.runware.steps);
-      setNum('RUNWARE_CFG_SCALE', runtimeConfig.runware.cfgScale);
+          set('RUNWARE_API_KEY', runtimeConfig.runware.apiKey || map.get('RUNWARE_API_KEY') || '');
+    set('RUNWARE_MODEL', runtimeConfig.runware.model);
+    setBool('RUNWARE_ENABLED', runtimeConfig.runware.enabled);
+    setNum('RUNWARE_WIDTH', runtimeConfig.runware.width);
+    setNum('RUNWARE_HEIGHT', runtimeConfig.runware.height);
+    setNum('RUNWARE_STEPS', runtimeConfig.runware.steps);
+    setNum('RUNWARE_CFG_SCALE', runtimeConfig.runware.cfgScale);
+    set('FALAI_API_KEY', runtimeConfig.falai.apiKey || map.get('FALAI_API_KEY') || '');
+    set('FALAI_MODEL', runtimeConfig.falai.model);
+    setBool('FALAI_ENABLED', runtimeConfig.falai.enabled);
+    setNum('FALAI_WIDTH', runtimeConfig.falai.width);
+    setNum('FALAI_HEIGHT', runtimeConfig.falai.height);
+    setNum('FALAI_STEPS', runtimeConfig.falai.steps);
+    setNum('FALAI_CFG_SCALE', runtimeConfig.falai.cfgScale);
+    set('IMAGE_PROVIDER', runtimeConfig.imageProvider);
       const lines = Array.from(map.entries()).map(([k, v]) => `${k}=${v}`);
       await fs.writeFile(envPath, lines.join('\n') + '\n', 'utf8');
       console.log('[SETTINGS] Persisted to .env at', envPath);
@@ -956,6 +994,116 @@ app.get('/api/runware/models', async (req, res) => {
   }
 });
 
+// fal.ai: text-to-image generation
+app.post('/api/falai/generate', async (req, res) => {
+  try {
+    if (!runtimeConfig.falai.enabled) {
+      return res.status(400).json({ error: 'fal.ai image generation is disabled' });
+    }
+
+    const { prompt, model, width, height, steps, cfgScale } = req.body;
+    assertEnv(runtimeConfig.falai.apiKey, 'Missing FALAI_API_KEY');
+
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ error: 'Prompt is required and must be a non-empty string' });
+    }
+
+    const requestBody = {
+      prompt: prompt.trim(),
+      model: model || runtimeConfig.falai.model,
+      width: width || runtimeConfig.falai.width,
+      height: height || runtimeConfig.falai.height,
+      steps: steps || runtimeConfig.falai.steps,
+      cfg_scale: cfgScale || runtimeConfig.falai.cfgScale,
+      num_images: 1
+    };
+
+    const promptPreview = prompt.length > 50 ? prompt.slice(0, 50) : prompt;
+    console.log(`[FALAI] model=${requestBody.model} size=${requestBody.width}x${requestBody.height} steps=${requestBody.steps} promptPreview="${promptPreview}..."`);
+
+    const startTime = Date.now();
+    const response = await fetch('https://fal.run/fal-ai/fast-sdxl', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Key ${runtimeConfig.falai.apiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[FALAI] HTTP ${response.status} ${errorText}`);
+      return res.status(response.status).json({
+        error: `fal.ai API error ${response.status}`,
+        details: errorText
+      });
+    }
+
+    const data = await response.json();
+    const responseTime = Date.now() - startTime;
+
+    console.log(`[FALAI] Response structure:`, JSON.stringify(data, null, 2));
+
+    // fal.ai returns the image data directly
+    if (data && data.images && Array.isArray(data.images) && data.images.length > 0) {
+      const result = {
+        data: [{
+          url: data.images[0].url,
+          width: requestBody.width,
+          height: requestBody.height,
+          model: requestBody.model,
+          prompt: requestBody.prompt
+        }],
+        cost: data.cost || 0,
+        costDetails: data.cost_details || {},
+        taskUUID: data.task_id || `falai_${Date.now()}`
+      };
+
+      console.log(`[FALAI] ok in ${responseTime}ms | cost: $${Number(result.cost).toFixed(6)} | model: ${requestBody.model} | size: ${requestBody.width}x${requestBody.height} | id: ${result.taskUUID}`);
+      
+      if (result.costDetails && Object.keys(result.costDetails).length > 0) {
+        console.log(`[FALAI] Cost breakdown: ${JSON.stringify(result.costDetails)}`);
+      }
+
+      res.json(result);
+    } else {
+      console.log(`[FALAI] ok in ${responseTime}ms | id: falai_${Date.now()}`);
+      console.log(`[FALAI] Unexpected response format:`, data);
+      res.status(500).json({ error: 'Unexpected response format from fal.ai API' });
+    }
+  } catch (err) {
+    console.error('[FALAI]', err);
+    res.status(500).json({
+      error: 'Failed to generate image',
+      details: err.message
+    });
+  }
+});
+
+// fal.ai: list available models
+app.get('/api/falai/models', async (req, res) => {
+  try {
+    assertEnv(runtimeConfig.falai.apiKey, 'Missing FALAI_API_KEY');
+
+    // fal.ai has a limited set of models, return the most common ones
+    const models = [
+      { id: 'fal-ai/fast-sdxl', name: 'Fast SDXL', description: 'Fast Stable Diffusion XL model' },
+      { id: 'fal-ai/fast-lightning-sdxl', name: 'Fast Lightning SDXL', description: 'Ultra-fast SDXL model' },
+      { id: 'fal-ai/fast-sdxl-turbo', name: 'Fast SDXL Turbo', description: 'Fast SDXL Turbo model' },
+      { id: 'fal-ai/fast-sdxl-1.0', name: 'Fast SDXL 1.0', description: 'Fast SDXL 1.0 model' }
+    ];
+
+    res.json({ models });
+  } catch (err) {
+    console.error('[FALAI] Models fetch error:', err);
+    res.status(500).json({
+      error: 'Failed to fetch fal.ai models',
+      details: err.message
+    });
+  }
+});
+
 // Logging endpoint for frontend validation warnings and errors
 app.post('/api/log', (req, res) => {
   try {
@@ -1037,6 +1185,8 @@ app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT} (provider=${runtimeConfig.provider})`);
   console.log(`[RUNWARE] Startup - API key loaded: ${!!runtimeConfig.runware.apiKey}, enabled: ${runtimeConfig.runware.enabled}`);
   console.log(`[RUNWARE] Environment - API key: ${!!process.env.RUNWARE_API_KEY}, enabled: ${process.env.RUNWARE_ENABLED}`);
+  console.log(`[FALAI] Startup - API key loaded: ${!!runtimeConfig.falai.apiKey}, enabled: ${runtimeConfig.falai.enabled}`);
+  console.log(`[FALAI] Environment - API key: ${!!process.env.FALAI_API_KEY}, enabled: ${process.env.FALAI_ENABLED}`);
 });
 
 
