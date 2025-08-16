@@ -57,6 +57,12 @@ const styles = StyleSheet.create({
     lineHeight: 1.5,
     color: '#374151'
   },
+  inlineText: {
+    fontSize: 12,
+    marginBottom: 0,
+    lineHeight: 1.35,
+    color: '#374151'
+  },
   context: {
     fontSize: 11,
     fontStyle: 'italic',
@@ -576,14 +582,14 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     parts.forEach((part, index) => {
       if (part) {
         elements.push(
-          <Text key={`text-${index}`} style={styles.text}>
+          <Text key={`text-${index}`} style={styles.inlineText}>
             {part}
           </Text>
         );
       }
       if (index < parts.length - 1) {
         elements.push(
-          <Text key={`blank-${index}`} style={[styles.text, { fontFamily: 'Courier' }]}>
+          <Text key={`blank-${index}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> 
             ____________
           </Text>
         );
@@ -635,7 +641,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Add text part
       if (parts[i]) {
         elements.push(
-          <Text key={`text-${i}`} style={styles.text}>
+          <Text key={`text-${i}`} style={styles.inlineText}>
             {parts[i]}
           </Text>
         );
@@ -660,25 +666,17 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           }
           
           elements.push(
-            <Text key={`options-${i}`} style={[styles.text, { 
-              fontWeight: 'bold', 
-              backgroundColor: '#f3f4f6', 
-              paddingHorizontal: 4,
-              paddingVertical: 2,
-              fontSize: 11
-            }]}>
+            <Text key={`options-${i}`} style={[styles.inlineText, { fontSize: 11 }]}> 
               {optionsText}
               {footnoteNumber && (
-                <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}>
-                  ⁽{footnoteNumber}⁾
-                </Text>
+                <Text style={[styles.inlineText, { fontSize: 9 }]}>[{footnoteNumber}]</Text>
               )}
             </Text>
           );
         } else {
           // Add a placeholder blank if no options found
           elements.push(
-            <Text key={`blank-${i}`} style={[styles.text, { fontFamily: 'Courier' }]}>
+            <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> 
               ____________
             </Text>
           );
@@ -704,7 +702,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Add text part
       if (parts[i]) {
         elements.push(
-          <Text key={`text-${i}`} style={styles.text}>
+          <Text key={`text-${i}`} style={styles.inlineText}>
             {parts[i]}
           </Text>
         );
@@ -725,12 +723,10 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         }
         
         elements.push(
-          <Text key={`blank-${i}`} style={[styles.text, { fontFamily: 'Courier' }]}>
+          <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> 
             ____________
             {footnoteNumber && (
-              <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}>
-                ⁽{footnoteNumber}⁾
-              </Text>
+              <Text style={[styles.inlineText, { fontSize: 9 }]}>[{footnoteNumber}]</Text>
             )}
           </Text>
         );
@@ -748,9 +744,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       <View style={{ marginTop: 12, borderTop: '1 solid #e5e7eb', paddingTop: 8 }}>
         <Text style={[styles.text, { fontSize: 10, fontWeight: 'bold', marginBottom: 4 }]}>{title}</Text>
         {footnotes.map((footnote, idx) => (
-          <Text key={`footnote-${idx}`} style={[styles.text, { fontSize: 9, marginBottom: 2, marginLeft: 8 }]}>
-            <Text style={{ verticalAlign: 'super', fontSize: 7 }}>⁽{footnote.number}⁾</Text>
-            {' '}{footnote.text}
+          <Text key={`footnote-${idx}`} style={[styles.inlineText, { fontSize: 9, marginBottom: 2, marginLeft: 8 }]}>
+            [<Text style={[styles.inlineText, { fontSize: 9 }]}>{footnote.number}</Text>] {footnote.text}
           </Text>
         ))}
       </View>
@@ -769,7 +764,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Add text part
       if (parts[i]) {
         elements.push(
-          <Text key={`text-${i}`} style={styles.text}>
+          <Text key={`text-${i}`} style={styles.inlineText}>
             {parts[i]}
           </Text>
         );
@@ -780,12 +775,9 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         const answer = answers[i] || answers[0] || '[missing]';
         
         elements.push(
-          <Text key={`answer-${i}`} style={[styles.text, { 
+          <Text key={`answer-${i}`} style={[styles.inlineText, { 
             fontWeight: 'bold', 
-            color: '#059669',
-            backgroundColor: '#ecfdf5',
-            paddingHorizontal: 3,
-            paddingVertical: 1
+            color: '#059669'
           }]}> 
             {answer}
           </Text>
@@ -814,7 +806,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Add text part
       if (parts[i]) {
         elements.push(
-          <Text key={`text-${i}`} style={styles.text}>
+          <Text key={`text-${i}`} style={styles.inlineText}>
             {parts[i]}
           </Text>
         );
@@ -835,18 +827,13 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         }
         
         elements.push(
-          <Text key={`answer-${i}`} style={[styles.text, { 
+          <Text key={`answer-${i}`} style={[styles.inlineText, { 
             fontWeight: 'bold', 
-            color: '#059669',
-            backgroundColor: '#ecfdf5',
-            paddingHorizontal: 3,
-            paddingVertical: 1
+            color: '#059669'
           }]}> 
             {blank.answer}
             {footnoteNumber && (
-              <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}> 
-                ⁽{footnoteNumber}⁾
-              </Text>
+              <Text style={[styles.inlineText, { fontSize: 9 }]}>[{footnoteNumber}]</Text>
             )}
           </Text>
         );
@@ -870,7 +857,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Add text part
       if (parts[i]) {
         elements.push(
-          <Text key={`text-${i}`} style={styles.text}>
+          <Text key={`text-${i}`} style={styles.inlineText}>
             {parts[i]}
           </Text>
         );
@@ -898,18 +885,15 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             
             if (optIdx > 0) {
               optionElements.push(
-                <Text key={`sep-${optIdx}`} style={styles.text}> / </Text>
+                <Text key={`sep-${optIdx}`} style={styles.inlineText}> / </Text>
               );
             }
             
             optionElements.push(
-              <Text key={`opt-${optIdx}`} style={[styles.text, {
-                fontWeight: isCorrect ? 'bold' : 'normal',
+              <Text key={`opt-${optIdx}`} style={[styles.inlineText, {
+                fontWeight: 'normal',
                 color: isCorrect ? '#059669' : '#6b7280',
-                backgroundColor: isCorrect ? '#ecfdf5' : 'transparent',
-                textDecoration: isCorrect ? 'none' : 'line-through',
-                paddingHorizontal: isCorrect ? 3 : 0,
-                paddingVertical: isCorrect ? 1 : 0
+                textDecoration: isCorrect ? 'underline' : 'line-through'
               }]}> 
                 {option}
               </Text>
@@ -917,27 +901,14 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           });
           
           elements.push(
-            <Text key={`options-${i}`} style={[styles.text, { 
-              backgroundColor: '#f3f4f6', 
-              paddingHorizontal: 4,
-              paddingVertical: 2,
-              fontSize: 11
-            }]}>
-              [</Text>
+            <Text key={`options-${i}`} style={[styles.inlineText, { fontSize: 11 }]}>[
+            </Text>
           );
           elements.push(...optionElements);
           elements.push(
-            <Text key={`options-close-${i}`} style={[styles.text, { 
-              backgroundColor: '#f3f4f6', 
-              paddingHorizontal: 4,
-              paddingVertical: 2,
-              fontSize: 11
-            }]}>
-              ]
+            <Text key={`options-close-${i}`} style={[styles.inlineText, { fontSize: 11 }]}>] 
               {footnoteNumber && (
-                <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}>
-                  ⁽{footnoteNumber}⁾
-                </Text>
+                <Text style={[styles.inlineText, { fontSize: 9 }]}>[{footnoteNumber}]</Text>
               )}
             </Text>
           );
