@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits } from './cacheStore.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
@@ -23,9 +23,26 @@ const initCache = (async () => {
     // Static serving for cached images
     app.use('/cache/images', express.static(cacheLayout.imagesDir));
     console.log('[CACHE] Initialized at', CACHE_DIR);
-    // Purge outdated schemas
     try {
-      await purgeOutdatedSchemas(cacheLayout, schemaVersions);
+      console.log('[CACHE] Directories', {
+        env_CACHE_DIR: process.env.CACHE_DIR || '(unset)',
+        resolved_CACHE_DIR: CACHE_DIR,
+        explanationsDir: cacheLayout.explanationsDir,
+        explanationItemsDir: cacheLayout.explanationItemsDir,
+        exercisesDir: cacheLayout.exercisesDir,
+        exerciseItemsDir: cacheLayout.exerciseItemsDir,
+        imagesDir: cacheLayout.imagesDir
+      });
+    } catch {}
+    // Purge outdated schemas (can be disabled on constrained devices)
+    try {
+      const purgeEnabledEnv = String(process.env.CACHE_PURGE_ON_STARTUP || 'true').toLowerCase();
+      const purgeEnabled = purgeEnabledEnv !== 'false' && purgeEnabledEnv !== '0' && purgeEnabledEnv !== 'no';
+      if (purgeEnabled) {
+        await purgeOutdatedSchemas(cacheLayout, schemaVersions);
+      } else {
+        console.log('[CACHE] Startup purge disabled via CACHE_PURGE_ON_STARTUP=false');
+      }
     } catch (e) {
       console.warn('[CACHE] Failed to purge outdated schemas:', e?.message);
     }
@@ -612,7 +629,7 @@ app.post('/api/generate', async (req, res) => {
 
       // Parse seen cookie
       const cookieHeader = String(req.headers['cookie'] || '');
-      const cookieName = `seen_exercises_${type}`;
+      const cookieName = `seen_exercises_${type}_v${schemaVersion}`;
       const seenCookieMatch = cookieHeader.match(new RegExp(`${cookieName}=([^;]+)`));
       const seenList = seenCookieMatch ? decodeURIComponent(seenCookieMatch[1]).split(',').filter(Boolean) : [];
       const seenSet = new Set(seenList);
@@ -660,6 +677,8 @@ app.post('/api/generate', async (req, res) => {
       } catch {}
 
       const itemsWithIds = resultItems.map((it, i) => ({ ...it, exerciseSha: resultShas[i] }));
+      // Increment hits for analytics
+      try { await incrementExerciseHits(cacheLayout, type, languageName, level, challengeMode, grammarTopic, itemsWithIds.length); } catch {}
       return res.json({ items: itemsWithIds });
     }
 

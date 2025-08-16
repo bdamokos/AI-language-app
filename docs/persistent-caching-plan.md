@@ -132,15 +132,16 @@ Note: This keeps a single source of truth for versions, avoids trying to import 
 
 ### Milestones / Checklist
 - [ ] Create `shared/schemaVersions.js` and import in components and server
-- [ ] Add file-backed cache module `server/cacheStore.js` (indexes, read/write, LRU, purge)
-- [ ] Extend `/api/generate` with:
-  - [ ] Explanation persistent caching (read/write, analytics, LRU)
-  - [ ] Exercise persistent caching, per-user unseen selection via cookie, random selection, generation fallback
+- [x] Create `shared/schemaVersions.js` and import in components and server
+- [x] Add file-backed cache module `server/cacheStore.js` (indexes, read/write, LRU, purge)
+- [x] Extend `/api/generate` with:
+  - [x] Explanation persistent caching (read/write)
+  - [x] Exercise persistent caching, per-user unseen selection via cookie (versioned), random selection, generation fallback
   - [ ] Stats updates
-- [ ] Add `POST /api/cache/exercise-image` and static serving at `/cache/images`; update `useImageGeneration.js` to call this and return local URL with `exerciseSha`
-- [ ] Dockerfile: add `ENV CACHE_DIR=/data` and create folder in runtime image
-- [ ] docker-compose.yml: add volume `${CACHE_HOST_DIR:-/var/lib/language-ai-app}:/data`
-- [ ] deploy.sh: create remote `${CACHE_HOST_DIR}` folder prior to `docker-compose up`
+- [x] Add `POST /api/cache/exercise-image` and static serving at `/cache/images`; update `useImageGeneration.js` to call this and return local URL with `exerciseSha`
+- [x] Dockerfile: add `ENV CACHE_DIR=/data` and create folder in runtime image
+- [x] docker-compose.yml: add volume `${CACHE_HOST_DIR:-/var/lib/language-ai-app}:/data`
+- [x] deploy.sh: create remote `${CACHE_HOST_DIR}` folder prior to `docker-compose up`
 - [ ] Startup purge by schema versions and optional orphan image GC
 - [ ] Docs/README updates
 

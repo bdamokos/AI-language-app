@@ -103,6 +103,15 @@ export async function getExplanation(layout, cacheKey) {
     entry.lastAccessAt = new Date().toISOString();
     idx.lru = (idx.lru || []).filter(k => k !== cacheKey);
     idx.lru.push(cacheKey);
+    // Increment stats by meta key
+    try {
+      const m = entry.meta || {};
+      const statKey = `${m.language || 'unknown'}|${m.level || 'unknown'}|${m.challengeMode ? '1' : '0'}|${m.grammarConcept || 'unknown'}`;
+      idx.stats = idx.stats || {};
+      const s = idx.stats[statKey] || { hits: 0, generations: 0 };
+      s.hits = (s.hits || 0) + 1;
+      idx.stats[statKey] = s;
+    } catch {}
     await writeJson(indexPath, idx);
     return data;
   } catch {
@@ -283,6 +292,14 @@ export async function addExercisesToPool(layout, { type, poolKey, bucketKey, lan
   }
   // Enforce per-type bucket cap (global per type/language/level/challenge/grammarTopic)
   await evictFromBucketIfNeeded(layout, idx, bucketKey, perTypeLimit);
+  // Update generation stats
+  try {
+    const statKey = `${type}|${language}|${level}|${challengeMode ? '1' : '0'}|${grammarTopic || 'unknown'}`;
+    idx.stats = idx.stats || {};
+    const s = idx.stats[statKey] || { hits: 0, generations: 0 };
+    s.generations = (s.generations || 0) + addedShas.length;
+    idx.stats[statKey] = s;
+  } catch {}
   await saveExercisesIndex(layout, idx);
   return addedShas;
 }
@@ -347,6 +364,16 @@ export async function purgeOutdatedSchemas(layout, schemaVersions) {
     }
     if (toRemove.length > 0) await saveExercisesIndex(layout, exIdx);
   } catch {}
+}
+
+export async function incrementExerciseHits(layout, type, language, level, challengeMode, grammarTopic, count) {
+  const idx = await loadExercisesIndex(layout);
+  idx.stats = idx.stats || {};
+  const key = `${type}|${language}|${level}|${challengeMode ? '1' : '0'}|${grammarTopic || 'unknown'}`;
+  const s = idx.stats[key] || { hits: 0, generations: 0 };
+  s.hits = (s.hits || 0) + (Number(count) || 0);
+  idx.stats[key] = s;
+  await saveExercisesIndex(layout, idx);
 }
 
 
