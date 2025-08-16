@@ -1126,6 +1126,72 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             })}
           </View>
         )}
+
+        {/* Guided Dialogues Section */}
+        {Array.isArray(lesson.guided_dialogues) && lesson.guided_dialogues.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Guided Dialogues</Text>
+            {lesson.guided_dialogues.map((item, idx) => {
+              const speakers = Array.from(new Set((item.turns || []).map(t => t.speaker).filter(Boolean)));
+              const hiddenSpeaker = item.hide_speaker || item.suggested_hide_speaker || (speakers.length > 1 ? speakers[1] : (speakers[0] || ''));
+              return (
+                <View key={`dialogue-${idx}`} style={{ marginBottom: 16 }}>
+                  <Text style={styles.exerciseTitle}>Dialogue {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                  {item.studentInstructions && (
+                    <Text style={styles.instructions}>{item.studentInstructions}</Text>
+                  )}
+                  <View style={{ gap: 4 }}>
+                    {(item.turns || []).map((turn, ti) => {
+                      const isHidden = hiddenSpeaker && turn.speaker === hiddenSpeaker;
+                      return (
+                        <View key={`dlg-${idx}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
+                          <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
+                          {isHidden ? (
+                            <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________</Text>
+                          ) : (
+                            <Text style={styles.inlineText}>{turn.text}</Text>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                  {Array.isArray(item.hints) && item.hints.length > 0 && (
+                    <View style={styles.hints}>
+                      <Text style={[styles.text, { fontSize: 10, marginBottom: 2 }]}>Hint:</Text>
+                      <Text style={styles.hintItem}>{item.hints[0]}</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* Writing Prompts Section */}
+        {Array.isArray(lesson.writing_prompts) && lesson.writing_prompts.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Writing Prompts</Text>
+            {lesson.writing_prompts.map((item, idx) => (
+              <View key={`writing-${idx}`} style={{ marginBottom: 16 }}>
+                <Text style={styles.exerciseTitle}>Set {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                {item.studentInstructions && (
+                  <Text style={styles.instructions}>{item.studentInstructions}</Text>
+                )}
+                <View>
+                  {(item.prompts || []).map((p, pi) => (
+                    <View key={`wp-${idx}-${pi}`} style={{ marginBottom: 8 }}>
+                      <Text style={styles.text}>{pi + 1}. {p.question}</Text>
+                      {/* Provide writing lines */}
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
       </Page>
 
       {/* Solutions Page */}
@@ -1237,6 +1303,48 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                 </View>
               );
             })}
+          </View>
+        )}
+
+        {/* Guided Dialogues Solutions */}
+        {Array.isArray(lesson.guided_dialogues) && lesson.guided_dialogues.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Guided Dialogues - Suggested Answers</Text>
+            {lesson.guided_dialogues.map((item, idx) => (
+              <View key={`dialogue-sol-${idx}`} style={{ marginBottom: 16 }}>
+                <Text style={styles.exerciseTitle}>Dialogue {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                <View style={{ gap: 4 }}>
+                  {(item.turns || []).map((turn, ti) => (
+                    <View key={`dlg-sol-${idx}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
+                      <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
+                      <Text style={styles.inlineText}>{turn.text}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Writing Prompts Solutions */}
+        {Array.isArray(lesson.writing_prompts) && lesson.writing_prompts.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Writing Prompts - Example Answers</Text>
+            {lesson.writing_prompts.map((item, idx) => (
+              <View key={`writing-sol-${idx}`} style={{ marginBottom: 16 }}>
+                <Text style={styles.exerciseTitle}>Set {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                {(item.prompts || []).map((p, pi) => (
+                  <View key={`wp-sol-${idx}-${pi}`} style={{ marginBottom: 8 }}>
+                    <Text style={styles.text}>{pi + 1}. {p.question}</Text>
+                    {Array.isArray(item.example_answers) && item.example_answers[pi] && (
+                      <Text style={[styles.answer, { fontWeight: 'normal' }]}>
+                        Example: {item.example_answers[pi]}
+                      </Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ))}
           </View>
         )}
       </Page>

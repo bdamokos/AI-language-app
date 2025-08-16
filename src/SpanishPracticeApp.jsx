@@ -6,6 +6,8 @@ import { scoreMCQ, generateMCQ } from './exercises/MCQExercise.jsx';
 import { scoreCloze, generateCloze } from './exercises/ClozeExercise.jsx';
 import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExercise.jsx';
 import { generateExplanation } from './exercises/ExplanationComponent.jsx';
+import { generateGuidedDialogues } from './exercises/GuidedDialogueExercise.jsx';
+import { generateWritingPrompts } from './exercises/WritingPromptExercise.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
@@ -38,9 +40,13 @@ const SpanishPracticeApp = () => {
   const [loadingMcqOnly, setLoadingMcqOnly] = useState(false);
   const [loadingClozeOnly, setLoadingClozeOnly] = useState(false);
   const [loadingClozeMixOnly, setLoadingClozeMixOnly] = useState(false);
+  const [loadingDialogueOnly, setLoadingDialogueOnly] = useState(false);
+  const [loadingWritingOnly, setLoadingWritingOnly] = useState(false);
   const [mcqCount, setMcqCount] = useState(5);
   const [clozeCount, setClozeCount] = useState(2);
   const [clozeMixCount, setClozeMixCount] = useState(2);
+  const [dialogueCount, setDialogueCount] = useState(2);
+  const [writingCount, setWritingCount] = useState(2);
 
   const normalizeText = (text) => normalizeTextUtil(text, strictAccents);
 
@@ -73,7 +79,9 @@ const SpanishPracticeApp = () => {
           fill_in_blanks: 0,
           multiple_choice: 0,
           cloze_passages: 0,
-          cloze_with_mixed_options: 0
+          cloze_with_mixed_options: 0,
+          guided_dialogues: 0,
+          writing_prompts: 0
         }, context);
         setLesson(data);
         setOrchestratorValues({});
@@ -304,6 +312,24 @@ const SpanishPracticeApp = () => {
               >{loadingClozeMixOnly ? 'Generating...' : `Add Cloze-Mixed (${clozeMixCount})`}</button>
               <input type="number" min={1} max={10} value={clozeMixCount} onChange={e => setClozeMixCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
             </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={generateDialogueOnly}
+                disabled={loadingDialogueOnly || !topic.trim()}
+                className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 text-sm"
+              >{loadingDialogueOnly ? 'Generating...' : `Add Guided Dialogues (${dialogueCount})`}</button>
+              <input type="number" min={1} max={10} value={dialogueCount} onChange={e => setDialogueCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={generateWritingOnly}
+                disabled={loadingWritingOnly || !topic.trim()}
+                className="flex-1 bg-rose-600 text-white py-2 px-4 rounded hover:bg-rose-700 text-sm"
+              >{loadingWritingOnly ? 'Generating...' : `Add Writing Prompts (${writingCount})`}</button>
+              <input type="number" min={1} max={10} value={writingCount} onChange={e => setWritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+            </div>
           </div>
         </div>
         <Orchestrator
@@ -362,7 +388,9 @@ const SpanishPracticeApp = () => {
         fill_in_blanks: 0,
         multiple_choice: 0,
         cloze_passages: 0,
-        cloze_with_mixed_options: 0
+        cloze_with_mixed_options: 0,
+        guided_dialogues: 0,
+        writing_prompts: 0
       }, languageContext);
       setTopic(topicToUse);
       setLesson(data);
@@ -384,7 +412,9 @@ const SpanishPracticeApp = () => {
     fill_in_blanks: lesson?.fill_in_blanks || [],
     multiple_choice: lesson?.multiple_choice || [],
     cloze_passages: lesson?.cloze_passages || [],
-    cloze_with_mixed_options: lesson?.cloze_with_mixed_options || []
+    cloze_with_mixed_options: lesson?.cloze_with_mixed_options || [],
+    guided_dialogues: lesson?.guided_dialogues || [],
+    writing_prompts: lesson?.writing_prompts || []
   });
 
   const mergeLesson = (partial) => {
@@ -463,6 +493,30 @@ const SpanishPracticeApp = () => {
       mergeLesson({ topic, cloze_with_mixed_options: data.items || [] });
       } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
     finally { setLoadingClozeMixOnly(false); }
+  };
+
+  const generateDialogueOnly = async () => {
+    if (!topic.trim()) return;
+    setLoadingDialogueOnly(true);
+    setErrorMsg('');
+    try {
+      const data = await generateGuidedDialogues(topic, Number(dialogueCount), languageContext);
+      if (!lesson) setLesson(ensureLessonSkeleton());
+      mergeLesson({ topic, guided_dialogues: data.items || [] });
+    } catch (e) { console.error(e); setErrorMsg('Failed to generate guided dialogues'); }
+    finally { setLoadingDialogueOnly(false); }
+  };
+
+  const generateWritingOnly = async () => {
+    if (!topic.trim()) return;
+    setLoadingWritingOnly(true);
+    setErrorMsg('');
+    try {
+      const data = await generateWritingPrompts(topic, Number(writingCount), languageContext);
+      if (!lesson) setLesson(ensureLessonSkeleton());
+      mergeLesson({ topic, writing_prompts: data.items || [] });
+    } catch (e) { console.error(e); setErrorMsg('Failed to generate writing prompts'); }
+    finally { setLoadingWritingOnly(false); }
   };
 
   const handleAnswerChange = (key, value) => {

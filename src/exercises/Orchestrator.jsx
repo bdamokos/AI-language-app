@@ -3,6 +3,8 @@ import FIBExercise, { scoreFIB, generateFIB } from './FIBExercise.jsx';
 import MCQExercise, { scoreMCQ, generateMCQ } from './MCQExercise.jsx';
 import ClozeExercise, { scoreCloze, generateCloze } from './ClozeExercise.jsx';
 import ClozeMixedExercise, { scoreClozeMixed, generateClozeMixed } from './ClozeMixedExercise.jsx';
+import GuidedDialogueExercise, { scoreGuidedDialogue, generateGuidedDialogues } from './GuidedDialogueExercise.jsx';
+import WritingPromptExercise, { scoreWritingPrompt, generateWritingPrompts } from './WritingPromptExercise.jsx';
 import ExplanationComponent, { generateExplanation } from './ExplanationComponent.jsx';
 import { normalizeText } from './utils.js';
 
@@ -23,6 +25,8 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
     if (Array.isArray(lesson?.multiple_choice)) arr.push(['mcq', lesson.multiple_choice]);
     if (Array.isArray(lesson?.cloze_passages)) arr.push(['cloze', lesson.cloze_passages]);
     if (Array.isArray(lesson?.cloze_with_mixed_options)) arr.push(['clozeMix', lesson.cloze_with_mixed_options]);
+    if (Array.isArray(lesson?.guided_dialogues)) arr.push(['dialogue', lesson.guided_dialogues]);
+    if (Array.isArray(lesson?.writing_prompts)) arr.push(['writing', lesson.writing_prompts]);
     return arr;
   }, [lesson]);
 
@@ -37,6 +41,8 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
           {type === 'mcq' && items.length > 0 && <h3 className="font-semibold text-gray-800">Multiple Choice</h3>}
           {type === 'cloze' && items.length > 0 && <h3 className="font-semibold text-gray-800">Cloze Passages</h3>}
           {type === 'clozeMix' && items.length > 0 && <h3 className="font-semibold text-gray-800">Cloze (Mixed Options)</h3>}
+          {type === 'dialogue' && items.length > 0 && <h3 className="font-semibold text-gray-800">Guided Dialogues</h3>}
+          {type === 'writing' && items.length > 0 && <h3 className="font-semibold text-gray-800">Writing Prompts</h3>}
           {items.map((item, idx) => {
             const keyPrefix = `${idBase}:${type}:${idx}`;
             const val = values?.[keyPrefix] ?? (type === 'mcq' ? null : {});
@@ -62,6 +68,16 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
             if (type === 'clozeMix') {
               return (
                 <ClozeMixedExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} />
+              );
+            }
+            if (type === 'dialogue') {
+              return (
+                <GuidedDialogueExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+              );
+            }
+            if (type === 'writing') {
+              return (
+                <WritingPromptExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
               );
             }
             return null;
@@ -106,6 +122,18 @@ export function scoreLesson(lesson, values, strictAccents = true) {
       add(scoreClozeMixed(item, values?.[key] || {}, eq));
     });
   }
+  if (Array.isArray(lesson?.guided_dialogues)) {
+    lesson.guided_dialogues.forEach((item, idx) => {
+      const key = `lesson:dialogue:${idx}`;
+      add(scoreGuidedDialogue(item, values?.[key] || {}, eq));
+    });
+  }
+  if (Array.isArray(lesson?.writing_prompts)) {
+    lesson.writing_prompts.forEach((item, idx) => {
+      const key = `lesson:writing:${idx}`;
+      add(scoreWritingPrompt(item, values?.[key] || {}, eq));
+    });
+  }
   return { correct, total };
 }
 
@@ -122,16 +150,20 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     fill_in_blanks: Math.max(0, Math.min(20, Number(counts?.fill_in_blanks ?? 0))),
     multiple_choice: Math.max(0, Math.min(20, Number(counts?.multiple_choice ?? 0))),
     cloze_passages: Math.max(0, Math.min(10, Number(counts?.cloze_passages ?? 0))),
-    cloze_with_mixed_options: Math.max(0, Math.min(10, Number(counts?.cloze_with_mixed_options ?? 0)))
+    cloze_with_mixed_options: Math.max(0, Math.min(10, Number(counts?.cloze_with_mixed_options ?? 0))),
+    guided_dialogues: Math.max(0, Math.min(10, Number(counts?.guided_dialogues ?? 0))),
+    writing_prompts: Math.max(0, Math.min(10, Number(counts?.writing_prompts ?? 0)))
   };
 
   // Generate all exercise types in parallel using component generation functions
-  const [explanation, fibData, mcqData, clozeData, clozeMixData] = await Promise.all([
+  const [explanation, fibData, mcqData, clozeData, clozeMixData, dialogueData, writingData] = await Promise.all([
     generateExplanation(topic, languageContext),
     safeCounts.fill_in_blanks > 0 ? generateFIB(topic, safeCounts.fill_in_blanks, languageContext) : Promise.resolve({ items: [] }),
     safeCounts.multiple_choice > 0 ? generateMCQ(topic, safeCounts.multiple_choice, languageContext) : Promise.resolve({ items: [] }),
     safeCounts.cloze_passages > 0 ? generateCloze(topic, safeCounts.cloze_passages, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options, languageContext) : Promise.resolve({ items: [] })
+    safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.guided_dialogues > 0 ? generateGuidedDialogues(topic, safeCounts.guided_dialogues, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.writing_prompts > 0 ? generateWritingPrompts(topic, safeCounts.writing_prompts, languageContext) : Promise.resolve({ items: [] })
   ]);
 
   // Build lesson bundle
@@ -147,7 +179,9 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     fill_in_blanks: fibData.items || [],
     multiple_choice: mcqData.items || [],
     cloze_passages: clozeData.items || [],
-    cloze_with_mixed_options: clozeMixData.items || []
+    cloze_with_mixed_options: clozeMixData.items || [],
+    guided_dialogues: dialogueData.items || [],
+    writing_prompts: writingData.items || []
   };
 }
 
