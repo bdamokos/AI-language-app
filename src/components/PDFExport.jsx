@@ -63,8 +63,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginBottom: 8,
     backgroundColor: '#f9fafb',
-    padding: 8,
-    borderRadius: 4
+    padding: 8
   },
   instructions: {
     fontSize: 11,
@@ -72,8 +71,7 @@ const styles = StyleSheet.create({
     color: '#059669',
     marginBottom: 8,
     backgroundColor: '#ecfdf5',
-    padding: 8,
-    borderRadius: 4
+    padding: 8
   },
   passage: {
     fontSize: 12,
@@ -92,8 +90,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginBottom: 8,
     backgroundColor: '#fef3c7',
-    padding: 8,
-    borderRadius: 4
+    padding: 8
   },
   hintItem: {
     fontSize: 11,
@@ -105,8 +102,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginBottom: 8,
     backgroundColor: '#f3f4f6',
-    padding: 8,
-    borderRadius: 4
+    padding: 8
   },
   optionItem: {
     fontSize: 11,
@@ -171,6 +167,7 @@ const styles = StyleSheet.create({
 export default function PDFExport({ lesson, orchestratorValues, strictAccents = true }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [collectedImages, setCollectedImages] = useState({});
+  const [preparedImages, setPreparedImages] = useState({});
 
   // Collect all generated images from the global store and lesson data
   useEffect(() => {
@@ -215,6 +212,65 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     //   }
     // };
   }, [lesson]);
+
+  // Prepare images for @react-pdf/renderer by embedding as data URIs (avoids CORS issues)
+  useEffect(() => {
+    const isDataUri = (src) => typeof src === 'string' && src.startsWith('data:image');
+    const toDataUri = async (url) => {
+      try {
+        const resp = await fetch(url, { mode: 'cors' });
+        const blob = await resp.blob();
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        console.log('[PDF] Failed to fetch image for data URI:', url, e);
+        return null;
+      }
+    };
+    const normalizeImageData = async (imageData) => {
+      if (!imageData?.data?.[0]) return imageData;
+      const image = imageData.data[0] || {};
+      let src = image.url || image.imageURL || image.imageDataURI || image.imageBase64Data;
+      // If we already have a proper data URI, keep as-is
+      if (isDataUri(src)) {
+        return imageData;
+      }
+      // If we have raw base64 without prefix, coerce to png data URI
+      if (typeof src === 'string' && src && /^([A-Za-z0-9+/=]+)$/.test(src) && src.length > 100) {
+        const coerced = `data:image/png;base64,${src}`;
+        const newImage = { ...image, imageDataURI: coerced };
+        return { ...imageData, data: [{ ...newImage }] };
+      }
+      // If we have a remote URL, fetch and convert to data URI
+      if (typeof src === 'string' && /^https?:\/\//.test(src)) {
+        const dataUri = await toDataUri(src);
+        if (dataUri) {
+          const newImage = { ...image, imageDataURI: dataUri };
+          return { ...imageData, data: [{ ...newImage }] };
+        }
+      }
+      return imageData;
+    };
+
+    const prepareAll = async () => {
+      const entries = Object.entries(collectedImages || {});
+      if (entries.length === 0) {
+        setPreparedImages({});
+        return;
+      }
+      const result = {};
+      await Promise.all(entries.map(async ([key, img]) => {
+        result[key] = await normalizeImageData(img);
+      }));
+      setPreparedImages(result);
+    };
+
+    prepareAll();
+  }, [collectedImages]);
 
   // Helper function to process text formatting (bold, italic, code)
   const processTextFormatting = (text) => {
@@ -369,8 +425,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         elements.push(
           <View key={`table-${elements.length}`} style={{
             marginVertical: 8,
-            border: '1 solid #d1d5db',
-            borderRadius: 4
+            border: '1 solid #d1d5db'
           }}>
             {/* Table Header */}
             <View style={{ 
@@ -529,7 +584,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       if (index < parts.length - 1) {
         elements.push(
           <Text key={`blank-${index}`} style={[styles.text, { fontFamily: 'Courier' }]}>
-            ________________
+            ____________
           </Text>
         );
       }
@@ -559,6 +614,340 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     }).filter(answer => answer);
   };
 
+  // Helper function to render Cloze Mixed with inline options and footnotes
+  const renderClozeMixedWithOptions = (item) => {
+    if (!item?.passage) {
+      console.log('[PDF] ClozeMixed item has no passage:', item);
+      return { elements: [], footnotes: [] };
+    }
+
+    console.log('[PDF] Rendering ClozeMixed item:', item);
+    
+    const parts = item.passage.split('_____');
+    const blanks = Array.isArray(item.blanks) ? item.blanks : [];
+    const elements = [];
+    const footnotes = [];
+    let footnoteCounter = 1;
+
+    console.log('[PDF] ClozeMixed parts:', parts.length - 1, 'blanks:', blanks.length);
+
+    for (let i = 0; i < parts.length; i++) {
+      // Add text part
+      if (parts[i]) {
+        elements.push(
+          <Text key={`text-${i}`} style={styles.text}>
+            {parts[i]}
+          </Text>
+        );
+      }
+
+      // Add options inline instead of blank
+      if (i < parts.length - 1) {
+        const blank = blanks.find(b => b.index === i) || { options: [], hint: '' };
+        console.log(`[PDF] Blank ${i}:`, blank);
+        
+        if (blank.options && blank.options.length > 0) {
+          const optionsText = `[${blank.options.join(' / ')}]`;
+          let footnoteNumber = null;
+          
+          // Add footnote if there's a hint
+          if (blank.hint) {
+            footnoteNumber = footnoteCounter++;
+            footnotes.push({
+              number: footnoteNumber,
+              text: blank.hint
+            });
+          }
+          
+          elements.push(
+            <Text key={`options-${i}`} style={[styles.text, { 
+              fontWeight: 'bold', 
+              backgroundColor: '#f3f4f6', 
+              paddingHorizontal: 4,
+              paddingVertical: 2,
+              fontSize: 11
+            }]}>
+              {optionsText}
+              {footnoteNumber && (
+                <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}>
+                  ⁽{footnoteNumber}⁾
+                </Text>
+              )}
+            </Text>
+          );
+        } else {
+          // Add a placeholder blank if no options found
+          elements.push(
+            <Text key={`blank-${i}`} style={[styles.text, { fontFamily: 'Courier' }]}>
+              ____________
+            </Text>
+          );
+        }
+      }
+    }
+
+    console.log('[PDF] ClozeMixed elements generated:', elements.length, 'footnotes:', footnotes.length);
+    return { elements, footnotes };
+  };
+
+  // Helper function to render regular Cloze with footnotes
+  const renderClozeWithFootnotes = (item) => {
+    if (!item?.passage) return null;
+
+    const parts = item.passage.split('_____');
+    const blanks = Array.isArray(item.blanks) ? item.blanks : [];
+    const elements = [];
+    const footnotes = [];
+    let footnoteCounter = 1;
+
+    for (let i = 0; i < parts.length; i++) {
+      // Add text part
+      if (parts[i]) {
+        elements.push(
+          <Text key={`text-${i}`} style={styles.text}>
+            {parts[i]}
+          </Text>
+        );
+      }
+
+      // Add blank with optional footnote
+      if (i < parts.length - 1) {
+        const blank = blanks.find(b => b.index === i) || { hint: '' };
+        let footnoteNumber = null;
+        
+        // Add footnote if there's a hint
+        if (blank.hint) {
+          footnoteNumber = footnoteCounter++;
+          footnotes.push({
+            number: footnoteNumber,
+            text: blank.hint
+          });
+        }
+        
+        elements.push(
+          <Text key={`blank-${i}`} style={[styles.text, { fontFamily: 'Courier' }]}>
+            ____________
+            {footnoteNumber && (
+              <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}>
+                ⁽{footnoteNumber}⁾
+              </Text>
+            )}
+          </Text>
+        );
+      }
+    }
+
+    return { elements, footnotes };
+  };
+
+  // Helper function to render footnotes
+  const renderFootnotes = (footnotes, title = "Hints:") => {
+    if (!footnotes || footnotes.length === 0) return null;
+
+    return (
+      <View style={{ marginTop: 12, borderTop: '1 solid #e5e7eb', paddingTop: 8 }}>
+        <Text style={[styles.text, { fontSize: 10, fontWeight: 'bold', marginBottom: 4 }]}>{title}</Text>
+        {footnotes.map((footnote, idx) => (
+          <Text key={`footnote-${idx}`} style={[styles.text, { fontSize: 9, marginBottom: 2, marginLeft: 8 }]}>
+            <Text style={{ verticalAlign: 'super', fontSize: 7 }}>⁽{footnote.number}⁾</Text>
+            {' '}{footnote.text}
+          </Text>
+        ))}
+      </View>
+    );
+  };
+
+  // Helper function to render FIB solutions with answers in green bold
+  const renderFIBSolution = (item) => {
+    if (!item?.sentence) return null;
+
+    const parts = item.sentence.split('_____');
+    const answers = Array.isArray(item.answers) ? item.answers : [];
+    const elements = [];
+
+    for (let i = 0; i < parts.length; i++) {
+      // Add text part
+      if (parts[i]) {
+        elements.push(
+          <Text key={`text-${i}`} style={styles.text}>
+            {parts[i]}
+          </Text>
+        );
+      }
+
+      // Add answer in green bold instead of blank
+      if (i < parts.length - 1) {
+        const answer = answers[i] || answers[0] || '[missing]';
+        
+        elements.push(
+          <Text key={`answer-${i}`} style={[styles.text, { 
+            fontWeight: 'bold', 
+            color: '#059669',
+            backgroundColor: '#ecfdf5',
+            paddingHorizontal: 3,
+            paddingVertical: 1
+          }]}> 
+            {answer}
+          </Text>
+        );
+      }
+    }
+
+    return (
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+        {elements}
+      </View>
+    );
+  };
+
+  // Helper function to render Cloze solutions with answers and rationale footnotes
+  const renderClozeSolution = (item) => {
+    if (!item?.passage) return null;
+
+    const parts = item.passage.split('_____');
+    const blanks = Array.isArray(item.blanks) ? item.blanks : [];
+    const elements = [];
+    const footnotes = [];
+    let footnoteCounter = 1;
+
+    for (let i = 0; i < parts.length; i++) {
+      // Add text part
+      if (parts[i]) {
+        elements.push(
+          <Text key={`text-${i}`} style={styles.text}>
+            {parts[i]}
+          </Text>
+        );
+      }
+
+      // Add answer in green bold with optional rationale footnote
+      if (i < parts.length - 1) {
+        const blank = blanks.find(b => b.index === i) || { answer: '[missing]', rationale: '' };
+        let footnoteNumber = null;
+        
+        // Add footnote for rationale if available
+        if (blank.rationale) {
+          footnoteNumber = footnoteCounter++;
+          footnotes.push({
+            number: footnoteNumber,
+            text: blank.rationale
+          });
+        }
+        
+        elements.push(
+          <Text key={`answer-${i}`} style={[styles.text, { 
+            fontWeight: 'bold', 
+            color: '#059669',
+            backgroundColor: '#ecfdf5',
+            paddingHorizontal: 3,
+            paddingVertical: 1
+          }]}> 
+            {blank.answer}
+            {footnoteNumber && (
+              <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}> 
+                ⁽{footnoteNumber}⁾
+              </Text>
+            )}
+          </Text>
+        );
+      }
+    }
+
+    return { elements, footnotes };
+  };
+
+  // Helper function to render Cloze Mixed solutions with highlighted correct and strikethrough incorrect
+  const renderClozeMixedSolution = (item) => {
+    if (!item?.passage) return null;
+
+    const parts = item.passage.split('_____');
+    const blanks = Array.isArray(item.blanks) ? item.blanks : [];
+    const elements = [];
+    const footnotes = [];
+    let footnoteCounter = 1;
+
+    for (let i = 0; i < parts.length; i++) {
+      // Add text part
+      if (parts[i]) {
+        elements.push(
+          <Text key={`text-${i}`} style={styles.text}>
+            {parts[i]}
+          </Text>
+        );
+      }
+
+      // Add options with correct highlighted and incorrect struck through
+      if (i < parts.length - 1) {
+        const blank = blanks.find(b => b.index === i) || { options: [], correct_index: -1, rationale: '' };
+        
+        if (blank.options && blank.options.length > 0) {
+          const optionElements = [];
+          let footnoteNumber = null;
+          
+          // Add footnote for rationale if available
+          if (blank.rationale) {
+            footnoteNumber = footnoteCounter++;
+            footnotes.push({
+              number: footnoteNumber,
+              text: blank.rationale
+            });
+          }
+          
+          blank.options.forEach((option, optIdx) => {
+            const isCorrect = optIdx === blank.correct_index;
+            
+            if (optIdx > 0) {
+              optionElements.push(
+                <Text key={`sep-${optIdx}`} style={styles.text}> / </Text>
+              );
+            }
+            
+            optionElements.push(
+              <Text key={`opt-${optIdx}`} style={[styles.text, {
+                fontWeight: isCorrect ? 'bold' : 'normal',
+                color: isCorrect ? '#059669' : '#6b7280',
+                backgroundColor: isCorrect ? '#ecfdf5' : 'transparent',
+                textDecoration: isCorrect ? 'none' : 'line-through',
+                paddingHorizontal: isCorrect ? 3 : 0,
+                paddingVertical: isCorrect ? 1 : 0
+              }]}> 
+                {option}
+              </Text>
+            );
+          });
+          
+          elements.push(
+            <Text key={`options-${i}`} style={[styles.text, { 
+              backgroundColor: '#f3f4f6', 
+              paddingHorizontal: 4,
+              paddingVertical: 2,
+              fontSize: 11
+            }]}>
+              [</Text>
+          );
+          elements.push(...optionElements);
+          elements.push(
+            <Text key={`options-close-${i}`} style={[styles.text, { 
+              backgroundColor: '#f3f4f6', 
+              paddingHorizontal: 4,
+              paddingVertical: 2,
+              fontSize: 11
+            }]}>
+              ]
+              {footnoteNumber && (
+                <Text style={[styles.text, { fontSize: 8, verticalAlign: 'super' }]}>
+                  ⁽{footnoteNumber}⁾
+                </Text>
+              )}
+            </Text>
+          );
+        }
+      }
+    }
+
+    return { elements, footnotes };
+  };
+
   // Helper function to render an image with proper error handling
   const renderImage = (imageData, caption) => {
     console.log('[PDF] Attempting to render image:', imageData);
@@ -569,7 +958,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     }
 
     const image = imageData.data[0];
-    const imageSource = image.url || image.imageURL || image.imageDataURI || image.imageBase64Data;
+    // Prefer embedded data URIs first to avoid remote fetch/CORS issues
+    const imageSource = image.imageDataURI || image.imageBase64Data || image.url || image.imageURL;
     
     console.log('[PDF] Image source:', imageSource);
     
@@ -592,6 +982,19 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         )}
       </View>
     );
+  };
+
+  // Helper to access latest image by key from prepared, collected, or global store
+  const getImageByKey = (key) => {
+    const fromPrepared = preparedImages && preparedImages[key];
+    if (fromPrepared) return fromPrepared;
+    const fromCollected = collectedImages && collectedImages[key];
+    if (fromCollected) return fromCollected;
+    if (typeof window !== 'undefined' && window.globalImageStore) {
+      const fromGlobal = window.globalImageStore[key];
+      if (fromGlobal) return fromGlobal;
+    }
+    return null;
   };
 
   // PDF Document Component
@@ -630,17 +1033,17 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             <Text style={styles.sectionTitle}>Fill in the Blanks</Text>
             {lesson.fill_in_blanks.map((item, idx) => (
               <View key={`fib-${idx}`} style={{ marginBottom: 12 }}>
-                <Text style={[styles.text, { fontWeight: 'bold' }]}>
-                  {String.fromCharCode(97 + idx)}. 
-                </Text>
-                
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
+                  <Text style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
+                    {String.fromCharCode(97 + idx)}.
+                  </Text>
+                  <View style={{ flex: 1 }}>
+                    {renderBlanks(item.sentence)}
+                  </View>
+                </View>
                 {item.context && (
                   <Text style={styles.context}>Context: {item.context}</Text>
                 )}
-                
-                <View style={{ marginBottom: 8 }}>
-                  {renderBlanks(item.sentence)}
-                </View>
               </View>
             ))}
           </View>
@@ -674,32 +1077,39 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         {Array.isArray(lesson.cloze_passages) && lesson.cloze_passages.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Cloze Passages</Text>
-            {lesson.cloze_passages.map((item, idx) => (
-              <View key={`cloze-${idx}`} style={{ marginBottom: 20 }}>
-                <Text style={styles.exerciseTitle}>
-                  Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
-                </Text>
-                
-                {item.studentInstructions && (
-                  <Text style={styles.instructions}>{item.studentInstructions}</Text>
-                )}
-                
-                <View style={{ flexDirection: 'row', gap: 15 }}>
-                  <View style={{ flex: 1 }}>
-                    <View style={{ marginBottom: 8 }}>
-                      {renderBlanks(item.passage)}
-                    </View>
-                  </View>
+            {lesson.cloze_passages.map((item, idx) => {
+              const { elements, footnotes } = renderClozeWithFootnotes(item) || { elements: [], footnotes: [] };
+              
+              return (
+                <View key={`cloze-${idx}`} style={{ marginBottom: 20 }}>
+                  <Text style={styles.exerciseTitle}>
+                    Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
+                  </Text>
                   
-                  {/* Render generated image if available */}
-                  {collectedImages[`cloze:${idx}`] && (
-                    <View style={{ width: 150 }}>
-                      {renderImage(collectedImages[`cloze:${idx}`], 'AI-generated illustration')}
-                    </View>
+                  {item.studentInstructions && (
+                    <Text style={styles.instructions}>{item.studentInstructions}</Text>
                   )}
+                  
+                  <View style={{ flexDirection: 'row', gap: 15 }}>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
+                        {elements}
+                      </View>
+                      
+                      {/* Render footnotes */}
+                      {renderFootnotes(footnotes)}
+                    </View>
+                    
+                    {/* Render generated image if available */}
+                    {getImageByKey(`cloze:${idx}`) && (
+                      <View style={{ width: 150 }}>
+                        {renderImage(getImageByKey(`cloze:${idx}`), 'AI-generated illustration')}
+                      </View>
+                    )}
+                  </View>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
 
@@ -707,23 +1117,11 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         {Array.isArray(lesson.cloze_with_mixed_options) && lesson.cloze_with_mixed_options.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Cloze with Mixed Options</Text>
+            <Text style={[styles.text, { fontSize: 10, fontStyle: 'italic', marginBottom: 12, color: '#6b7280' }]}>
+              Underline the correct option for each blank.
+            </Text>
             {lesson.cloze_with_mixed_options.map((item, idx) => {
-              // Extract unique options from all blanks
-              const allOptions = [];
-              const optionsByBlank = {};
-              
-              if (item.blanks && Array.isArray(item.blanks)) {
-                item.blanks.forEach((blank, blankIdx) => {
-                  if (blank.options && Array.isArray(blank.options)) {
-                    optionsByBlank[blankIdx] = blank.options;
-                    blank.options.forEach(opt => {
-                      if (!allOptions.includes(opt)) {
-                        allOptions.push(opt);
-                      }
-                    });
-                  }
-                });
-              }
+              const { elements, footnotes } = renderClozeMixedWithOptions(item) || { elements: [], footnotes: [] };
               
               return (
                 <View key={`clozeMix-${idx}`} style={{ marginBottom: 20 }}>
@@ -735,29 +1133,23 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                     <Text style={styles.instructions}>{item.studentInstructions}</Text>
                   )}
                   
-                  <View style={{ marginBottom: 8 }}>
-                    {renderBlanks(item.passage)}
-                  </View>
-
-                  {/* Show options per blank */}
-                  {Object.keys(optionsByBlank).length > 0 && (
-                    <View style={styles.options}>
-                      <Text style={[styles.optionItem, { fontWeight: 'bold' }]}>Options for each blank:</Text>
-                      {Object.entries(optionsByBlank).map(([blankIdx, options]) => (
-                        <View key={`blank-options-${blankIdx}`} style={{ marginBottom: 4 }}>
-                          <Text style={[styles.optionItem, { fontWeight: 'bold', fontSize: 10 }]}>
-                            Blank {parseInt(blankIdx) + 1}:
-                          </Text>
-                          <Text style={styles.optionItem}>
-                            {options.join(', ')}
-                          </Text>
-                        </View>
-                      ))}
+                  <View style={{ flexDirection: 'row', gap: 15 }}>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
+                        {elements}
+                      </View>
+                      
+                      {/* Render footnotes */}
+                      {renderFootnotes(footnotes)}
                     </View>
-                  )}
-
-                  {/* Render generated image if available */}
-                  {collectedImages[`clozeMix:${idx}`] && renderImage(collectedImages[`clozeMix:${idx}`], 'Generated context image')}
+                    
+                    {/* Render generated image if available */}
+                    {getImageByKey(`clozeMix:${idx}`) && (
+                      <View style={{ width: 150 }}>
+                        {renderImage(getImageByKey(`clozeMix:${idx}`), 'AI-generated illustration')}
+                      </View>
+                    )}
+                  </View>
                 </View>
               );
             })}
@@ -775,29 +1167,16 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             <Text style={styles.sectionTitle}>Fill in the Blanks - Solutions</Text>
             {lesson.fill_in_blanks.map((item, idx) => (
               <View key={`fib-sol-${idx}`} style={{ marginBottom: 15 }}>
-                <Text style={[styles.exerciseTitle, { marginBottom: 8 }]}>
-                  {String.fromCharCode(97 + idx)}.
-                </Text>
-                {item.answers && Array.isArray(item.answers) && (
-                  <View>
-                    {item.answers.map((answer, ansIdx) => (
-                      <Text key={`answer-${ansIdx}`} style={styles.answer}>
-                        {ansIdx + 1}. {answer}
-                      </Text>
-                    ))}
-                    
-                    {/* Include hints in solutions */}
-                    {item.hints && Array.isArray(item.hints) && item.hints.length > 0 && (
-                      <View style={{ marginTop: 8 }}>
-                        <Text style={[styles.text, { fontWeight: 'bold', fontSize: 11, marginBottom: 4 }]}>Hints:</Text>
-                        {item.hints.map((hint, hintIdx) => (
-                          <Text key={`hint-${hintIdx}`} style={[styles.rationale, { marginLeft: 8 }]}>
-                            {hintIdx + 1}. {hint}
-                          </Text>
-                        ))}
-                      </View>
-                    )}
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
+                  <Text style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
+                    {String.fromCharCode(97 + idx)}.
+                  </Text>
+                  <View style={{ flex: 1 }}>
+                    {renderFIBSolution(item)}
                   </View>
+                </View>
+                {item.context && (
+                  <Text style={[styles.context, { marginLeft: 16 }]}>Context: {item.context}</Text>
                 )}
               </View>
             ))}
@@ -810,16 +1189,16 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             <Text style={styles.sectionTitle}>Multiple Choice - Solutions</Text>
             {lesson.multiple_choice.map((item, idx) => (
               <View key={`mcq-sol-${idx}`} style={{ marginBottom: 15 }}>
-                <Text style={[styles.exerciseTitle, { marginBottom: 4 }]}>
-                  {String.fromCharCode(97 + idx)}.
+                <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
+                  {String.fromCharCode(97 + idx)}. {item.question}
                 </Text>
                 {item.options && Array.isArray(item.options) && (
-                  <View>
+                  <View style={{ marginLeft: 16 }}>
                     {item.options.map((option, optIdx) => {
                       if (option.correct) {
                         return (
                           <View key={`correct-${optIdx}`}>
-                            <Text style={styles.answer}>
+                            <Text style={[styles.answer, { marginBottom: 4 }]}>
                               Correct Answer: {String.fromCharCode(65 + optIdx)}. {option.text}
                             </Text>
                             {option.rationale && (
@@ -842,37 +1221,20 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Cloze Passages - Solutions</Text>
             {lesson.cloze_passages.map((item, idx) => {
-              const solutions = generateClozeSolutions(item);
+              const { elements, footnotes } = renderClozeSolution(item) || { elements: [], footnotes: [] };
+              
               return (
-                <View key={`cloze-sol-${idx}`} style={{ marginBottom: 15 }}>
+                <View key={`cloze-sol-${idx}`} style={{ marginBottom: 20 }}>
                   <Text style={styles.exerciseTitle}>
                     Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
                   </Text>
-                  {solutions.length > 0 && (
-                    <View>
-                      {solutions.map((answer, ansIdx) => (
-                        <Text key={`answer-${ansIdx}`} style={styles.answer}>
-                          {ansIdx + 1}. {answer}
-                        </Text>
-                      ))}
-                      
-                      {/* Include rationales if available */}
-                      {item.blanks && Array.isArray(item.blanks) && (
-                        <View style={{ marginTop: 8 }}>
-                          {item.blanks.map((blank, blankIdx) => {
-                            if (blank.rationale) {
-                              return (
-                                <Text key={`rationale-${blankIdx}`} style={styles.rationale}>
-                                  {blankIdx + 1}. {blank.rationale}
-                                </Text>
-                              );
-                            }
-                            return null;
-                          }).filter(Boolean)}
-                        </View>
-                      )}
-                    </View>
-                  )}
+                  
+                  <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
+                    {elements}
+                  </View>
+                  
+                  {/* Render rationale footnotes */}
+                  {renderFootnotes(footnotes, "Rationales:")}
                 </View>
               );
             })}
@@ -883,38 +1245,24 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         {Array.isArray(lesson.cloze_with_mixed_options) && lesson.cloze_with_mixed_options.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Cloze with Mixed Options - Solutions</Text>
+            <Text style={[styles.text, { fontSize: 10, fontStyle: 'italic', marginBottom: 12, color: '#6b7280' }]}>
+              Correct answers are highlighted in green. Incorrect options are struck through.
+            </Text>
             {lesson.cloze_with_mixed_options.map((item, idx) => {
-              const solutions = generateClozeMixedSolutions(item);
+              const { elements, footnotes } = renderClozeMixedSolution(item) || { elements: [], footnotes: [] };
+              
               return (
-                <View key={`clozeMix-sol-${idx}`} style={{ marginBottom: 15 }}>
+                <View key={`clozeMix-sol-${idx}`} style={{ marginBottom: 20 }}>
                   <Text style={styles.exerciseTitle}>
                     Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
                   </Text>
-                  {solutions.length > 0 && (
-                    <View>
-                      {solutions.map((answer, ansIdx) => (
-                        <Text key={`answer-${ansIdx}`} style={styles.answer}>
-                          {ansIdx + 1}. {answer}
-                        </Text>
-                      ))}
-                      
-                      {/* Include rationales if available */}
-                      {item.blanks && Array.isArray(item.blanks) && (
-                        <View style={{ marginTop: 8 }}>
-                          {item.blanks.map((blank, blankIdx) => {
-                            if (blank.rationale) {
-                              return (
-                                <Text key={`rationale-${blankIdx}`} style={styles.rationale}>
-                                  {blankIdx + 1}. {blank.rationale}
-                                </Text>
-                              );
-                            }
-                            return null;
-                          }).filter(Boolean)}
-                        </View>
-                      )}
-                    </View>
-                  )}
+                  
+                  <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
+                    {elements}
+                  </View>
+                  
+                  {/* Render rationale footnotes */}
+                  {renderFootnotes(footnotes, "Rationales:")}
                 </View>
               );
             })}
@@ -929,6 +1277,22 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
 
     setIsGenerating(true);
     try {
+      console.log('[PDF] Starting PDF generation with lesson:', lesson);
+      console.log('[PDF] ClozeMixed items:', lesson.cloze_with_mixed_options);
+      // Refresh collected images from the global store right before rendering
+      const latest = { ...(window.globalImageStore || {}) };
+      if (lesson.cloze_passages) {
+        lesson.cloze_passages.forEach((item, idx) => {
+          if (item.generatedImage) latest[`cloze:${idx}`] = item.generatedImage;
+        });
+      }
+      if (lesson.cloze_with_mixed_options) {
+        lesson.cloze_with_mixed_options.forEach((item, idx) => {
+          if (item.generatedImage) latest[`clozeMix:${idx}`] = item.generatedImage;
+        });
+      }
+      setCollectedImages(latest);
+      
       const blob = await pdf(<PDFDocument />).toBlob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -939,8 +1303,13 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Failed to generate PDF:', error);
-      alert('Failed to generate PDF. Please try again.');
+      console.error('PDF generation failed with error:', error);
+      console.error('Error stack:', error.stack);
+      console.error('Lesson data:', lesson);
+      
+      // More user-friendly error message
+      const errorMsg = error.message || 'Unknown error occurred during PDF generation';
+      alert(`Failed to generate PDF: ${errorMsg}\n\nCheck the console for details.`);
     } finally {
       setIsGenerating(false);
     }
@@ -955,7 +1324,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     >
       <FileText size={18} />
       <Download size={18} />
-      {collectedImages && Object.keys(collectedImages).length > 0 && <ImageIcon size={18} className="text-yellow-300" />}
+      {collectedImages && Object.keys(collectedImages).filter(key => collectedImages[key] && collectedImages[key].data?.[0]).length > 0 && <ImageIcon size={18} className="text-yellow-300" />}
       {isGenerating ? 'Generating...' : 'Export PDF'}
     </button>
   );

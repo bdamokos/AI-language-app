@@ -169,28 +169,42 @@ export async function generateClozeMixed(topic, count = 2, languageContext = { l
     return generateSingleClozeMixedPassage(topic, null, languageContext);
   }
   
-  // For multiple passages, generate them in parallel
-  const promises = Array.from({ length: count }, (_, i) => 
-    generateSingleClozeMixedPassage(topic, i + 1, languageContext)
-  );
+  // For multiple passages, generate them sequentially to avoid overwhelming the API
+  const allItems = [];
+  const errors = [];
   
-  try {
-    const results = await Promise.all(promises);
-    
-    // Combine all results into a single items array
-    const allItems = [];
-    results.forEach(result => {
+  for (let i = 0; i < count; i++) {
+    try {
+      // Add a small delay between requests to avoid overwhelming the API
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+      }
+      
+      const result = await generateSingleClozeMixedPassage(topic, i + 1, languageContext);
+      
       if (result && result.items && Array.isArray(result.items)) {
         allItems.push(...result.items);
       }
-    });
-    
-    return { items: allItems };
-  } catch (error) {
-    console.error('Error generating ClozeMixed passages in parallel:', error);
-    // Fallback to single generation if parallel fails
-    return generateSingleClozeMixedPassage(topic);
+    } catch (error) {
+      console.error(`Error generating ClozeMixed passage ${i + 1}:`, error);
+      errors.push({ passage: i + 1, error: error.message });
+      
+      // Continue with other passages even if one fails
+      continue;
+    }
   }
+  
+  // If we got no items at all, throw an error
+  if (allItems.length === 0) {
+    throw new Error(`Failed to generate any ClozeMixed passages. Errors: ${errors.map(e => `Passage ${e.passage}: ${e.error}`).join('; ')}`);
+  }
+  
+  // Log if we had partial failures
+  if (errors.length > 0) {
+    console.warn(`Generated ${allItems.length} passages with ${errors.length} failures:`, errors);
+  }
+  
+  return { items: allItems };
 }
 
 /**
