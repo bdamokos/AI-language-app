@@ -1,6 +1,8 @@
 # Language AI App
 
-AI-powered Spanish practice app with multi-provider LLM backend (OpenRouter, Ollama).
+AI-powered language practice app with multi-provider LLM backend (OpenRouter, Ollama, Runware, Fal.ai).
+
+![Language AI App](docs/Screenshot_1.png)
 
 ## Run locally
 
