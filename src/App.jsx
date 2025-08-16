@@ -1,10 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import SpanishPracticeApp from './SpanishPracticeApp.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
 import { Settings as SettingsIcon } from 'lucide-react';
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isProduction, setIsProduction] = useState(false);
+
+  useEffect(() => {
+    // Check if we're in production environment
+    const checkProduction = () => {
+      // Check NODE_ENV (set by Vite during build)
+      const isProdEnv = import.meta.env.PROD;
+      
+      // Check hostname for production domain
+      const isProdDomain = window.location.hostname === 'languages.bdamokos.org';
+      
+      setIsProduction(isProdEnv || isProdDomain);
+    };
+    
+    checkProduction();
+  }, []);
+
+  // Don't render settings button in production
+  if (isProduction) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="py-6">
+          <div className="max-w-5xl mx-auto">
+            <SpanishPracticeApp />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">

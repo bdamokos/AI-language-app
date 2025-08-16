@@ -60,7 +60,6 @@ export default function SettingsPanel() {
           },
           falai: { 
             model: data.falai?.model || '', 
-            apiKey: '', 
             enabled: data.falai?.enabled || false,
             width: data.falai?.width || 512,
             height: data.falai?.height || 512,

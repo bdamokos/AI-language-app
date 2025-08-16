@@ -463,29 +463,38 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
     
     // Fetch detailed cost information asynchronously (non-blocking)
     if (generationId) {
-      (async () => {
-        try {
-          await new Promise(resolve => setTimeout(resolve, 500)); // Longer delay to allow generation to be processed
-          const costResp = await fetch(`https://openrouter.ai/api/v1/generation?id=${generationId}`, {
-            headers: { authorization: `Bearer ${runtimeConfig.openrouter.apiKey}` }
-          });
-          if (costResp.ok) {
-            const costData = await costResp.json();
-            if (costData.data && typeof costData.data.total_cost === 'number') {
-              console.log(`${logPrefix} cost: $${Number(costData.data.total_cost).toFixed(6)} | native tokens: ${costData.data.tokens_prompt || 0}→${costData.data.tokens_completion || 0} | provider: ${costData.data.provider_name || 'unknown'}`);
+      // Validate generationId to prevent URL injection
+      if (typeof generationId === 'string' && /^[a-zA-Z0-9_-]+$/.test(generationId)) {
+        (async () => {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 500)); // Longer delay to allow generation to be processed
+            const costResp = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
+              headers: { authorization: `Bearer ${runtimeConfig.openrouter.apiKey}` }
+            });
+            if (costResp.ok) {
+              const costData = await costResp.json();
+              if (costData.data && typeof costData.data.total_cost === 'number') {
+                console.log(`${logPrefix} cost: $${Number(costData.data.total_cost).toFixed(6)} | native tokens: ${costData.data.tokens_prompt || 0}→${costData.data.tokens_completion || 0} | provider: ${costData.data.provider_name || 'unknown'}`);
+              }
             }
+            // Note: Cost data may not be immediately available for all models (especially free tiers)
+          } catch (e) {
+            // Silently ignore cost fetch errors to avoid disrupting the main flow
           }
-          // Note: Cost data may not be immediately available for all models (especially free tiers)
-        } catch (e) {
-          // Silently ignore cost fetch errors to avoid disrupting the main flow
-        }
-      })();
+        })();
+      }
     }
     
     return data.choices?.[0]?.message?.content || '';
   }
   if (provider === 'ollama') {
     const host = runtimeConfig.ollama.host || 'http://127.0.0.1:11434';
+    
+    // Validate host to prevent URL injection
+    if (typeof host !== 'string' || (!host.startsWith('http://') && !host.startsWith('https://'))) {
+      throw new Error('Invalid Ollama host configuration');
+    }
+    
     const resp = await fetch(`${host}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -925,6 +934,11 @@ app.get('/api/settings', (req, res) => {
 
 // Settings: update runtime config
 app.post('/api/settings', (req, res) => {
+  // Disable settings endpoint in production
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Settings endpoint disabled in production' });
+  }
+  
   const body = req.body || {};
   if (body.provider) runtimeConfig.provider = String(body.provider).toLowerCase();
   if (body.openrouter) {
@@ -1111,28 +1125,71 @@ app.post('/api/runware/generate', async (req, res) => {
       return res.status(400).json({ error: 'Prompt is required' });
     }
     
+    // Validate prompt to prevent injection attacks
+    const cleanPrompt = String(prompt).trim();
+    if (cleanPrompt.length > 1000) {
+      return res.status(400).json({ error: 'Prompt too long (max 1000 characters)' });
+    }
+    
+    // Validate numeric parameters
+    const validWidth = Number(width || runtimeConfig.runware.width);
+    const validHeight = Number(height || runtimeConfig.runware.height);
+    const validSteps = Number(steps || runtimeConfig.runware.steps);
+    const validCfgScale = Number(cfgScale || runtimeConfig.runware.cfgScale);
+    
+    if (!Number.isInteger(validWidth) || validWidth < 64 || validWidth > 2048 || validWidth % 64 !== 0) {
+      return res.status(400).json({ error: 'Invalid width (must be 64-2048, divisible by 64)' });
+    }
+    if (!Number.isInteger(validHeight) || validHeight < 64 || validHeight > 2048 || validHeight % 64 !== 0) {
+      return res.status(400).json({ error: 'Invalid height (must be 64-2048, divisible by 64)' });
+    }
+    if (!Number.isInteger(validSteps) || validSteps < 1 || validSteps > 100) {
+      return res.status(400).json({ error: 'Invalid steps (must be 1-100)' });
+    }
+    if (typeof validCfgScale !== 'number' || validCfgScale < 1 || validCfgScale > 20) {
+      return res.status(400).json({ error: 'Invalid CFG scale (must be 1-20)' });
+    }
+    
+    // Validate optional parameters
+    let validSeed = undefined;
+    if (seed !== undefined) {
+      validSeed = Number(seed);
+      if (!Number.isInteger(validSeed) || validSeed < 0 || validSeed > 4294967295) {
+        return res.status(400).json({ error: 'Invalid seed (must be 0-4294967295)' });
+      }
+    }
+    
+    let validScheduler = undefined;
+    if (scheduler !== undefined) {
+      validScheduler = String(scheduler);
+      const allowedSchedulers = ['euler', 'euler_a', 'heun', 'dpm_2', 'dpm_2_a', 'lms', 'dpm_fast', 'dpm_adaptive', 'dpmpp_2s_a', 'dpmpp_sde', 'dpmpp_2m', 'ddim', 'uni_pc', 'uni_pc_bh2'];
+      if (!allowedSchedulers.includes(validScheduler)) {
+        return res.status(400).json({ error: 'Invalid scheduler' });
+      }
+    }
+    
     // Use provided values or fallback to configured defaults
     const taskUUID = crypto.randomUUID();
     const requestBody = [{
       taskType: 'imageInference',
       taskUUID,
       includeCost: true,
-      positivePrompt: String(prompt).trim(),
+      positivePrompt: cleanPrompt,
       model: model || runtimeConfig.runware.model,
       numberResults: 1,
       outputFormat: 'WEBP',
-      width: width || runtimeConfig.runware.width,
-      height: height || runtimeConfig.runware.height,
-      steps: steps || runtimeConfig.runware.steps,
-      CFGScale: cfgScale || runtimeConfig.runware.cfgScale,
+      width: validWidth,
+      height: validHeight,
+      steps: validSteps,
+      CFGScale: validCfgScale,
       outputType: 'URL',
-      ...(seed && { seed }),
-      ...(scheduler && { scheduler })
+      ...(validSeed !== undefined && { seed: validSeed }),
+      ...(validScheduler && { scheduler: validScheduler })
     }];
     
     const startedAt = Date.now();
-    const promptPreview = String(prompt).slice(0, 80).replace(/\s+/g, ' ');
-    console.log(`[RUNWARE] model=${requestBody[0].model} size=${requestBody[0].width}x${requestBody[0].height} steps=${requestBody[0].steps} promptPreview="${promptPreview}..."`);
+    const promptPreview = cleanPrompt.slice(0, 80).replace(/\s+/g, ' ');
+    console.log('[RUNWARE] model=', requestBody[0].model, 'size=', requestBody[0].width, 'x', requestBody[0].height, 'steps=', requestBody[0].steps, 'promptPreview="', promptPreview, '..."');
     
     const response = await fetch('https://api.runware.ai/v1', {
       method: 'POST',
@@ -1145,7 +1202,7 @@ app.post('/api/runware/generate', async (req, res) => {
     
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
-      console.error(`[RUNWARE] HTTP ${response.status} ${errorText}`);
+      console.error('[RUNWARE] HTTP', response.status, errorText);
       return res.status(response.status).json({ 
         error: `Runware API error ${response.status}`,
         details: errorText
@@ -1207,7 +1264,7 @@ app.get('/api/runware/models', async (req, res) => {
     
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
-      console.error(`[RUNWARE] Models API HTTP ${response.status} ${errorText}`);
+      console.error('[RUNWARE] Models API HTTP', response.status, errorText);
       return res.status(response.status).json({ 
         error: `Runware models API error ${response.status}`,
         details: errorText
@@ -1239,19 +1296,44 @@ app.post('/api/falai/generate', async (req, res) => {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return res.status(400).json({ error: 'Prompt is required and must be a non-empty string' });
     }
+    
+    // Validate prompt to prevent injection attacks
+    const cleanPrompt = prompt.trim();
+    if (cleanPrompt.length > 1000) {
+      return res.status(400).json({ error: 'Prompt too long (max 1000 characters)' });
+    }
+    
+    // Validate numeric parameters
+    const validWidth = Number(width || runtimeConfig.falai.width);
+    const validHeight = Number(height || runtimeConfig.falai.height);
+    const validSteps = Number(steps || runtimeConfig.falai.steps);
+    const validCfgScale = Number(cfgScale || runtimeConfig.falai.cfgScale);
+    
+    if (!Number.isInteger(validWidth) || validWidth < 64 || validWidth > 2048 || validWidth % 64 !== 0) {
+      return res.status(400).json({ error: 'Invalid width (must be 64-2048, divisible by 64)' });
+    }
+    if (!Number.isInteger(validHeight) || validHeight < 64 || validHeight > 2048 || validHeight % 64 !== 0) {
+      return res.status(400).json({ error: 'Invalid height (must be 64-2048, divisible by 64)' });
+    }
+    if (!Number.isInteger(validSteps) || validSteps < 1 || validSteps > 100) {
+      return res.status(400).json({ error: 'Invalid steps (must be 1-100)' });
+    }
+    if (typeof validCfgScale !== 'number' || validCfgScale < 1 || validCfgScale > 20) {
+      return res.status(400).json({ error: 'Invalid CFG scale (must be 1-20)' });
+    }
 
     const requestBody = {
-      prompt: prompt.trim(),
+      prompt: cleanPrompt,
       model: model || runtimeConfig.falai.model,
-      width: width || runtimeConfig.falai.width,
-      height: height || runtimeConfig.falai.height,
-      steps: steps || runtimeConfig.falai.steps,
-      cfg_scale: cfgScale || runtimeConfig.falai.cfgScale,
+      width: validWidth,
+      height: validHeight,
+      steps: validSteps,
+      cfg_scale: validCfgScale,
       num_images: 1
     };
 
-    const promptPreview = prompt.length > 50 ? prompt.slice(0, 50) : prompt;
-    console.log(`[FALAI] model=${requestBody.model} size=${requestBody.width}x${requestBody.height} steps=${requestBody.steps} promptPreview="${promptPreview}..."`);
+    const promptPreview = cleanPrompt.length > 50 ? cleanPrompt.slice(0, 50) : cleanPrompt;
+    console.log('[FALAI] model=', requestBody.model, 'size=', requestBody.width, 'x', requestBody.height, 'steps=', requestBody.steps, 'promptPreview="', promptPreview, '..."');
 
     const startTime = Date.now();
     const response = await fetch('https://fal.run/fal-ai/fast-sdxl', {
@@ -1265,7 +1347,7 @@ app.post('/api/falai/generate', async (req, res) => {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[FALAI] HTTP ${response.status} ${errorText}`);
+      console.error('[FALAI] HTTP', response.status, errorText);
       return res.status(response.status).json({
         error: `fal.ai API error ${response.status}`,
         details: errorText
@@ -1322,9 +1404,31 @@ app.post('/api/falai/generate', async (req, res) => {
 // Persist an external image to local cache and link to an existing exercise
 app.post('/api/cache/exercise-image', async (req, res) => {
   try {
+    // Rate limiting for file system access
+    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    if (!checkRateLimit(clientIP)) {
+      return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
+    }
+    
     if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
     const { exerciseSha, url } = req.body || {};
     if (!exerciseSha || !url) return res.status(400).json({ error: 'exerciseSha and url are required' });
+    
+    // Validate exerciseSha to prevent path traversal
+    if (typeof exerciseSha !== 'string' || !/^[a-f0-9]{12,64}$/.test(exerciseSha)) {
+      return res.status(400).json({ error: 'Invalid exerciseSha format' });
+    }
+    
+    // Validate URL to prevent SSRF
+    try {
+      const urlObj = new URL(url);
+      if (!['http:', 'https:'].includes(urlObj.protocol)) {
+        return res.status(400).json({ error: 'Invalid URL protocol' });
+      }
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid URL format' });
+    }
+    
     const dl = await downloadImageToCache({ imagesDir: cacheLayout.imagesDir, exerciseSha, url, fetchImpl: fetch, publicBase: '/cache/images' });
     // Update exercise record to reference local image
     await updateExerciseRecord(cacheLayout, exerciseSha, (rec) => {
@@ -1426,6 +1530,48 @@ app.get('/api/debug', (req, res) => {
   const list = debugOrder.slice().reverse().map(id => debugLogs.get(id));
   res.json({ count: list.length, items: list });
 });
+
+// Simple in-memory rate limiter for file system access
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 10; // max 10 requests per minute per IP
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW;
+  
+  if (!rateLimitStore.has(ip)) {
+    rateLimitStore.set(ip, []);
+  }
+  
+  const requests = rateLimitStore.get(ip);
+  // Remove old requests outside the window
+  const validRequests = requests.filter(timestamp => timestamp > windowStart);
+  
+  if (validRequests.length >= RATE_LIMIT_MAX_REQUESTS) {
+    return false; // Rate limited
+  }
+  
+  // Add current request
+  validRequests.push(now);
+  rateLimitStore.set(ip, validRequests);
+  return true; // Allowed
+}
+
+// Clean up old rate limit data periodically
+setInterval(() => {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW;
+  
+  for (const [ip, requests] of rateLimitStore.entries()) {
+    const validRequests = requests.filter(timestamp => timestamp > windowStart);
+    if (validRequests.length === 0) {
+      rateLimitStore.delete(ip);
+    } else {
+      rateLimitStore.set(ip, validRequests);
+    }
+  }
+}, RATE_LIMIT_WINDOW);
 
 const PORT = process.env.PORT || 3000;
 // Serve frontend in production
