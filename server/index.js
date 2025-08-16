@@ -112,6 +112,87 @@ const runtimeConfig = {
   maxTokens: Number(process.env.MAX_TOKENS || 15000)
 };
 
+// Static fal.ai pricing for default models (sourced from the public pricing gist)
+// You can update these amounts manually if prices change
+// See: https://gist.github.com/azer/6e8ffa228cb5d6f5807cd4d895b191a4
+const FALAI_MODEL_PRICING = {
+  // TODO: fill exact amount from gist for fast-sdxl if different
+  'fal-ai/fast-sdxl': { pricePerComputeSecond: { currency: 'USD', amount: 0.00111 } },
+  // Verified from gist: pricePerComputeSecond 0.00111
+  'fal-ai/fast-lightning-sdxl': { pricePerComputeSecond: { currency: 'USD', amount: 0.00111 } },
+  // TODO: fill exact amount from gist for turbo and 1.0 if different
+  'fal-ai/fast-sdxl-turbo': { pricePerComputeSecond: { currency: 'USD', amount: 0.00111  } },
+  'fal-ai/fast-sdxl-1.0': { pricePerComputeSecond: { currency: 'USD', amount: 0.00111  } }
+};
+
+function computeFalaiCostFromInference(modelId, timings, gen) {
+  const pricing = FALAI_MODEL_PRICING[modelId];
+  const inferenceSeconds = typeof timings?.inference === 'number' ? Number(timings.inference) : 0;
+  if (!pricing || inferenceSeconds <= 0) {
+    return {
+      cost: 0,
+      details: {
+        reason: !pricing ? 'pricing_not_found' : 'no_inference_time',
+        modelId,
+        inferenceSeconds
+      }
+    };
+  }
+  const entry = Array.isArray(pricing) ? pricing[0] : pricing;
+  const unitKey = Object.keys(entry).find(k => /^pricePer/.test(k));
+  const val = entry[unitKey];
+  const amount = typeof val?.amount === 'number' ? val.amount : Number(val);
+  const currency = val?.currency || 'USD';
+  const width = Number(gen?.width) || 0;
+  const height = Number(gen?.height) || 0;
+  const numImages = Math.max(1, Number(gen?.numImages) || 1);
+  const megapixels = width && height ? (width * height) / 1_000_000 : 0;
+  let cost = 0;
+  let basis = unitKey || 'unknown';
+  switch (unitKey) {
+    case 'pricePerComputeSecond':
+    case 'pricePerSecond':
+      cost = inferenceSeconds * amount;
+      basis = 'inference_seconds';
+      break;
+    case 'pricePerTenSeconds':
+      cost = Math.ceil(inferenceSeconds / 10) * amount;
+      basis = 'ceil(inference_seconds/10)';
+      break;
+    case 'pricePerMinute':
+      cost = (inferenceSeconds / 60) * amount;
+      basis = 'inference_seconds/60';
+      break;
+    case 'pricePerMegapixel':
+      cost = megapixels * amount * numImages;
+      basis = 'megapixels * images';
+      break;
+    case 'pricePerImage':
+    case 'pricePerGeneration':
+    case 'pricePerRequest':
+      cost = amount * numImages;
+      basis = 'images';
+      break;
+    default:
+      cost = 0;
+      basis = 'unknown_unit';
+  }
+  return {
+    cost,
+    details: {
+      currency,
+      unit: unitKey,
+      unitAmount: amount,
+      inferenceSeconds,
+      width,
+      height,
+      megapixels: Number.isFinite(megapixels) ? Number(megapixels.toFixed(3)) : 0,
+      numImages,
+      basis
+    }
+  };
+}
+
 // Basic request logging
 app.use((req, res, next) => {
   const start = Date.now();
@@ -1047,25 +1128,31 @@ app.post('/api/falai/generate', async (req, res) => {
 
     // fal.ai returns the image data directly
     if (data && data.images && Array.isArray(data.images) && data.images.length > 0) {
+      const { cost: inferredCost, details: costDetails } = computeFalaiCostFromInference(
+        requestBody.model,
+        data.timings || { inference: responseTime / 1000 },
+        { width: requestBody.width, height: requestBody.height, numImages: requestBody.num_images || 1 }
+      );
+
       const result = {
         data: [{
           url: data.images[0].url,
           width: requestBody.width,
           height: requestBody.height,
           model: requestBody.model,
-          prompt: requestBody.prompt
+          prompt: requestBody.prompt,
+          cost: Number(inferredCost || 0),
+          costDetails: costDetails || {}
         }],
-        cost: data.cost || 0,
-        costDetails: data.cost_details || {},
+        cost: Number(inferredCost || 0),
+        costDetails: costDetails || {},
         taskUUID: data.task_id || `falai_${Date.now()}`
       };
 
       console.log(`[FALAI] ok in ${responseTime}ms | cost: $${Number(result.cost).toFixed(6)} | model: ${requestBody.model} | size: ${requestBody.width}x${requestBody.height} | id: ${result.taskUUID}`);
-      
       if (result.costDetails && Object.keys(result.costDetails).length > 0) {
         console.log(`[FALAI] Cost breakdown: ${JSON.stringify(result.costDetails)}`);
       }
-
       res.json(result);
     } else {
       console.log(`[FALAI] ok in ${responseTime}ms | id: falai_${Date.now()}`);
