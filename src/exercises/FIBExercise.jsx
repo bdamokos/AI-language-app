@@ -34,7 +34,6 @@ export default function FIBExercise({ item, value, onChange, checked, strictAcce
           value={userVal}
           onChange={(e) => onChange(key, e.target.value)}
           onFocus={() => onFocusKey && onFocusKey(`${idPrefix}:${i}`)}
-          disabled={checked}
           className={`mx-1 px-2 py-0.5 border rounded-md inline-block w-32 ${
             isCorrect ? 'border-green-500 bg-green-50' : isWrong ? 'border-red-500 bg-red-50' : 'border-gray-300'
           }`}

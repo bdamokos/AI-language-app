@@ -230,7 +230,6 @@ const SpanishPracticeApp = () => {
             value={userAnswer}
             onChange={(e) => handleAnswerChange(answerKey, e.target.value)}
             onFocus={() => setLastFocusedInput(answerKey)}
-            disabled={submitted}
             className={`mx-1 px-2 py-0.5 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent inline-block w-32 ${
               isCorrect ? 'border-green-500 bg-green-50' : 
               isWrong ? 'border-red-500 bg-red-50' : 
@@ -823,7 +822,7 @@ const SpanishPracticeApp = () => {
                 )}
               </div>
 
-              {showAccentBar && !submitted && (
+              {showAccentBar && (
                 <div className="bg-gray-100 p-3 rounded-lg">
                   <p className="text-xs text-gray-600 mb-2">Click to insert accented characters:</p>
                   <div className="flex flex-wrap gap-2">
@@ -938,6 +937,13 @@ const SpanishPracticeApp = () => {
                        'Keep studying! You\'ll get there!'}
                     </p>
                   </div>
+                  <button
+                    onClick={generateRecommendation}
+                    disabled={loadingRecommendation}
+                    className="w-full bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {loadingRecommendation ? 'Re-checking...' : 'Re-check Answers'}
+                  </button>
                   {recommendation && (
                     <div className="bg-amber-50 border border-amber-200 p-4 rounded-lg">
                       <div className="flex items-start gap-3">

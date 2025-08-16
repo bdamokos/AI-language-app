@@ -27,7 +27,6 @@ export default function MCQExercise({ item, value, onChange, checked, idPrefix }
                 name={`${idPrefix}`}
                 checked={chosen || false}
                 onChange={() => onChange(oi)}
-                disabled={checked}
               />
               <span className={`${correct ? 'text-green-700' : wrongChosen ? 'text-red-700' : ''}`}>{opt.text}</span>
             </li>

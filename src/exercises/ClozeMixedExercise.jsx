@@ -52,7 +52,6 @@ export default function ClozeMixedExercise({ item, value, onChange, checked, str
             className="mx-1 px-2 py-1 border rounded" 
             value={val} 
             onChange={e => onChange(key, e.target.value)} 
-            disabled={checked}
           >
             <option value="">...</option>
             {blank.options.map((opt, oi) => (
@@ -65,7 +64,6 @@ export default function ClozeMixedExercise({ item, value, onChange, checked, str
               onClick={() => setShowHints(prev => ({ ...prev, [i]: !prev[i] }))}
               className="ml-1 text-xs text-blue-600 hover:text-blue-800 underline"
               title="Show hint"
-              disabled={checked}
             >
               💡
             </button>

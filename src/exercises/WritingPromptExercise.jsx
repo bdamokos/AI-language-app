@@ -39,7 +39,6 @@ export default function WritingPromptExercise({ item, value, onChange, checked, 
                 value={text}
                 onChange={(e) => onChange(key, e.target.value)}
                 onFocus={() => onFocusKey && onFocusKey(`${idPrefix}:${idx}`)}
-                disabled={checked}
               />
               {checked && example && (
                 <div className="text-xs text-green-700">

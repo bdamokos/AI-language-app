@@ -43,21 +43,19 @@ export default function GuidedDialogueExercise({ item, value, onChange, checked,
               <span className="font-semibold text-gray-700 min-w-[3rem]">{turn.speaker || '—'}:</span>
               {isHiddenTurn ? (
                 <div className="flex-1">
-                  {checked ? (
-                    <div className="px-2 py-1 border rounded bg-green-50 text-green-800 text-sm">
-                      {turn.text}
-                    </div>
-                  ) : (
                   <input
                     data-key={`${idPrefix}:${idx}`}
                     type="text"
                     value={String(value?.[String(idx)] || '')}
                     onChange={(e) => onChange(String(idx), e.target.value)}
                     onFocus={() => onFocusKey && onFocusKey(`${idPrefix}:${idx}`)}
-                    disabled={checked}
                     className={`w-full max-w-xl px-2 py-1 border rounded ${checked ? 'bg-gray-50' : ''}`}
                     placeholder="Write the missing line..."
                   />
+                  {checked && (
+                    <div className="mt-1 px-2 py-1 border rounded bg-green-50 text-green-800 text-xs">
+                      Suggested answer: {turn.text}
+                    </div>
                   )}
                   {!checked && Array.isArray(item?.hints) && item.hints.length > 0 && (
                     <button
