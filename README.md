@@ -62,6 +62,13 @@ docker compose up --build
 
 For Ollama, ensure Ollama is running on your host (default `127.0.0.1:11434`). On macOS, `host.docker.internal` is used inside the container via compose.
 
+### Persistent cache volume
+
+- The app persists cache and analytics when run in Docker.
+- A volume is mounted at `/data` inside the container (configurable with `CACHE_DIR`, default `/data`).
+- Configure the host path via `CACHE_HOST_DIR` in your `.env`. The deploy script ensures the directory exists on the remote host.
+- See `docs/persistent-caching-plan.md` for full design (schema versions in `shared/schemaVersions.js`, LRU, image persistence for Cloze, etc.).
+
 ## Switching providers
 
 Set `PROVIDER` to one of:

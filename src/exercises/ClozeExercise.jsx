@@ -101,7 +101,10 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
           width: 1024,
           height: 1024,
           steps: 28,
-          cfgScale: 3.5
+          cfgScale: 3.5,
+          // Persist to server cache if the exercise has a stable ID
+          persistToCache: !!item?.exerciseSha,
+          exerciseSha: item?.exerciseSha
         });
         
         // Log cost information in development mode

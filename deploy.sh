@@ -79,6 +79,7 @@ REGISTRY_PORT=${REGISTRY_PORT:-5010}
 
 # Port configuration
 DEPLOY_PORT=${DEPLOY_PORT:-3000}
+CACHE_HOST_DIR=${CACHE_HOST_DIR:-/var/lib/language-ai-app}
 
 # Default flag values
 FOLLOW_LOGS=false
@@ -296,6 +297,7 @@ validate_config() {
     echo "   Path: $DEPLOY_PATH"
     echo "   Port: $DEPLOY_PORT"
     echo "   Image: ${REGISTRY_HOST:+$REGISTRY_HOST/}$IMAGE_NAME:$IMAGE_TAG"
+    echo "   Cache dir (remote): $CACHE_HOST_DIR"
     echo ""
 }
 
@@ -337,6 +339,11 @@ run_ssh "
     
     echo \"📁 Setting up LanguageAIApp deployment...\"
     
+    # Ensure persistent cache directory exists with proper permissions
+    sudo mkdir -p "$CACHE_HOST_DIR"
+    sudo chmod 775 "$CACHE_HOST_DIR" || true
+    echo "📁 Ensured persistent cache directory exists at $CACHE_HOST_DIR"
+
     # Check if docker-compose is available
     if ! command -v docker-compose &> /dev/null; then
         echo \"❌ Error: docker-compose not found on remote server\"

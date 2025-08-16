@@ -90,13 +90,40 @@ export default function useImageGeneration() {
         throw new Error(errorData.error || `HTTP ${response.status}: Failed to generate image`);
       }
 
-      const data = await response.json();
+      let data = await response.json();
       
       // Validate the response structure
       if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
         throw new Error(`Invalid response format from ${imageProvider} API`);
       }
       
+      // Persist image to server cache if exerciseSha provided and a remote URL exists
+      try {
+        const first = data?.data?.[0] || null;
+        const remoteUrl = first?.url || first?.imageURL || null;
+        const exerciseSha = options?.exerciseSha;
+        const persistToCache = options?.persistToCache;
+        if (persistToCache && exerciseSha && remoteUrl) {
+          const cacheResp = await fetch('/api/cache/exercise-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ exerciseSha, url: remoteUrl })
+          });
+          if (cacheResp.ok) {
+            const cached = await cacheResp.json();
+            if (cached?.localUrl && data?.data?.[0]) {
+              // Preserve original
+              data.data[0].originalUrl = data.data[0].url || data.data[0].imageURL || null;
+              // Replace URL with local served URL for stable reuse
+              data.data[0].url = cached.localUrl;
+            }
+          }
+        }
+      } catch (e) {
+        // Non-fatal; continue with provider URL
+        console.log('[IMAGE] Failed to persist image to cache:', e?.message);
+      }
+
       setImageData(data);
       return data;
     } catch (err) {

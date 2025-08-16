@@ -5,12 +5,34 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas } from './cacheStore.js';
+import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+// Persistent cache directories (lazy-init)
+const CACHE_DIR = getCacheDir(process.env.CACHE_DIR, '/data');
+let cacheLayout = null;
+const initCache = (async () => {
+  try {
+    cacheLayout = await ensureCacheLayout(CACHE_DIR);
+    // Static serving for cached images
+    app.use('/cache/images', express.static(cacheLayout.imagesDir));
+    console.log('[CACHE] Initialized at', CACHE_DIR);
+    // Purge outdated schemas
+    try {
+      await purgeOutdatedSchemas(cacheLayout, schemaVersions);
+    } catch (e) {
+      console.warn('[CACHE] Failed to purge outdated schemas:', e?.message);
+    }
+  } catch (e) {
+    console.warn('[CACHE] Failed to initialize cache directories:', e?.message);
+  }
+})();
 
 function cleanFence(text) {
   return String(text || '').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -545,32 +567,125 @@ function recoverItemsFromPartialJson(raw) {
   }
 }
 
-// Generic LLM generation endpoint
+// Generic LLM generation endpoint (will be extended for persistent cache)
 app.post('/api/generate', async (req, res) => {
   try {
     const { system, user, jsonSchema, schemaName } = req.body || {};
     if (!user || !String(user).trim()) return res.status(400).json({ error: 'User prompt is required' });
     
-    // Generate cache key for explanations
+    // Identify type from schemaName
+    const type = (() => {
+      if (schemaName === 'explanation') return 'explanation';
+      if (schemaName === 'fib_list') return 'fib';
+      if (schemaName === 'mcq_list') return 'mcq';
+      if (schemaName === 'writing_prompts_list') return 'writing_prompts';
+      if (/^cloze_single_/.test(String(schemaName))) return 'cloze';
+      if (/^cloze_mixed_single_/.test(String(schemaName))) return 'cloze_mixed';
+      if (schemaName === 'guided_dialogues_list') return 'guided_dialogues';
+      return 'unknown';
+    })();
+
+    // Extract common context from prompt
+    const languageMatch = user.match(/Target Language:\s*([^\n]+)/i);
+    const levelMatch = user.match(/Target Level:\s*([^\n]+)/i);
+    const languageName = languageMatch ? languageMatch[1].trim() : 'unknown';
+    const levelRaw = levelMatch ? levelMatch[1].trim() : '';
+    const challengeMode = /slightly challenging/i.test(levelRaw);
+    const level = String(levelRaw).replace(/\(slightly challenging\)/i, '').trim() || 'unknown';
+    const topicMatchGeneric = user.match(/about:\s*([^\n]+)/i);
+    const grammarTopic = (topicMatchGeneric ? topicMatchGeneric[1] : '').trim() || 'unknown';
+    const currentModel = runtimeConfig.provider === 'openrouter' ? runtimeConfig.openrouter.model : runtimeConfig.ollama.model;
+    const schemaVersion = schemaVersions[type] || (type === 'explanation' ? schemaVersions.explanation : 1);
+    const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
+    const promptSha12 = promptSha.slice(0, 12);
+
+    // If this is an exercise request, try persistent cache first with per-user unseen selection
+    if (cacheLayout && type && type !== 'explanation' && type !== 'unknown') {
+      const poolKey = `${type}:${languageName}:${level}:${challengeMode}:${currentModel}:${schemaVersion}:${promptSha12}`;
+      const bucketKey = makeBucketKey({ type, language: languageName, level, challengeMode, grammarTopic });
+      // Parse desired count if present
+      let desiredCount = 1;
+      const countMatch = user.match(/Create exactly\s+(\d+)\b/i);
+      if (countMatch) desiredCount = Math.max(1, Math.min(50, Number(countMatch[1])));
+      // For cloze and cloze_mixed single schema, clamp to 1
+      if (type === 'cloze' || type === 'cloze_mixed') desiredCount = 1;
+
+      // Parse seen cookie
+      const cookieHeader = String(req.headers['cookie'] || '');
+      const cookieName = `seen_exercises_${type}`;
+      const seenCookieMatch = cookieHeader.match(new RegExp(`${cookieName}=([^;]+)`));
+      const seenList = seenCookieMatch ? decodeURIComponent(seenCookieMatch[1]).split(',').filter(Boolean) : [];
+      const seenSet = new Set(seenList);
+
+      const { items: cachedItems, shas: cachedShas } = await selectUnseenFromPool(cacheLayout, poolKey, seenSet, desiredCount);
+      let resultItems = cachedItems.map(r => r.content);
+      let resultShas = cachedShas;
+
+      // If not enough, call LLM for the shortfall
+      if (resultItems.length < desiredCount) {
+        const need = desiredCount - resultItems.length;
+        const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+        const text = await callLLM({ system, user, jsonSchema: useStructured ? jsonSchema : undefined, schemaName });
+        let parsed;
+        try {
+          parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
+        } catch (e) {
+          const expectsItems = !!(jsonSchema && jsonSchema.properties && jsonSchema.properties.items);
+          if (expectsItems) {
+            const recovered = recoverItemsFromPartialJson(text);
+            if (recovered && Array.isArray(recovered.items) && recovered.items.length > 0) {
+              parsed = recovered;
+            } else {
+              throw e;
+            }
+          } else {
+            throw e;
+          }
+        }
+        const generated = Array.isArray(parsed?.items) ? parsed.items : [];
+        const toAdd = generated.slice(0, need);
+        const perTypeLimit = Number(process.env.CACHE_EXERCISES_PER_TYPE_MAX || 100);
+        const addedShas = await addExercisesToPool(cacheLayout, { type, poolKey, bucketKey, language: languageName, level, challengeMode, grammarTopic, model: currentModel, schemaVersion }, toAdd, perTypeLimit);
+        resultItems = resultItems.concat(toAdd);
+        resultShas = resultShas.concat(addedShas);
+      }
+
+      // Update seen cookie with 12-char prefixes
+      try {
+        const prefixes = resultShas.map(s => String(s).slice(0, 12));
+        const maxSeen = Number(process.env.COOKIE_MAX_SEEN_PER_TYPE || 50);
+        const merged = Array.from(new Set([...seenList, ...prefixes])).slice(-maxSeen);
+        const cookieVal = encodeURIComponent(merged.join(','));
+        res.append('Set-Cookie', `${cookieName}=${cookieVal}; Path=/; Max-Age=2592000; SameSite=Lax`);
+      } catch {}
+
+      const itemsWithIds = resultItems.map((it, i) => ({ ...it, exerciseSha: resultShas[i] }));
+      return res.json({ items: itemsWithIds });
+    }
+
+    // Persistent cache for explanations (model + schemaVersion + promptSha)
     const isExplanation = schemaName === 'explanation';
-    let cacheKey = null;
-    if (isExplanation) {
+    let explanationPersistentKey = null;
+    if (isExplanation && cacheLayout) {
       const currentModel = runtimeConfig.provider === 'openrouter' 
         ? runtimeConfig.openrouter.model 
         : runtimeConfig.ollama.model;
-      
-      // Extract topic from user prompt (assuming format "Explain the grammar concept: TOPIC. Language...")
-      const topicMatch = user.match(/Explain the grammar concept:\s*([^.]+)/i);
-      if (topicMatch) {
-        const topic = topicMatch[1].trim();
-        cacheKey = `${topic}:${currentModel}`;
-        
-        // Check cache first
-        const cached = explanationCache.get(cacheKey);
-        if (cached) {
-          console.log(`[CACHE HIT] explanation for topic="${topic}" model="${currentModel}"`);
-          return res.json(cached);
-        }
+      const topicMatch = user.match(/Explain the grammar concept:\s*([^\.\n]+)/i);
+      const languageMatch = user.match(/Target Language:\s*([^\n]+)/i);
+      const levelMatch = user.match(/Target Level:\s*([^\n]+)/i);
+      const grammarConcept = topicMatch ? topicMatch[1].trim() : 'unknown';
+      const languageName = languageMatch ? languageMatch[1].trim() : 'unknown';
+      const levelRaw = levelMatch ? levelMatch[1].trim() : '';
+      const challengeMode = /slightly challenging/i.test(levelRaw);
+      const level = String(levelRaw).replace(/\(slightly challenging\)/i, '').trim() || 'unknown';
+      const schemaVersion = schemaVersions.explanation || 1;
+      const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
+      const promptSha12 = promptSha.slice(0, 12);
+      explanationPersistentKey = `exp:${languageName}:${level}:${challengeMode}:${grammarConcept}:${currentModel}:${schemaVersion}:${promptSha12}`;
+      const rec = await getExplanation(cacheLayout, explanationPersistentKey);
+      if (rec && rec.content) {
+        console.log(`[CACHE HIT] explanation ${grammarConcept} | model=${currentModel} | v=${schemaVersion}`);
+        return res.json(rec.content);
       }
     }
     
@@ -599,10 +714,30 @@ app.post('/api/generate', async (req, res) => {
       return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
     }
     
-    // Cache explanation responses
-    if (isExplanation && cacheKey && parsed) {
-      explanationCache.set(cacheKey, parsed);
-      console.log(`[CACHE SET] explanation for topic="${cacheKey}" (cache size: ${explanationCache.size()}/${explanationCache.capacity})`);
+    // Persistent cache write for explanations
+    if (isExplanation && explanationPersistentKey && parsed && cacheLayout) {
+      try {
+        const currentModel = runtimeConfig.provider === 'openrouter' 
+          ? runtimeConfig.openrouter.model 
+          : runtimeConfig.ollama.model;
+        const topicMatch = user.match(/Explain the grammar concept:\s*([^\.\n]+)/i);
+        const languageMatch = user.match(/Target Language:\s*([^\n]+)/i);
+        const levelMatch = user.match(/Target Level:\s*([^\n]+)/i);
+        const grammarConcept = topicMatch ? topicMatch[1].trim() : 'unknown';
+        const languageName = languageMatch ? languageMatch[1].trim() : 'unknown';
+        const levelRaw = levelMatch ? levelMatch[1].trim() : '';
+        const challengeMode = /slightly challenging/i.test(levelRaw);
+        const level = String(levelRaw).replace(/\(slightly challenging\)/i, '').trim() || 'unknown';
+        const schemaVersion = schemaVersions.explanation || 1;
+        const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
+        const promptSha12 = promptSha.slice(0, 12);
+        const meta = { language: languageName, level, challengeMode, grammarConcept, model: currentModel, schemaVersion, promptSha, promptSha12 };
+        const cap = Number(process.env.CACHE_EXPLANATIONS_MAX || 1000);
+        await setExplanation(cacheLayout, explanationPersistentKey, meta, parsed, cap);
+        console.log(`[CACHE SET] explanation ${grammarConcept} | model=${currentModel} | v=${schemaVersion}`);
+      } catch (e) {
+        console.warn('[CACHE] Failed to persist explanation:', e?.message);
+      }
     }
     
     return res.json(parsed);
@@ -1165,6 +1300,25 @@ app.post('/api/falai/generate', async (req, res) => {
       error: 'Failed to generate image',
       details: err.message
     });
+  }
+});
+
+// Persist an external image to local cache and link to an existing exercise
+app.post('/api/cache/exercise-image', async (req, res) => {
+  try {
+    if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
+    const { exerciseSha, url } = req.body || {};
+    if (!exerciseSha || !url) return res.status(400).json({ error: 'exerciseSha and url are required' });
+    const dl = await downloadImageToCache({ imagesDir: cacheLayout.imagesDir, exerciseSha, url, fetchImpl: fetch, publicBase: '/cache/images' });
+    // Update exercise record to reference local image
+    await updateExerciseRecord(cacheLayout, exerciseSha, (rec) => {
+      const updated = { ...rec, localImagePath: dl.localPath, localImageUrl: dl.localUrl };
+      return updated;
+    });
+    return res.json({ ok: true, localUrl: dl.localUrl, localPath: dl.localPath });
+  } catch (e) {
+    console.error('[CACHE-IMG]', e);
+    return res.status(500).json({ error: e?.message || 'Failed to cache exercise image' });
   }
 });
 
