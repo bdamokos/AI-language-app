@@ -57,7 +57,7 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
     checkImageGenerationEnabled();
   }, []);
 
-  // Generate image when item changes (if image generation is enabled)
+  // Generate image when item changes (if image generation is enabled and no cached image exists)
   useEffect(() => {
     const generateContextualImage = async () => {
       // Skip if image generation is not enabled
@@ -72,6 +72,13 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         return;
       }
       
+      // If cached local image URL is present on the item, use it and skip generation
+      if (item?.localImageUrl) {
+        setGeneratedImage({ data: [{ url: item.localImageUrl }] });
+        console.log('[CLOZE] Using cached local image URL:', item.localImageUrl);
+        return;
+      }
+
       // Skip if this is the same item we already processed
       const currentItemKey = `${sanitizedItem.title}-${sanitizedItem.passage.substring(0, 100)}`;
       if (lastItemRef.current === currentItemKey) {

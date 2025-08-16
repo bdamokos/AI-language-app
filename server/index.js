@@ -649,7 +649,11 @@ app.post('/api/generate', async (req, res) => {
       const seenSet = new Set(seenList);
 
       const { items: cachedItems, shas: cachedShas } = await selectUnseenFromPool(cacheLayout, poolKey, seenSet, desiredCount);
-      let resultItems = cachedItems.map(r => r.content);
+      let resultItems = cachedItems.map(r => {
+        const it = { ...r.content };
+        if (r.localImageUrl) it.localImageUrl = r.localImageUrl;
+        return it;
+      });
       let resultShas = cachedShas;
 
       // If not enough, call LLM for the shortfall
