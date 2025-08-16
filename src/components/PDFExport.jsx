@@ -181,6 +181,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       
       // Collect images from global store (set by exercise components)
       if (window.globalImageStore) {
+        console.log('[PDF] Global image store contents:', window.globalImageStore);
         Object.assign(images, window.globalImageStore);
       }
 
@@ -201,18 +202,153 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         });
       }
 
+      console.log('[PDF] Collected images:', images);
       setCollectedImages(images);
     };
 
     collectImages();
 
-    // Cleanup function to clear global image store when lesson changes
-    return () => {
-      if (window.globalImageStore) {
-        window.globalImageStore = {};
-      }
-    };
+    // Don't clear global image store when lesson changes - let it accumulate
+    // return () => {
+    //   if (window.globalImageStore) {
+    //     window.globalImageStore = {};
+    //   }
+    // };
   }, [lesson]);
+
+  // Helper function to process text formatting (bold, italic, code)
+  const processTextFormatting = (text) => {
+    if (!text) return [<Text key="empty" style={styles.text}></Text>];
+
+    // Handle bold text first (**text**)
+    if (text.includes('**')) {
+      const parts = text.split(/(\*\*[^*]+\*\*)/g);
+      const processedParts = [];
+      
+      parts.forEach((part, partIndex) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          const boldText = part.slice(2, -2);
+          // Process bold text for italic and code, but not more bold to avoid recursion
+          let boldParts = [];
+          if (boldText.includes('*') && !boldText.includes('**')) {
+            // Handle italic within bold
+            const italicParts = boldText.split(/(\*[^*]+\*)/g);
+            italicParts.forEach((italicPart, italicIdx) => {
+              if (italicPart.startsWith('*') && italicPart.endsWith('*') && !italicPart.startsWith('**')) {
+                const italicText = italicPart.slice(1, -1);
+                boldParts.push(
+                  <Text key={`bold-italic-${partIndex}-${italicIdx}`} style={[styles.text, { fontWeight: 'bold', fontStyle: 'italic' }]}>
+                    {italicText}
+                  </Text>
+                );
+              } else if (italicPart) {
+                boldParts.push(
+                  <Text key={`bold-regular-${partIndex}-${italicIdx}`} style={[styles.text, { fontWeight: 'bold' }]}>
+                    {italicPart}
+                  </Text>
+                );
+              }
+            });
+          } else {
+            // No italic, just bold
+            boldParts.push(
+              <Text key={`bold-${partIndex}`} style={[styles.text, { fontWeight: 'bold' }]}>
+                {boldText}
+              </Text>
+            );
+          }
+          processedParts.push(...boldParts);
+        } else if (part) {
+          // Process non-bold parts for italic and code
+          if (part.includes('*')) {
+            const italicParts = part.split(/(\*[^*]+\*)/g);
+            italicParts.forEach((italicPart, italicIdx) => {
+              if (italicPart.startsWith('*') && italicPart.endsWith('*')) {
+                const italicText = italicPart.slice(1, -1);
+                processedParts.push(
+                  <Text key={`italic-${partIndex}-${italicIdx}`} style={[styles.text, { fontStyle: 'italic' }]}>
+                    {italicText}
+                  </Text>
+                );
+              } else if (italicPart) {
+                processedParts.push(
+                  <Text key={`regular-${partIndex}-${italicIdx}`} style={styles.text}>
+                    {italicPart}
+                  </Text>
+                );
+              }
+            });
+          } else {
+            processedParts.push(
+              <Text key={`regular-${partIndex}`} style={styles.text}>
+                {part}
+              </Text>
+            );
+          }
+        }
+      });
+      
+      return processedParts;
+    }
+
+    // Handle italic text (*text*) - only if no ** found
+    if (text.includes('*') && !text.includes('**')) {
+      const parts = text.split(/(\*[^*]+\*)/g);
+      const processedParts = [];
+      
+      parts.forEach((part, partIndex) => {
+        if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) {
+          const italicText = part.slice(1, -1);
+          processedParts.push(
+            <Text key={`italic-${partIndex}`} style={[styles.text, { fontStyle: 'italic' }]}>
+              {italicText}
+            </Text>
+          );
+        } else if (part) {
+          processedParts.push(
+            <Text key={`regular-${partIndex}`} style={styles.text}>
+              {part}
+            </Text>
+          );
+        }
+      });
+      
+      return processedParts;
+    }
+
+    // Handle inline code (`code`)
+    if (text.includes('`')) {
+      const parts = text.split(/(`[^`]+`)/g);
+      const processedParts = [];
+      
+      parts.forEach((part, partIndex) => {
+        if (part.startsWith('`') && part.endsWith('`')) {
+          const codeText = part.slice(1, -1);
+          processedParts.push(
+            <Text key={`code-${partIndex}`} style={[styles.text, { 
+              fontFamily: 'Courier',
+              backgroundColor: '#f3f4f6',
+              fontSize: 10,
+              paddingHorizontal: 2
+            }]}>
+              {codeText}
+            </Text>
+          );
+        } else if (part) {
+          processedParts.push(
+            <Text key={`regular-${partIndex}`} style={styles.text}>
+              {part}
+            </Text>
+          );
+        }
+      });
+      
+      return processedParts;
+    }
+
+    // Return plain text
+    return [<Text key="plain" style={styles.text}>{text}</Text>];
+  };
 
   // Enhanced markdown renderer with table support (similar to ExplanationComponent)
   const renderMarkdownText = (text) => {
@@ -314,10 +450,16 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                            level === 2 ? { fontSize: 14, fontWeight: 'bold', marginBottom: 6, marginTop: 10 } : 
                            { fontSize: 13, fontWeight: 'bold', marginBottom: 4, marginTop: 8 };
         
+        const processedHeaderText = processTextFormatting(headerText);
         elements.push(
-          <Text key={`header-${lineIndex}`} style={[styles.text, headerStyle]}>
-            {headerText}
-          </Text>
+          <View key={`header-${lineIndex}`} style={{ flexDirection: 'row', flexWrap: 'wrap', ...headerStyle }}>
+            {processedHeaderText.map((textElement, idx) => 
+              React.cloneElement(textElement, { 
+                key: `header-text-${idx}`,
+                style: [textElement.props.style, headerStyle] 
+              })
+            )}
+          </View>
         );
         return;
       }
@@ -325,10 +467,14 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Handle lists
       if (line.match(/^\s*[-*+]\s/)) {
         const listText = line.replace(/^\s*[-*+]\s/, '');
+        const processedListText = processTextFormatting(listText);
         elements.push(
-          <Text key={`list-${lineIndex}`} style={[styles.text, { marginLeft: 12, marginBottom: 3 }]}>
-            • {listText}
-          </Text>
+          <View key={`list-${lineIndex}`} style={{ flexDirection: 'row', marginLeft: 12, marginBottom: 3 }}>
+            <Text style={styles.text}>• </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', flex: 1 }}>
+              {processedListText}
+            </View>
+          </View>
         );
         return;
       }
@@ -336,92 +482,25 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       if (line.match(/^\s*\d+\.\s/)) {
         const listText = line.replace(/^\s*\d+\.\s/, '');
         const number = line.match(/^\s*(\d+)\./)[1];
+        const processedListText = processTextFormatting(listText);
         elements.push(
-          <Text key={`numlist-${lineIndex}`} style={[styles.text, { marginLeft: 12, marginBottom: 3 }]}>
-            {number}. {listText}
-          </Text>
+          <View key={`numlist-${lineIndex}`} style={{ flexDirection: 'row', marginLeft: 12, marginBottom: 3 }}>
+            <Text style={styles.text}>{number}. </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', flex: 1 }}>
+              {processedListText}
+            </View>
+          </View>
         );
         return;
       }
 
-      // Handle formatting within text
-      const processFormattedText = (text) => {
-        // Handle bold text (**text**)
-        if (text.includes('**')) {
-          const parts = text.split(/(\*\*.*?\*\*)/g);
-          return parts.map((part, partIndex) => {
-            if (part.startsWith('**') && part.endsWith('**')) {
-              return (
-                <Text key={`bold-${partIndex}`} style={[styles.text, { fontWeight: 'bold' }]}>
-                  {part.slice(2, -2)}
-                </Text>
-              );
-            }
-            return part ? (
-              <Text key={`regular-${partIndex}`} style={styles.text}>
-                {part}
-              </Text>
-            ) : null;
-          }).filter(Boolean);
-        }
-
-        // Handle italic text (*text*)
-        if (text.includes('*') && !text.includes('**')) {
-          const parts = text.split(/(\*[^*]+\*)/g);
-          return parts.map((part, partIndex) => {
-            if (part.startsWith('*') && part.endsWith('*')) {
-              return (
-                <Text key={`italic-${partIndex}`} style={[styles.text, { fontStyle: 'italic' }]}>
-                  {part.slice(1, -1)}
-                </Text>
-              );
-            }
-            return part ? (
-              <Text key={`regular-${partIndex}`} style={styles.text}>
-                {part}
-              </Text>
-            ) : null;
-          }).filter(Boolean);
-        }
-
-        // Handle inline code (`code`)
-        if (text.includes('`')) {
-          const parts = text.split(/(`[^`]+`)/g);
-          return parts.map((part, partIndex) => {
-            if (part.startsWith('`') && part.endsWith('`')) {
-              return (
-                <Text key={`code-${partIndex}`} style={[styles.text, { 
-                  fontFamily: 'Courier',
-                  backgroundColor: '#f3f4f6',
-                  fontSize: 10,
-                  paddingHorizontal: 2
-                }]}>
-                  {part.slice(1, -1)}
-                </Text>
-              );
-            }
-            return part ? (
-              <Text key={`regular-${partIndex}`} style={styles.text}>
-                {part}
-              </Text>
-            ) : null;
-          }).filter(Boolean);
-        }
-
-        // Return plain text
-        return [<Text key="plain" style={styles.text}>{text}</Text>];
-      };
-
-      const formattedParts = processFormattedText(line);
-      if (formattedParts.length > 1) {
-        elements.push(
-          <View key={`line-${lineIndex}`} style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-            {formattedParts}
-          </View>
-        );
-      } else {
-        elements.push(formattedParts[0]);
-      }
+      // Apply text formatting to any text content
+      const processedText = processTextFormatting(line);
+      elements.push(
+        <View key={`line-${lineIndex}`} style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+          {processedText}
+        </View>
+      );
     });
 
     // Flush any remaining table
@@ -482,12 +561,22 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
 
   // Helper function to render an image with proper error handling
   const renderImage = (imageData, caption) => {
-    if (!imageData?.data?.[0]) return null;
+    console.log('[PDF] Attempting to render image:', imageData);
+    
+    if (!imageData?.data?.[0]) {
+      console.log('[PDF] No image data found');
+      return null;
+    }
 
     const image = imageData.data[0];
     const imageSource = image.url || image.imageURL || image.imageDataURI || image.imageBase64Data;
-
-    if (!imageSource) return null;
+    
+    console.log('[PDF] Image source:', imageSource);
+    
+    if (!imageSource) {
+      console.log('[PDF] No valid image source found');
+      return null;
+    }
 
     return (
       <View style={styles.imageContainer}>
