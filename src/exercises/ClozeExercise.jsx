@@ -113,6 +113,14 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         console.log('[CLOZE] Image data received:', imageData);
         
         setGeneratedImage(imageData);
+        
+        // Store image in global store for PDF export
+        if (window.globalImageStore && idPrefix) {
+          const exerciseIndex = idPrefix.split(':').pop(); // Extract index from idPrefix
+          const imageKey = `cloze:${exerciseIndex}`;
+          window.globalImageStore[imageKey] = imageData;
+          console.log('[CLOZE] Stored image in global store:', imageKey, imageData);
+        }
       } catch (error) {
         // Silently fail - image generation is optional
         console.log('[CLOZE] Image generation failed:', error.message);
@@ -122,7 +130,7 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
     };
     
     generateContextualImage();
-  }, [sanitizedItem?.title, sanitizedItem?.passage, imageGenerationEnabled]); // Only depend on the actual values, not the entire object
+  }, [sanitizedItem?.title, sanitizedItem?.passage, imageGenerationEnabled, idPrefix]); // Added idPrefix dependency
   
   const parts = splitByBlanks(sanitizedItem?.passage || '');
   const blanks = Array.isArray(sanitizedItem?.blanks) ? sanitizedItem.blanks : [];

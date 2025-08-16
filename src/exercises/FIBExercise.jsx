@@ -91,9 +91,9 @@ export async function generateFIB(topic, count = 5, languageContext = { language
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
   
-  const system = `Generate ${languageName} fill-in-the-blank exercises with exactly five underscores (_____) for blanks. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+  const system = `Generate ${languageName} language fill-in-the-blank exercises with exactly five underscores (_____) for blanks. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
   
-  const user = `Create exactly ${count} ${languageName} fill-in-the-blank exercises about: ${topic}.
+  const user = `Create exactly ${count} ${languageName} language fill-in-the-blank exercises about: ${topic}.
 
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
@@ -107,6 +107,7 @@ Rules:
 - If exercise is simple, you can provide fewer hints or make the third hint show first letters
 - "context" field is optional - include interesting cultural notes, regional differences, or usage tips when relevant
 - Make exercises progressively harder
+- The exercises are to be in the target language, which is ${languageName}
 - Ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}`;
 
   const schema = {

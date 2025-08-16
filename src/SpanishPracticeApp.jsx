@@ -8,6 +8,7 @@ import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExerc
 import { generateExplanation } from './exercises/ExplanationComponent.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
+import PDFExport from './components/PDFExport.jsx';
 
 const SpanishPracticeApp = () => {
   // Language and level context
@@ -269,10 +270,15 @@ const SpanishPracticeApp = () => {
   const renderLessonPanel = () => (
     lesson && (
       <div className="border rounded-lg p-4 space-y-3">
-        <h2 className="text-xl font-semibold text-gray-800">Lesson: {lesson.topic}</h2>
-        {lesson.pedagogy?.strategy_notes && (
-          <p className="text-sm text-gray-600">Approach: scaffolded+spiral — {lesson.pedagogy.strategy_notes}</p>
-        )}
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Lesson: {lesson.topic}</h2>
+            {lesson.pedagogy?.strategy_notes && (
+              <p className="text-sm text-gray-600">Approach: scaffolded+spiral — {lesson.pedagogy.strategy_notes}</p>
+            )}
+          </div>
+          <PDFExport lesson={lesson} orchestratorValues={orchestratorValues} strictAccents={strictAccents} />
+        </div>
         {/* On-demand exercise generation controls inside the lesson */}
         <div className="mt-3 p-3 bg-gray-50 rounded">
           <div className="font-semibold text-gray-800 mb-2">Add content</div>

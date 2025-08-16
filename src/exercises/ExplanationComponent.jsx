@@ -78,7 +78,7 @@ export async function generateExplanation(topic, languageContext = { language: '
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
   
-  const system = `You are a language pedagogy expert. Provide a concise, insightful explanation of a ${languageName} grammar concept with examples. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.`;
+  const system = `You are a language pedagogy expert. Provide a concise, insightful explanation of a ${languageName} grammar concept with examples. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.\n Explanations should be in the target language, with the target level of difficulty. If necessary, depending on the user's level, you may include translations in English.`;
 
   const normalizeTopic = (input) => {
     if (typeof input === 'string') return input.trim();
