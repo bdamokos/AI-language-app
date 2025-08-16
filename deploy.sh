@@ -219,8 +219,24 @@ follow_logs() {
     echo "💡 Press Ctrl+C to exit log following"
     echo ""
     
-    # Use -t flag for interactive terminal to properly handle Ctrl+C
-    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -t $REMOTE_USER@$REMOTE_HOST "cd $DEPLOY_PATH && docker-compose logs -f app"
+    # Stream logs reliably without relying on interactive TTY and with robust compose detection
+    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST '
+        set -e
+        cd "'$DEPLOY_PATH'"
+        if docker compose version >/dev/null 2>&1; then
+            docker compose logs --follow app | cat
+        elif command -v docker-compose >/dev/null 2>&1; then
+            docker-compose logs --follow app | cat
+        else
+            echo "❌ Neither docker compose nor docker-compose is available; attempting docker logs fallback" >&2
+            CID=$(docker ps -q --filter name=app | head -n1)
+            if [ -n "$CID" ]; then
+                docker logs -f "$CID" | cat
+            else
+                echo "❌ Could not find a running container for 'app'" >&2
+                exit 1
+            fi
+        fi'
 }
 
 
@@ -326,71 +342,51 @@ echo "📦 Copying deployment files to remote server..."
 run_ssh "mkdir -p $DEPLOY_PATH"
 run_scp docker-compose.yml .env $REMOTE_USER@$REMOTE_HOST:$DEPLOY_PATH/
 
-# Run deployment commands on remote server
 echo "🔄 Running deployment on remote server..."
-run_ssh "
-    set -e
-    cd $DEPLOY_PATH
-    
-    # Load environment variables
-    set -a
-    source .env
-    set +a
-    
-    echo \"📁 Setting up LanguageAIApp deployment...\"
-    
-    # Ensure persistent cache directory exists with proper permissions
-    sudo mkdir -p "$CACHE_HOST_DIR"
-    sudo chmod 775 "$CACHE_HOST_DIR" || true
-    echo "📁 Ensured persistent cache directory exists at $CACHE_HOST_DIR"
+sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST" bash -s -- "$DEPLOY_PATH" "$CACHE_HOST_DIR" "$DEPLOY_PORT" <<'REMOTE_SCRIPT'
+set -e
+DEPLOY_PATH="$1"
+CACHE_HOST_DIR="$2"
+DEPLOY_PORT="$3"
 
-    # Check if docker-compose is available
-    if ! command -v docker-compose &> /dev/null; then
-        echo \"❌ Error: docker-compose not found on remote server\"
-        echo \"Please install docker-compose on your server:\"
-        echo \"  sudo apt update && sudo apt install docker-compose\"
-        exit 1
-    fi
-    
-    # Check if Docker is running
-    if ! docker info &> /dev/null; then
-        echo \"❌ Error: Docker is not running on remote server\"
-        echo \"Please start Docker service:\"
-        echo \"  sudo systemctl start docker\"
-        exit 1
-    fi
-    
+cd "$DEPLOY_PATH"
 
-    
-    # Pull latest image if using registry
-    if [ -n \"$REGISTRY_HOST\" ]; then
-        echo \"⬇️  Pulling latest image from registry...\"
-        docker-compose pull
-    fi
-    
-    # Stop existing containers
-    echo \"⏹️  Stopping existing containers...\"
-    docker-compose down
-    
-    # Start services
-    echo \"▶️  Starting services...\"
-    docker-compose up -d
-    
-    # Show status
-    echo \"📊 Deployment completed! Services status:\"
-    docker-compose ps
-    
-    echo \"\"
-    echo \"🌐 Application is running on:\"
-    echo \"  Main App: http://\$(hostname -I | awk '{print \$1}'):$DEPLOY_PORT\"
-    echo \"\"
-    
-    # Clean up dangling images on remote server
-    echo \"🧹 Cleaning up dangling Docker images on remote server...\"
-    docker image prune -f
-    echo \"✅ Docker cleanup completed\"
-    echo \"\"
-"
+set -a
+[ -f .env ] && . ./.env
+set +a
+
+echo "📁 Setting up LanguageAIApp deployment..."
+
+sudo mkdir -p "$CACHE_HOST_DIR"
+sudo chmod 775 "$CACHE_HOST_DIR" || true
+echo "📁 Ensured persistent cache directory exists at $CACHE_HOST_DIR"
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_CMD="docker-compose"
+else
+  echo "❌ Error: Neither 'docker compose' nor 'docker-compose' found on remote server"
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "❌ Error: Docker is not running on remote server"
+  exit 1
+fi
+
+echo "⬇️  Pulling latest image..."
+$COMPOSE_CMD pull || true
+
+echo "⏹️  Stopping existing containers..."
+$COMPOSE_CMD down || true
+
+echo "▶️  Starting services..."
+$COMPOSE_CMD up -d --remove-orphans
+
+echo "📊 Services status:"
+$COMPOSE_CMD ps
+REMOTE_SCRIPT
 
 echo ""
 echo "✅ Deployment completed successfully!"
