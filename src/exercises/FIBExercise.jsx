@@ -137,7 +137,13 @@ Rules:
       system,
       user,
       jsonSchema: schema,
-      schemaName: 'fib_list'
+      schemaName: 'fib_list',
+      metadata: {
+        language: languageName,
+        level,
+        challengeMode,
+        topic
+      }
     })
   });
 

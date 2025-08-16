@@ -587,7 +587,7 @@ function recoverItemsFromPartialJson(raw) {
 // Generic LLM generation endpoint (will be extended for persistent cache)
 app.post('/api/generate', async (req, res) => {
   try {
-    const { system, user, jsonSchema, schemaName } = req.body || {};
+    const { system, user, jsonSchema, schemaName, metadata } = req.body || {};
     if (!user || !String(user).trim()) return res.status(400).json({ error: 'User prompt is required' });
     
     // Identify type from schemaName
@@ -603,14 +603,15 @@ app.post('/api/generate', async (req, res) => {
     })();
 
     // Extract common context from prompt
+    // Prefer explicit metadata over regex parsing
     const languageMatch = user.match(/Target Language:\s*([^\n]+)/i);
     const levelMatch = user.match(/Target Level:\s*([^\n]+)/i);
-    const languageName = languageMatch ? languageMatch[1].trim() : 'unknown';
-    const levelRaw = levelMatch ? levelMatch[1].trim() : '';
-    const challengeMode = /slightly challenging/i.test(levelRaw);
-    const level = String(levelRaw).replace(/\(slightly challenging\)/i, '').trim() || 'unknown';
+    const languageName = (metadata?.language || (languageMatch ? languageMatch[1].trim() : '') || 'unknown');
+    const levelFromPrompt = levelMatch ? levelMatch[1].trim() : '';
+    const level = (metadata?.level || String(levelFromPrompt).replace(/\(slightly challenging\)/i, '').trim() || 'unknown');
+    const challengeMode = typeof metadata?.challengeMode === 'boolean' ? metadata.challengeMode : /slightly challenging/i.test(levelFromPrompt);
     const topicMatchGeneric = user.match(/about:\s*([^\n]+)/i);
-    const grammarTopic = (topicMatchGeneric ? topicMatchGeneric[1] : '').trim() || 'unknown';
+    const grammarTopic = (metadata?.topic || (topicMatchGeneric ? topicMatchGeneric[1] : '')).trim() || 'unknown';
     const currentModel = runtimeConfig.provider === 'openrouter' ? runtimeConfig.openrouter.model : runtimeConfig.ollama.model;
     const schemaVersion = schemaVersions[type] || (type === 'explanation' ? schemaVersions.explanation : 1);
     const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
@@ -690,13 +691,11 @@ app.post('/api/generate', async (req, res) => {
         ? runtimeConfig.openrouter.model 
         : runtimeConfig.ollama.model;
       const topicMatch = user.match(/Explain the grammar concept:\s*([^\.\n]+)/i);
-      const languageMatch = user.match(/Target Language:\s*([^\n]+)/i);
-      const levelMatch = user.match(/Target Level:\s*([^\n]+)/i);
-      const grammarConcept = topicMatch ? topicMatch[1].trim() : 'unknown';
-      const languageName = languageMatch ? languageMatch[1].trim() : 'unknown';
-      const levelRaw = levelMatch ? levelMatch[1].trim() : '';
-      const challengeMode = /slightly challenging/i.test(levelRaw);
+      const languageName = metadata?.language || (user.match(/Target Language:\s*([^\n]+)/i)?.[1]?.trim() || 'unknown');
+      const levelRaw = metadata?.level || (user.match(/Target Level:\s*([^\n]+)/i)?.[1]?.trim() || '');
+      const challengeMode = typeof metadata?.challengeMode === 'boolean' ? metadata.challengeMode : /slightly challenging/i.test(levelRaw);
       const level = String(levelRaw).replace(/\(slightly challenging\)/i, '').trim() || 'unknown';
+      const grammarConcept = (metadata?.topic || (topicMatch ? topicMatch[1].trim() : '') || 'unknown');
       const schemaVersion = schemaVersions.explanation || 1;
       const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
       const promptSha12 = promptSha.slice(0, 12);
@@ -740,13 +739,11 @@ app.post('/api/generate', async (req, res) => {
           ? runtimeConfig.openrouter.model 
           : runtimeConfig.ollama.model;
         const topicMatch = user.match(/Explain the grammar concept:\s*([^\.\n]+)/i);
-        const languageMatch = user.match(/Target Language:\s*([^\n]+)/i);
-        const levelMatch = user.match(/Target Level:\s*([^\n]+)/i);
-        const grammarConcept = topicMatch ? topicMatch[1].trim() : 'unknown';
-        const languageName = languageMatch ? languageMatch[1].trim() : 'unknown';
-        const levelRaw = levelMatch ? levelMatch[1].trim() : '';
-        const challengeMode = /slightly challenging/i.test(levelRaw);
+        const languageName = metadata?.language || (user.match(/Target Language:\s*([^\n]+)/i)?.[1]?.trim() || 'unknown');
+        const levelRaw = metadata?.level || (user.match(/Target Level:\s*([^\n]+)/i)?.[1]?.trim() || '');
+        const challengeMode = typeof metadata?.challengeMode === 'boolean' ? metadata.challengeMode : /slightly challenging/i.test(levelRaw);
         const level = String(levelRaw).replace(/\(slightly challenging\)/i, '').trim() || 'unknown';
+        const grammarConcept = (metadata?.topic || (topicMatch ? topicMatch[1].trim() : '') || 'unknown');
         const schemaVersion = schemaVersions.explanation || 1;
         const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
         const promptSha12 = promptSha.slice(0, 12);

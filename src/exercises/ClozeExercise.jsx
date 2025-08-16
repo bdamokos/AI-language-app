@@ -453,7 +453,13 @@ The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: e
       system,
       user,
       jsonSchema: schema,
-      schemaName: `cloze_single_${passageNumber || 'passage'}`
+      schemaName: `cloze_single_${passageNumber || 'passage'}`,
+      metadata: {
+        language: languageName,
+        level,
+        challengeMode,
+        topic
+      }
     })
   });
 

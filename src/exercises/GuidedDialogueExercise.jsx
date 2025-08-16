@@ -148,7 +148,13 @@ Requirements:
       system,
       user,
       jsonSchema: schema,
-      schemaName: 'guided_dialogues_list'
+      schemaName: 'guided_dialogues_list',
+      metadata: {
+        language: languageName,
+        level,
+        challengeMode,
+        topic
+      }
     })
   });
 

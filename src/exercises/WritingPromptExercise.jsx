@@ -110,7 +110,13 @@ For each set:
       system,
       user,
       jsonSchema: schema,
-      schemaName: 'writing_prompts_list'
+      schemaName: 'writing_prompts_list',
+      metadata: {
+        language: languageName,
+        level,
+        challengeMode,
+        topic
+      }
     })
   });
 

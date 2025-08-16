@@ -111,7 +111,13 @@ Keep it 200-600 words and ensure vocabulary and grammar complexity matches ${lev
       system,
       user,
       jsonSchema: schema,
-      schemaName: 'explanation'
+      schemaName: 'explanation',
+      metadata: {
+        language: languageName,
+        level,
+        challengeMode,
+        topic: safeTopic
+      }
     })
   });
 

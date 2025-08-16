@@ -96,7 +96,13 @@ Include plausible distractors and ensure vocabulary and grammar complexity match
       system,
       user,
       jsonSchema: schema,
-      schemaName: 'mcq_list'
+      schemaName: 'mcq_list',
+      metadata: {
+        language: languageName,
+        level,
+        challengeMode,
+        topic
+      }
     })
   });
 
