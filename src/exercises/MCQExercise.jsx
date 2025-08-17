@@ -64,6 +64,8 @@ export async function generateMCQ(topic, count = 5, languageContext = { language
 
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
+Choose real world sentences, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+
 Include plausible distractors and ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}.`;
 
   const schema = {

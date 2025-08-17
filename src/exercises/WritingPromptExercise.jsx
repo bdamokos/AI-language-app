@@ -77,6 +77,7 @@ For each set:
 - Include 3-5 open-ended questions (prompts) that encourage use of the target grammar or vocabulary
 - Provide a concise studentInstructions string
 - Include example_answers with short sample responses (one per prompt) to show expected complexity and style
+- Choose real world themes, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
 - Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}`;
 
   const schema = {

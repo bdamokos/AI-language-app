@@ -108,6 +108,7 @@ Requirements:
 - Provide suggested_hide_speaker indicating which speaker’s lines would be best to hide pedagogically
 - Provide 1-2 short hints that guide the student without giving away the full answers
 - Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}
+- Choose real world sentences, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
 - Keep content age-appropriate and culturally relevant`;
 
   const schema = {
