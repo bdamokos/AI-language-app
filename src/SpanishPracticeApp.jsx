@@ -748,7 +748,7 @@ const SpanishPracticeApp = () => {
                 <div className="text-center py-12">
                   <RefreshCw className="animate-spin mx-auto text-blue-600 mb-4" size={32} />
                   <h3 className="text-xl font-semibold text-gray-800 mb-2">Generating your lesson...</h3>
-                  <p className="text-gray-600">Creating explanation and exercises for "{topic}"</p>
+                  <p className="text-gray-600">Creating explanation  for "{topic}". Once the explanation loads, you can create on-demand exercises using the buttons at the top and check your answers at the bottom.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
