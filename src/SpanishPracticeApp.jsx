@@ -957,6 +957,8 @@ const SpanishPracticeApp = () => {
                   <RefreshCw className="animate-spin mx-auto text-blue-600 mb-4" size={32} />
                   <h3 className="text-xl font-semibold text-gray-800 mb-2">Generating your lesson...</h3>
                   <p className="text-gray-600">Creating explanation  for "{topic}". Once the explanation loads, you can create on-demand exercises using the buttons at the top and check your answers at the bottom.</p>
+                  <p className="text-gray-600">Please be aware that the AI may create gibberish or plausible sounding but incorrect content. Please check the explanation and exercises carefully.</p>
+                  <p className="text-gray-600">Please note that loading may take 15-30 seconds as we are using cheap or free models.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
