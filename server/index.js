@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
@@ -652,6 +652,7 @@ app.post('/api/generate', async (req, res) => {
       let resultItems = cachedItems.map(r => {
         const it = { ...r.content };
         if (r.localImageUrl) it.localImageUrl = r.localImageUrl;
+        if (r.groupId) it.exerciseGroupId = r.groupId;
         return it;
       });
       let resultShas = cachedShas;
@@ -679,9 +680,18 @@ app.post('/api/generate', async (req, res) => {
         }
         const generated = Array.isArray(parsed?.items) ? parsed.items : [];
         const toAdd = generated.slice(0, need);
-        const perTypeLimit = Number(process.env.CACHE_EXERCISES_PER_TYPE_MAX || 100);
-        const addedShas = await addExercisesToPool(cacheLayout, { type, poolKey, bucketKey, language: languageName, level, challengeMode, grammarTopic, model: currentModel, schemaVersion }, toAdd, perTypeLimit);
-        resultItems = resultItems.concat(toAdd);
+        const baseLimit = Number(process.env.CACHE_EXERCISES_PER_TYPE_MAX || 100);
+        const factor = (() => {
+          switch (type) {
+            case 'fib': return Number(process.env.CACHE_PER_TYPE_FACTOR_FIB || 10);
+            case 'mcq': return Number(process.env.CACHE_PER_TYPE_FACTOR_MCQ || 5);
+            default: return 1;
+          }
+        })();
+        const perTypeLimit = Math.max(baseLimit, Math.floor(baseLimit * (Number.isFinite(factor) && factor > 0 ? factor : 1)));
+        const { addedShas, groupId } = await addExercisesToPool(cacheLayout, { type, poolKey, bucketKey, language: languageName, level, challengeMode, grammarTopic, model: currentModel, schemaVersion }, toAdd, perTypeLimit);
+        // Attach groupId to items so frontend can rate the batch
+        resultItems = resultItems.concat(toAdd.map(it => ({ ...it, exerciseGroupId: groupId })));
         resultShas = resultShas.concat(addedShas);
       }
 
@@ -720,7 +730,8 @@ app.post('/api/generate', async (req, res) => {
       const rec = await getExplanation(cacheLayout, explanationPersistentKey);
       if (rec && rec.content) {
         console.log(`[CACHE HIT] explanation ${grammarConcept} | model=${currentModel} | v=${schemaVersion}`);
-        return res.json(rec.content);
+        const withKey = { ...rec.content, _cacheKey: explanationPersistentKey };
+        return res.json(withKey);
       }
     }
     
@@ -773,6 +784,10 @@ app.post('/api/generate', async (req, res) => {
       }
     }
     
+    if (isExplanation && explanationPersistentKey) {
+      const withKey = { ...parsed, _cacheKey: explanationPersistentKey };
+      return res.json(withKey);
+    }
     return res.json(parsed);
   } catch (err) {
     console.error(err);
@@ -846,6 +861,33 @@ Use markdown formatting for clarity (bold for **important terms**, code blocks f
     console.error(err);
     const status = /Missing/i.test(err?.message || '') ? 400 : 500;
     return res.status(status).json({ error: 'Failed to get explanation', details: err?.message, provider: runtimeConfig.provider });
+  }
+});
+
+// Ratings: explanations and exercise groups
+app.post('/api/rate/explanation', async (req, res) => {
+  try {
+    if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
+    const { key, like } = req.body || {};
+    if (typeof key !== 'string' || !key.startsWith('exp:')) return res.status(400).json({ error: 'Invalid explanation key' });
+    const ok = await rateExplanation(cacheLayout, key, like !== false);
+    if (!ok) return res.status(404).json({ error: 'Explanation not found' });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || 'Failed to rate explanation' });
+  }
+});
+
+app.post('/api/rate/exercise-group', async (req, res) => {
+  try {
+    if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
+    const { groupId, like } = req.body || {};
+    if (typeof groupId !== 'string' || !/^[a-f0-9]{8,32}$/i.test(groupId)) return res.status(400).json({ error: 'Invalid groupId' });
+    const ok = await rateExerciseGroup(cacheLayout, groupId, like !== false);
+    if (!ok) return res.status(404).json({ error: 'Group not found' });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || 'Failed to rate exercise group' });
   }
 });
 

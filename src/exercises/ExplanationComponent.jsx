@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -9,6 +10,20 @@ import remarkGfm from 'remark-gfm';
  */
 export default function ExplanationComponent({ explanation }) {
   if (!explanation) return null;
+  const [voted, setVoted] = useState(null);
+  const cacheKey = explanation._cacheKey;
+
+  const sendVote = async (like) => {
+    if (!cacheKey || voted !== null) return;
+    setVoted(like ? 'up' : 'down');
+    try {
+      await fetch('/api/rate/explanation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cacheKey, like })
+      });
+    } catch {}
+  };
 
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 mb-4">
@@ -63,6 +78,30 @@ export default function ExplanationComponent({ explanation }) {
           {explanation.content_markdown}
         </ReactMarkdown>
       </div>
+      {cacheKey && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-slate-600">
+          <span>Was this helpful?</span>
+          <button
+            type="button"
+            onClick={() => sendVote(true)}
+            disabled={voted !== null}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${voted === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-slate-300 hover:bg-slate-100'}`}
+            aria-label="Thumbs up"
+          >
+            <ThumbsUp size={14} /> Like
+          </button>
+          <button
+            type="button"
+            onClick={() => sendVote(false)}
+            disabled={voted !== null}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${voted === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-slate-300 hover:bg-slate-100'}`}
+            aria-label="Thumbs down"
+          >
+            <ThumbsDown size={14} /> Dislike
+          </button>
+          {voted && <span className="ml-1">Thanks for the feedback!</span>}
+        </div>
+      )}
     </div>
   );
 }

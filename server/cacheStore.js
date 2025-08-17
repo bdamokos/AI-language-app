@@ -20,7 +20,7 @@ export async function ensureCacheLayout(cacheDir) {
   await fs.mkdir(imagesDir, { recursive: true });
   // Seed empty indexes if missing
   await seedIndexIfMissing(path.join(explanationsDir, 'index.json'), { items: {}, stats: {} });
-  await seedIndexIfMissing(path.join(exercisesDir, 'index.json'), { items: {}, pools: {}, buckets: {}, stats: {} });
+  await seedIndexIfMissing(path.join(exercisesDir, 'index.json'), { items: {}, pools: {}, buckets: {}, groups: {}, stats: {} });
   await seedIndexIfMissing(path.join(imagesDir, 'index.json'), { items: {} });
   return { explanationsDir, explanationItemsDir, exercisesDir, exerciseItemsDir, imagesDir };
 }
@@ -135,10 +135,12 @@ export async function setExplanation(layout, cacheKey, meta, content, maxCapacit
     content,
     createdAt: now,
     lastAccessAt: now,
-    hits: 0
+    hits: 0,
+    likes: 0,
+    dislikes: 0
   };
   await writeJson(filePath, record);
-  idx.items[cacheKey] = { file: fileBase, createdAt: now, lastAccessAt: now, hits: 0, meta };
+  idx.items[cacheKey] = { file: fileBase, createdAt: now, lastAccessAt: now, hits: 0, likes: 0, dislikes: 0, meta };
   idx.lru = (idx.lru || []).filter(k => k !== cacheKey);
   idx.lru.push(cacheKey);
   // Prune LRU if over capacity
@@ -158,7 +160,7 @@ export async function setExplanation(layout, cacheKey, meta, content, maxCapacit
 // -----------------------------
 
 function buildExercisesIndexDefaults() {
-  return { items: {}, pools: {}, buckets: {}, lru: [] };
+  return { items: {}, pools: {}, buckets: {}, groups: {}, lru: [] };
 }
 
 export async function loadExercisesIndex(layout) {
@@ -167,6 +169,7 @@ export async function loadExercisesIndex(layout) {
   idx.items = idx.items || {};
   idx.pools = idx.pools || {};
   idx.buckets = idx.buckets || {};
+  idx.groups = idx.groups || {};
   idx.lru = idx.lru || [];
   return idx;
 }
@@ -190,20 +193,56 @@ export async function readExerciseItem(layout, exerciseSha) {
   return await readJson(filePath, null);
 }
 
-export function pickUnseen(shas, seenSet, count) {
+function computeWeightFromCounts(likes, dislikes) {
+  const l = Number(likes || 0);
+  const d = Number(dislikes || 0);
+  const total = l + d;
+  if (total <= 0) return 1.0;
+  const ratio = l / total;
+  return Math.max(0.25, Math.min(1.0, ratio));
+}
+
+function computeWeightForGroup(group) {
+  if (!group) return 1.0;
+  return computeWeightFromCounts(group.likes, group.dislikes);
+}
+
+export function pickUnseenWeighted(shas, seenSet, idx, count) {
   const unseen = shas.filter(s => !seenSet.has(s.slice(0, 12)));
-  // Shuffle a copy
-  for (let i = unseen.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [unseen[i], unseen[j]] = [unseen[j], unseen[i]];
+  if (unseen.length <= count) return unseen;
+  // Build weights by group ratings
+  const weights = unseen.map(sha => {
+    const item = idx.items[sha] || {};
+    if (typeof item.likes === 'number' || typeof item.dislikes === 'number') {
+      return computeWeightFromCounts(item.likes, item.dislikes);
+    }
+    const groupId = item.groupId;
+    const group = groupId ? idx.groups[groupId] : null;
+    return computeWeightForGroup(group);
+  });
+  const chosen = [];
+  const items = unseen.slice();
+  const w = weights.slice();
+  for (let k = 0; k < count && items.length > 0; k++) {
+    const totalW = w.reduce((a, b) => a + b, 0) || 0;
+    let r = Math.random() * (totalW || 1);
+    let idxPick = 0;
+    for (let i = 0; i < w.length; i++) {
+      r -= w[i];
+      if (r <= 0) { idxPick = i; break; }
+      if (i === w.length - 1) idxPick = i;
+    }
+    chosen.push(items[idxPick]);
+    items.splice(idxPick, 1);
+    w.splice(idxPick, 1);
   }
-  return unseen.slice(0, count);
+  return chosen;
 }
 
 export async function selectUnseenFromPool(layout, poolKey, seenSet, count) {
   const idx = await loadExercisesIndex(layout);
   const poolList = idx.pools[poolKey] || [];
-  const chosen = pickUnseen(poolList, seenSet, count);
+  const chosen = pickUnseenWeighted(poolList, seenSet, idx, count);
   const items = [];
   for (const sha of chosen) {
     const rec = await readExerciseItem(layout, sha);
@@ -262,11 +301,14 @@ async function evictFromBucketIfNeeded(layout, idx, bucketKey, perTypeLimit) {
   }
 }
 
-export async function addExercisesToPool(layout, { type, poolKey, bucketKey, language, level, challengeMode, grammarTopic, model, schemaVersion }, items, perTypeLimit = 100) {
+export async function addExercisesToPool(layout, { type, poolKey, bucketKey, language, level, challengeMode, grammarTopic, model, schemaVersion }, items, perTypeLimit = 100, groupIdInput = null) {
   const idx = await loadExercisesIndex(layout);
   const now = new Date().toISOString();
   idx.pools[poolKey] = idx.pools[poolKey] || [];
   idx.buckets[bucketKey] = idx.buckets[bucketKey] || [];
+  const groupId = groupIdInput || sha256Hex(`${type}:${language}:${level}:${challengeMode}:${grammarTopic || ''}:${model}:${schemaVersion}:${now}:${Math.random()}`).slice(0, 16);
+  // Initialize group meta
+  idx.groups[groupId] = idx.groups[groupId] || { type, poolKey, meta: { language, level, challengeMode, grammarTopic, model, schemaVersion }, itemShas: [], createdAt: now, likes: 0, dislikes: 0 };
   const addedShas = [];
   for (const content of items) {
     const exerciseSha = sha256Hex(JSON.stringify(content) + `\n${type}\n${language}\n${level}\n${model}\n${schemaVersion}`);
@@ -280,14 +322,16 @@ export async function addExercisesToPool(layout, { type, poolKey, bucketKey, lan
       content,
       createdAt: now,
       lastAccessAt: now,
-      hits: 0
+      hits: 0,
+      groupId
     };
     try {
       await writeJson(filePath, record);
     } catch {}
-    idx.items[exerciseSha] = { file, type, createdAt: now, lastAccessAt: now, hits: 0, meta: record.meta };
+    idx.items[exerciseSha] = { file, type, createdAt: now, lastAccessAt: now, hits: 0, likes: 0, dislikes: 0, meta: record.meta, groupId };
     if (!idx.pools[poolKey].includes(exerciseSha)) idx.pools[poolKey].push(exerciseSha);
     if (!idx.buckets[bucketKey].includes(exerciseSha)) idx.buckets[bucketKey].push(exerciseSha);
+    if (!idx.groups[groupId].itemShas.includes(exerciseSha)) idx.groups[groupId].itemShas.push(exerciseSha);
     addedShas.push(exerciseSha);
   }
   // Enforce per-type bucket cap (global per type/language/level/challenge/grammarTopic)
@@ -301,7 +345,7 @@ export async function addExercisesToPool(layout, { type, poolKey, bucketKey, lan
     idx.stats[statKey] = s;
   } catch {}
   await saveExercisesIndex(layout, idx);
-  return addedShas;
+  return { addedShas, groupId };
 }
 
 export async function updateExerciseRecord(layout, exerciseSha, updater) {
@@ -374,6 +418,64 @@ export async function incrementExerciseHits(layout, type, language, level, chall
   s.hits = (s.hits || 0) + (Number(count) || 0);
   idx.stats[key] = s;
   await saveExercisesIndex(layout, idx);
+}
+
+
+// -----------------------------
+// Ratings: explanations and exercise groups
+// -----------------------------
+
+export async function rateExplanation(layout, cacheKey, isLike = true) {
+  try {
+    const indexPath = path.join(layout.explanationsDir, 'index.json');
+    const idx = (await readJson(indexPath)) || { items: {} };
+    if (!idx.items[cacheKey]) return false;
+    const entry = idx.items[cacheKey];
+    entry.likes = Number(entry.likes || 0) + (isLike ? 1 : 0);
+    entry.dislikes = Number(entry.dislikes || 0) + (!isLike ? 1 : 0);
+    idx.items[cacheKey] = entry;
+    await writeJson(indexPath, idx);
+    // Update record file too, if exists
+    try {
+      const filePath = path.join(layout.explanationsDir, 'items', entry.file);
+      const rec = (await readJson(filePath)) || {};
+      rec.likes = Number(rec.likes || 0) + (isLike ? 1 : 0);
+      rec.dislikes = Number(rec.dislikes || 0) + (!isLike ? 1 : 0);
+      await writeJson(filePath, rec);
+    } catch {}
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function rateExerciseGroup(layout, groupId, isLike = true) {
+  const idx = await loadExercisesIndex(layout);
+  if (!idx.groups[groupId]) return false;
+  const g = idx.groups[groupId];
+  g.likes = Number(g.likes || 0) + (isLike ? 1 : 0);
+  g.dislikes = Number(g.dislikes || 0) + (!isLike ? 1 : 0);
+  idx.groups[groupId] = g;
+  // Also roll the rating down to each contained item in the index for fast weighting
+  const itemShas = Array.isArray(g.itemShas) ? g.itemShas : [];
+  for (const sha of itemShas) {
+    if (!idx.items[sha]) continue;
+    const it = idx.items[sha];
+    it.likes = Number(it.likes || 0) + (isLike ? 1 : 0);
+    it.dislikes = Number(it.dislikes || 0) + (!isLike ? 1 : 0);
+    idx.items[sha] = it;
+    // Update item file too (best-effort)
+    try {
+      const file = makeExerciseFileName(sha);
+      const filePath = path.join(layout.exerciseItemsDir, file);
+      const rec = (await readJson(filePath)) || {};
+      rec.likes = Number(rec.likes || 0) + (isLike ? 1 : 0);
+      rec.dislikes = Number(rec.dislikes || 0) + (!isLike ? 1 : 0);
+      await writeJson(filePath, rec);
+    } catch {}
+  }
+  await saveExercisesIndex(layout, idx);
+  return true;
 }
 
 

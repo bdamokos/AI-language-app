@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
+import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import FIBExercise, { scoreFIB, generateFIB } from './FIBExercise.jsx';
 import MCQExercise, { scoreMCQ, generateMCQ } from './MCQExercise.jsx';
 import ClozeExercise, { scoreCloze, generateCloze } from './ClozeExercise.jsx';
@@ -19,6 +20,7 @@ import { normalizeText } from './utils.js';
  * - idBase: string (namespace prefix)
  */
 export default function Orchestrator({ lesson, values, onChange, checked, strictAccents = true, idBase = 'lesson', onFocusKey }) {
+  const [ratedGroups, setRatedGroups] = useState({});
   const sections = useMemo(() => {
     const arr = [];
     if (Array.isArray(lesson?.fill_in_blanks)) arr.push(['fib', lesson.fill_in_blanks]);
@@ -50,34 +52,148 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
               const newValue = type === 'mcq' ? subKey : { ...(val || {}), [String(subKey)]: subVal };
               onChange(keyPrefix, newValue);
             };
+            const groupId = item?.exerciseGroupId; // present when pulled from cache or freshly added
+            const hasGroup = typeof groupId === 'string' && groupId.length > 0;
+            const hasAnyGroupInSection = items.some(it => typeof it?.exerciseGroupId === 'string' && it.exerciseGroupId);
+            const alreadyRated = hasGroup && ratedGroups[groupId];
+            const sendGroupVote = async (like) => {
+              if (!hasGroup || alreadyRated) return;
+              setRatedGroups(prev => ({ ...prev, [groupId]: like ? 'up' : 'down' }));
+              try {
+                await fetch('/api/rate/exercise-group', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ groupId, like })
+                });
+              } catch {}
+            };
+            const currentGroup = groupId || null;
+            const nextGroup = idx < items.length - 1 ? (items[idx + 1]?.exerciseGroupId || null) : null;
+            const isGroupEnd = hasGroup && (idx === items.length - 1 || nextGroup !== currentGroup);
             if (type === 'fib') {
               return (
-                <FIBExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                <div key={keyPrefix} className="space-y-2">
+                  <FIBExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button
+                        type="button"
+                        onClick={() => sendGroupVote(true)}
+                        disabled={alreadyRated}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`}
+                        aria-label="Thumbs up"
+                      >
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => sendGroupVote(false)}
+                        disabled={alreadyRated}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`}
+                        aria-label="Thumbs down"
+                      >
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
               );
             }
             if (type === 'mcq') {
               return (
-                <MCQExercise key={keyPrefix} item={item} value={typeof val === 'number' ? val : null} onChange={(i) => onChange(keyPrefix, i)} checked={checked} idPrefix={keyPrefix} />
+                <div key={keyPrefix} className="space-y-2">
+                  <MCQExercise item={item} value={typeof val === 'number' ? val : null} onChange={(i) => onChange(keyPrefix, i)} checked={checked} idPrefix={keyPrefix} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
               );
             }
             if (type === 'cloze') {
               return (
-                <ClozeExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                <div key={keyPrefix} className="space-y-2">
+                  <ClozeExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
               );
             }
             if (type === 'clozeMix') {
               return (
-                <ClozeMixedExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} />
+                <div key={keyPrefix} className="space-y-2">
+                  <ClozeMixedExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
               );
             }
             if (type === 'dialogue') {
               return (
-                <GuidedDialogueExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                <div key={keyPrefix} className="space-y-2">
+                  <GuidedDialogueExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
               );
             }
             if (type === 'writing') {
               return (
-                <WritingPromptExercise key={keyPrefix} item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                <div key={keyPrefix} className="space-y-2">
+                  <WritingPromptExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
               );
             }
             return null;
