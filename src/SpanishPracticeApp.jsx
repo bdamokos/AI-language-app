@@ -519,6 +519,8 @@ const SpanishPracticeApp = () => {
     if (!topicToUse) return;
     setLoadingLesson(true);
     setErrorMsg('');
+    // Ensure newly generated lesson starts unchecked
+    setSubmitted(false);
     setLesson(null);
     try {
       // Only generate explanation initially - exercises generated on-demand
@@ -557,6 +559,10 @@ const SpanishPracticeApp = () => {
   });
 
   const mergeLesson = (partial) => {
+    // If we are adding any new exercises, reset checked state so they render unsubmitted
+    const addsExercises = ['fill_in_blanks', 'multiple_choice', 'cloze_passages', 'cloze_with_mixed_options', 'guided_dialogues', 'writing_prompts', 'reading_comprehension']
+      .some(k => Array.isArray(partial?.[k]) && partial[k].length > 0);
+
     setLesson(prev => {
       const base = prev || ensureLessonSkeleton();
       const next = { ...base };
@@ -572,6 +578,9 @@ const SpanishPracticeApp = () => {
       if (partial?.topic) next.topic = partial.topic;
       return next;
     });
+    if (addsExercises) {
+      setSubmitted(false);
+    }
   };
 
   const generateExplanationOnly = async () => {
