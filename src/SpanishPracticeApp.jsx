@@ -51,7 +51,8 @@ const SpanishPracticeApp = () => {
   const [writingCount, setWritingCount] = useState(2);
 
   // Onboarding / tour state
-  const [isTourRunning, setIsTourRunning] = useState(false);
+  const [isPreTourRunning, setIsPreTourRunning] = useState(false);
+  const [isPostTourRunning, setIsPostTourRunning] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const ONBOARDING_VERSION = String(schemaVersions?.onboarding ?? 1);
   const ONBOARDING_COOKIE_NAME = 'onboarding_version';
@@ -74,10 +75,48 @@ const SpanishPracticeApp = () => {
     return v === ONBOARDING_VERSION;
   };
 
-  const tourSteps = [
+  const preTourSteps = [
+    {
+      target: '#language-selector-root',
+      content: 'Welcome! Let\'s set up your lesson. We\'ll choose a language, level, and topic, then generate an explanation and practice exercises.',
+      placement: 'center'
+    },
+    {
+      target: '#popular-languages',
+      content: 'Pick a popular language here, or enter any language below if yours isn\'t listed.',
+      placement: 'bottom'
+    },
+    {
+      target: '#custom-language',
+      content: 'Want a different language? Type it here. The app works with any language the AI can handle.',
+      placement: 'top'
+    },
+    {
+      target: '#level-selection',
+      content: 'Select your CEFR level. This controls difficulty. You can enable Challenge Mode next to push yourself a bit.',
+      placement: 'left'
+    },
+    {
+      target: '#challenge-mode',
+      content: 'Toggle Challenge Mode for slightly more difficult content than your chosen level.',
+      placement: 'top'
+    },
+    {
+      target: '#topic-input',
+      content: 'Enter a practice topic. Tip: try "past tense" or something specific (e.g., "preterite tense", "vocuabulary for checking in to a hotel", etc.).',
+      placement: 'top'
+    },
+    {
+      target: '#start-lesson-button',
+      content: 'All set! Click here to generate your lesson and explanation. The tutorial will continue on the lesson page. \n \n Please be aware that the AI may create gibberish or plausible sounding but incorrect content. Please check the explanation and exercises carefully.',
+      placement: 'top'
+    }
+  ];
+
+  const postTourSteps = [
     {
       target: '#exercise-generation-controls',
-      content: 'Use these buttons to generate exercises on the fly. They will appear below the explanation. You can generate new sets as many times as you like. <br><br> (Be conscious of the AI costs, this is a hobby project :) Generation may take some time as we are using cheap or free models.)',
+      content: 'Use these buttons to generate exercises on the fly. They will appear below the explanation. You can generate new sets as many times as you like. \n \n (Be conscious of the AI costs, this is a hobby project :) Generation may take some time as we are using cheap or free models.)',
       placement: 'bottom'
     },
     {
@@ -98,20 +137,42 @@ const SpanishPracticeApp = () => {
   ];
 
   useEffect(() => {
-    // Auto-start the tour once explanation is present, only if user has not seen this version
+    // Auto-start pre-tour on language selection screen
+    if (!languageContext && !hasSeenOnboarding()) {
+      const t = setTimeout(() => setIsPreTourRunning(true), 300);
+      return () => clearTimeout(t);
+    }
+  }, [languageContext]);
+
+  useEffect(() => {
+    // Stop pre-tour if we left the selection page
+    if (languageContext && isPreTourRunning) {
+      setIsPreTourRunning(false);
+    }
+  }, [languageContext, isPreTourRunning]);
+
+  useEffect(() => {
+    // Auto-start post-tour once explanation is present, only if user has not seen this version
     if (lesson?.explanation && !hasSeenOnboarding()) {
-      // Wait a tick to ensure anchors exist in the DOM
-      const t = setTimeout(() => setIsTourRunning(true), 300);
+      const t = setTimeout(() => setIsPostTourRunning(true), 300);
       return () => clearTimeout(t);
     }
   }, [lesson]);
 
-  const handleJoyrideCallback = (data) => {
+  const handlePostJoyrideCallback = (data) => {
     const { status } = data;
     if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
       // Store as plain number string to simplify future comparisons
       setCookie(ONBOARDING_COOKIE_NAME, ONBOARDING_VERSION, 365);
-      setIsTourRunning(false);
+      setIsPostTourRunning(false);
+    }
+  };
+
+  const handlePreJoyrideCallback = (data) => {
+    const { status } = data;
+    // Allow manual control if needed later; for now simply stop when user finishes or skips
+    if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
+      setIsPreTourRunning(false);
     }
   };
 
@@ -771,20 +832,39 @@ const SpanishPracticeApp = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
-      {/* Onboarding tour */}
-      <Joyride
-        steps={tourSteps}
-        run={isTourRunning}
-        continuous
-        showSkipButton
-        showProgress
-        disableBeacon
-        disableScrolling={false}
-        scrollToFirstStep
-        locale={{ last: 'Finish' }}
-        spotlightPadding={8}
-        callback={handleJoyrideCallback}
-      />
+      {/* Pre-lesson tour (language selection) */}
+      {!languageContext && (
+        <Joyride
+          steps={preTourSteps}
+          run={isPreTourRunning}
+          continuous
+          showSkipButton
+          showProgress
+          disableBeacon
+          disableScrolling={false}
+          scrollToFirstStep
+          locale={{ last: 'Finish' }}
+          spotlightPadding={8}
+          callback={handlePreJoyrideCallback}
+        />
+      )}
+
+      {/* Post-lesson tour (in-lesson/exercises) */}
+      {languageContext && (
+        <Joyride
+          steps={postTourSteps}
+          run={isPostTourRunning}
+          continuous
+          showSkipButton
+          showProgress
+          disableBeacon
+          disableScrolling={false}
+          scrollToFirstStep
+          locale={{ last: 'Finish' }}
+          spotlightPadding={8}
+          callback={handlePostJoyrideCallback}
+        />
+      )}
 
       {/* Floating help button */}
       <button
@@ -816,7 +896,14 @@ const SpanishPracticeApp = () => {
             <div className="mt-5 flex items-center justify-end gap-2">
               <button onClick={() => setIsHelpOpen(false)} className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">Close</button>
               <button
-                onClick={() => { setIsHelpOpen(false); setIsTourRunning(true); }}
+                onClick={() => {
+                  setIsHelpOpen(false);
+                  if (!languageContext) {
+                    setIsPreTourRunning(true);
+                  } else {
+                    setIsPostTourRunning(true);
+                  }
+                }}
                 className="px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
               >
                 Start tutorial

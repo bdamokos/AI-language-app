@@ -59,7 +59,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
   const selectedLevelInfo = CEFR_LEVELS.find(level => level.value === selectedLevel);
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+    <div id="language-selector-root" className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
       <div className="text-center mb-8">
         <div className="flex justify-center mb-4">
           <div className="p-3 bg-blue-100 rounded-full">
@@ -83,7 +83,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
           </div>
           
           {/* Popular Languages Grid */}
-          <div className="mb-4">
+          <div id="popular-languages" className="mb-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">Popular Languages</h3>
             <div className="grid grid-cols-2 gap-2">
               {POPULAR_LANGUAGES.map((language) => (
@@ -109,10 +109,11 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
           </div>
 
           {/* Custom Language Input */}
-          <div className="border-t pt-4">
+          <div id="custom-language" className="border-t pt-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">Or Enter Any Language</h3>
             <div className="space-y-3">
               <input
+                id="custom-language-input"
                 type="text"
                 value={customLanguage}
                 onChange={(e) => handleCustomLanguageChange(e.target.value)}
@@ -134,7 +135,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
         </div>
 
         {/* Level Selection */}
-        <div className="space-y-4">
+        <div id="level-selection" className="space-y-4">
           <div className="flex items-center gap-2 mb-4">
             <GraduationCap className="text-green-600" size={20} />
             <h2 className="text-xl font-semibold text-gray-800">Proficiency Level</h2>
@@ -165,7 +166,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
           </div>
 
           {/* Challenge Mode Toggle */}
-          <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <div id="challenge-mode" className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
             <div className="flex items-center gap-3">
               <input
                 type="checkbox"
@@ -217,13 +218,14 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
       </div>
 
       {/* Topic Input - Full Width */}
-      <div className="mt-8 border-t pt-6">
+      <div id="topic-section" className="mt-8 border-t pt-6">
         <div className="flex items-center gap-2 mb-4">
           <BookOpen className="text-purple-600" size={20} />
           <h2 className="text-xl font-semibold text-gray-800">What would you like to practice?</h2>
         </div>
         <div className="space-y-3">
           <input
+            id="topic-input"
             type="text"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
@@ -268,6 +270,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
         </div>
         
         <button
+          id="start-lesson-button"
           onClick={handleStart}
           disabled={isLoading || !canProceed}
           className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-lg font-medium"
