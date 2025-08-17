@@ -155,6 +155,34 @@ const runtimeConfig = {
   maxTokens: Number(process.env.MAX_TOKENS || 15000)
 };
 
+// Validate and normalize Ollama host to prevent SSRF
+function validateAndNormalizeOllamaHost(input) {
+  try {
+    const urlString = String(input || '').trim();
+    const u = new URL(urlString);
+    if (!['http:', 'https:'].includes(u.protocol)) return null;
+    // Allow only loopback by default; extendable via OLLAMA_HOST_ALLOWLIST (comma-separated hostnames)
+    const allowedHostnames = new Set(['127.0.0.1', 'localhost', '::1']);
+    const allowlistEnv = String(process.env.OLLAMA_HOST_ALLOWLIST || '').trim();
+    if (allowlistEnv) {
+      for (const raw of allowlistEnv.split(',').map(s => s.trim()).filter(Boolean)) {
+        // Support either bare hostname or full URL entries
+        try {
+          const parsed = raw.includes('://') ? new URL(raw) : null;
+          allowedHostnames.add(parsed ? parsed.hostname : raw);
+        } catch {
+          // Ignore malformed entries
+        }
+      }
+    }
+    if (!allowedHostnames.has(u.hostname)) return null;
+    const portPart = u.port ? `:${u.port}` : '';
+    return `${u.protocol}//${u.hostname}${portPart}`;
+  } catch {
+    return null;
+  }
+}
+
 // Static fal.ai pricing for default models (sourced from the public pricing gist)
 // You can update these amounts manually if prices change
 // See: https://gist.github.com/azer/6e8ffa228cb5d6f5807cd4d895b191a4
@@ -497,14 +525,9 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
     return data.choices?.[0]?.message?.content || '';
   }
   if (provider === 'ollama') {
-    const host = runtimeConfig.ollama.host || 'http://127.0.0.1:11434';
-    
-    // Validate host to prevent URL injection
-    if (typeof host !== 'string' || (!host.startsWith('http://') && !host.startsWith('https://'))) {
-      throw new Error('Invalid Ollama host configuration');
-    }
-    
-    const resp = await fetch(`${host}/api/chat`, {
+    const normalizedHost = validateAndNormalizeOllamaHost(runtimeConfig.ollama.host) || 'http://127.0.0.1:11434';
+
+    const resp = await fetch(`${normalizedHost}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1038,8 +1061,8 @@ Based on their performance, suggest ONE specific practice topic. Consider:
 // Ollama: list installed models
 app.get('/api/ollama/models', async (req, res) => {
   try {
-    const host = runtimeConfig.ollama.host || 'http://127.0.0.1:11434';
-    const url = `${host.replace(/\/?$/, '')}/api/tags`;
+    const normalizedHost = validateAndNormalizeOllamaHost(runtimeConfig.ollama.host) || 'http://127.0.0.1:11434';
+    const url = `${normalizedHost}/api/tags`;
     console.log(`[OLLAMA] Fetching models from ${url}`);
     const resp = await fetch(url, { method: 'GET' });
     if (!resp.ok) {
