@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
@@ -649,9 +649,11 @@ app.post('/api/generate', async (req, res) => {
       const seenSet = new Set(seenList);
 
       const useGrouped = type === 'fib' || type === 'mcq';
+      // Build a cross-model family key so we include other-model pools too
+      const family = { type, language: languageName, level, challengeMode, schemaVersion, promptSha12 };
       const { items: cachedItems, shas: cachedShas } = useGrouped
-        ? await selectUnseenFromPoolGrouped(cacheLayout, poolKey, seenSet, desiredCount)
-        : await selectUnseenFromPool(cacheLayout, poolKey, seenSet, desiredCount);
+        ? await selectUnseenCrossModelGrouped(cacheLayout, family, seenSet, desiredCount, currentModel)
+        : await selectUnseenCrossModel(cacheLayout, family, seenSet, desiredCount, currentModel);
       let resultItems = cachedItems.map(r => {
         const it = { ...r.content };
         if (r.localImageUrl) it.localImageUrl = r.localImageUrl;

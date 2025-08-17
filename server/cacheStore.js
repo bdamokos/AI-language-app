@@ -202,23 +202,28 @@ function computeWeightFromCounts(likes, dislikes) {
   return Math.max(0.25, Math.min(1.0, ratio));
 }
 
-function computeWeightForGroup(group) {
+function computeWeightForGroup(group, currentModel) {
   if (!group) return 1.0;
-  return computeWeightFromCounts(group.likes, group.dislikes);
+  const base = computeWeightFromCounts(group.likes, group.dislikes);
+  const itemModel = group?.meta?.model;
+  const modelFactor = (!currentModel || !itemModel || itemModel === currentModel) ? 1.0 : 0.85;
+  return base * modelFactor;
 }
 
-export function pickUnseenWeighted(shas, seenSet, idx, count) {
+export function pickUnseenWeighted(shas, seenSet, idx, count, currentModel) {
   const unseen = shas.filter(s => !seenSet.has(s.slice(0, 12)));
   if (unseen.length <= count) return unseen;
   // Build weights by group ratings
   const weights = unseen.map(sha => {
     const item = idx.items[sha] || {};
+    const itemModel = item?.meta?.model;
+    const modelFactor = (!currentModel || !itemModel || itemModel === currentModel) ? 1.0 : 0.85;
     if (typeof item.likes === 'number' || typeof item.dislikes === 'number') {
-      return computeWeightFromCounts(item.likes, item.dislikes);
+      return computeWeightFromCounts(item.likes, item.dislikes) * modelFactor;
     }
     const groupId = item.groupId;
     const group = groupId ? idx.groups[groupId] : null;
-    return computeWeightForGroup(group);
+    return computeWeightForGroup(group, currentModel) * modelFactor;
   });
   const chosen = [];
   const items = unseen.slice();
@@ -251,7 +256,7 @@ export async function selectUnseenFromPool(layout, poolKey, seenSet, count) {
   return { items, shas: chosen };
 }
 
-export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, count) {
+export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, count, currentModel) {
   const idx = await loadExercisesIndex(layout);
   const poolList = idx.pools[poolKey] || [];
   const poolSet = new Set(poolList);
@@ -270,7 +275,7 @@ export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, coun
     // Keep only pool members, in group order, and unseen
     const ordered = g.itemShas.filter(s => poolSet.has(s) && !seenPrefix(s));
     if (ordered.length === 0) continue;
-    const weight = computeWeightForGroup(g);
+    const weight = computeWeightForGroup(g, currentModel);
     groups.push({ groupId: gid, unseen: ordered, weight });
   }
 
@@ -295,6 +300,85 @@ export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, coun
     }
   }
 
+  const items = [];
+  for (const sha of chosen) {
+    const rec = await readExerciseItem(layout, sha);
+    if (rec && rec.content) items.push(rec);
+  }
+  return { items, shas: chosen };
+}
+
+function collectPoolFamilyShas(idx, family) {
+  const { type, language, level, challengeMode, schemaVersion, promptSha12 } = family;
+  const keys = Object.keys(idx.pools || {});
+  const result = [];
+  for (const key of keys) {
+    const parts = String(key).split(':');
+    if (parts.length !== 7) continue;
+    const [t, lang, lvl, chall, /*model*/, ver, sha12] = parts;
+    if (t === type && lang === language && lvl === level && chall === String(challengeMode) && ver === String(schemaVersion) && sha12 === promptSha12) {
+      const list = idx.pools[key] || [];
+      for (const sha of list) result.push(sha);
+    }
+  }
+  // Dedupe preserving order
+  const seen = new Set();
+  const deduped = [];
+  for (const sha of result) { if (!seen.has(sha)) { seen.add(sha); deduped.push(sha); } }
+  return deduped;
+}
+
+export async function selectUnseenCrossModel(layout, family, seenSet, count, currentModel) {
+  const idx = await loadExercisesIndex(layout);
+  const candidates = collectPoolFamilyShas(idx, family);
+  const chosen = pickUnseenWeighted(candidates, seenSet, idx, count, currentModel);
+  const items = [];
+  for (const sha of chosen) {
+    const rec = await readExerciseItem(layout, sha);
+    if (rec && rec.content) items.push(rec);
+  }
+  return { items, shas: chosen };
+}
+
+export async function selectUnseenCrossModelGrouped(layout, family, seenSet, count, currentModel) {
+  const idx = await loadExercisesIndex(layout);
+  const candidates = collectPoolFamilyShas(idx, family);
+  const candidateSet = new Set(candidates);
+  const groups = [];
+  const seenPrefix = (sha) => seenSet.has(String(sha).slice(0, 12));
+  const candidateGroupIds = new Set();
+  for (const sha of candidates) {
+    const it = idx.items[sha];
+    if (!it || !it.groupId) continue;
+    candidateGroupIds.add(it.groupId);
+  }
+  for (const gid of candidateGroupIds) {
+    const g = idx.groups[gid];
+    if (!g || !Array.isArray(g.itemShas)) continue;
+    const ordered = g.itemShas.filter(s => candidateSet.has(s) && !seenPrefix(s));
+    if (ordered.length === 0) continue;
+    const weight = computeWeightForGroup(g, currentModel);
+    groups.push({ groupId: gid, unseen: ordered, weight });
+  }
+  const chosen = [];
+  while (chosen.length < count && groups.length > 0) {
+    const totalW = groups.reduce((acc, g) => acc + (Number(g.weight) || 0), 0) || 0;
+    let r = Math.random() * (totalW || 1);
+    let idxPick = 0;
+    for (let i = 0; i < groups.length; i++) {
+      r -= groups[i].weight;
+      if (r <= 0) { idxPick = i; break; }
+      if (i === groups.length - 1) idxPick = i;
+    }
+    const picked = groups[idxPick];
+    const remaining = count - chosen.length;
+    const take = picked.unseen.slice(0, remaining);
+    chosen.push(...take);
+    picked.unseen = picked.unseen.slice(take.length);
+    if (picked.unseen.length === 0) {
+      groups.splice(idxPick, 1);
+    }
+  }
   const items = [];
   for (const sha of chosen) {
     const rec = await readExerciseItem(layout, sha);
