@@ -251,6 +251,58 @@ export async function selectUnseenFromPool(layout, poolKey, seenSet, count) {
   return { items, shas: chosen };
 }
 
+export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, count) {
+  const idx = await loadExercisesIndex(layout);
+  const poolList = idx.pools[poolKey] || [];
+  const poolSet = new Set(poolList);
+  // Build groups with unseen items in group order
+  const groups = [];
+  const seenPrefix = (sha) => seenSet.has(String(sha).slice(0, 12));
+  const groupIdsInPool = new Set();
+  for (const sha of poolList) {
+    const it = idx.items[sha];
+    if (!it || !it.groupId) continue;
+    groupIdsInPool.add(it.groupId);
+  }
+  for (const gid of groupIdsInPool) {
+    const g = idx.groups[gid];
+    if (!g || !Array.isArray(g.itemShas)) continue;
+    // Keep only pool members, in group order, and unseen
+    const ordered = g.itemShas.filter(s => poolSet.has(s) && !seenPrefix(s));
+    if (ordered.length === 0) continue;
+    const weight = computeWeightForGroup(g);
+    groups.push({ groupId: gid, unseen: ordered, weight });
+  }
+
+  const chosen = [];
+  // Greedy: pick groups by weighted sampling, take as many as needed from each in order
+  while (chosen.length < count && groups.length > 0) {
+    const totalW = groups.reduce((acc, g) => acc + (Number(g.weight) || 0), 0) || 0;
+    let r = Math.random() * (totalW || 1);
+    let idxPick = 0;
+    for (let i = 0; i < groups.length; i++) {
+      r -= groups[i].weight;
+      if (r <= 0) { idxPick = i; break; }
+      if (i === groups.length - 1) idxPick = i;
+    }
+    const picked = groups[idxPick];
+    const remaining = count - chosen.length;
+    const take = picked.unseen.slice(0, remaining);
+    chosen.push(...take);
+    picked.unseen = picked.unseen.slice(take.length);
+    if (picked.unseen.length === 0) {
+      groups.splice(idxPick, 1);
+    }
+  }
+
+  const items = [];
+  for (const sha of chosen) {
+    const rec = await readExerciseItem(layout, sha);
+    if (rec && rec.content) items.push(rec);
+  }
+  return { items, shas: chosen };
+}
+
 export async function touchExercises(layout, exerciseShas) {
   if (!Array.isArray(exerciseShas) || exerciseShas.length === 0) return;
   const idx = await loadExercisesIndex(layout);

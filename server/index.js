@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
@@ -648,7 +648,10 @@ app.post('/api/generate', async (req, res) => {
       const seenList = seenCookieMatch ? decodeURIComponent(seenCookieMatch[1]).split(',').filter(Boolean) : [];
       const seenSet = new Set(seenList);
 
-      const { items: cachedItems, shas: cachedShas } = await selectUnseenFromPool(cacheLayout, poolKey, seenSet, desiredCount);
+      const useGrouped = type === 'fib' || type === 'mcq';
+      const { items: cachedItems, shas: cachedShas } = useGrouped
+        ? await selectUnseenFromPoolGrouped(cacheLayout, poolKey, seenSet, desiredCount)
+        : await selectUnseenFromPool(cacheLayout, poolKey, seenSet, desiredCount);
       let resultItems = cachedItems.map(r => {
         const it = { ...r.content };
         if (r.localImageUrl) it.localImageUrl = r.localImageUrl;
