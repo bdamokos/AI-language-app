@@ -12,6 +12,7 @@ import { generateGuidedDialogues } from './exercises/GuidedDialogueExercise.jsx'
 import { generateWritingPrompts } from './exercises/WritingPromptExercise.jsx';
 import { generateReading } from './exercises/ReadingExercise.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
+import { generateErrorBundles } from './exercises/ErrorBundleExercise.jsx';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
 
@@ -51,6 +52,7 @@ const SpanishPracticeApp = () => {
   const [dialogueCount, setDialogueCount] = useState(2);
   const [writingCount, setWritingCount] = useState(2);
   const [readingCount, setReadingCount] = useState(1);
+  const [errorBundleCount, setErrorBundleCount] = useState(4);
 
   // Onboarding / tour state
   const [isPreTourRunning, setIsPreTourRunning] = useState(false);
@@ -211,7 +213,8 @@ const SpanishPracticeApp = () => {
           cloze_passages: 0,
           cloze_with_mixed_options: 0,
           guided_dialogues: 0,
-          writing_prompts: 0
+          writing_prompts: 0,
+          error_bundles: 0
         }, context);
         setLesson(data);
         setOrchestratorValues({});
@@ -257,6 +260,21 @@ const SpanishPracticeApp = () => {
         setOrchestratorValues(prev => ({
           ...prev,
           [baseKey]: { ...(prev[baseKey] || {}), [blankIdx]: newValue }
+        }));
+        setTimeout(() => {
+          input.focus();
+          input.setSelectionRange(start + 1, start + 1);
+        }, 0);
+        return;
+      }
+      // Support single-field orchestrator inputs like ErrorBundle correction: lesson:type:idx
+      if (parts.length === 3) {
+        const baseKey = parts.join(':');
+        const currentValue = String(orchestratorValues[baseKey] || '');
+        const newValue = currentValue.substring(0, start) + accent + currentValue.substring(end);
+        setOrchestratorValues(prev => ({
+          ...prev,
+          [baseKey]: newValue
         }));
         setTimeout(() => {
           input.focus();
@@ -468,6 +486,15 @@ const SpanishPracticeApp = () => {
               >{loadingReadingOnly ? 'Generating...' : `Generate Reading Passage (${readingCount})`}</button>
               <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
             </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={generateErrorBundlesOnly}
+                disabled={loadingErrorBundlesOnly || !topic.trim()}
+                className="flex-1 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 text-sm"
+              >{loadingErrorBundlesOnly ? 'Generating...' : `Add Error Bundles (${errorBundleCount})`}</button>
+              <input type="number" min={2} max={12} value={errorBundleCount} onChange={e => setErrorBundleCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+            </div>
           </div>
         </div>
         <Orchestrator
@@ -530,7 +557,8 @@ const SpanishPracticeApp = () => {
         cloze_passages: 0,
         cloze_with_mixed_options: 0,
         guided_dialogues: 0,
-        writing_prompts: 0
+        writing_prompts: 0,
+        error_bundles: 0
       }, languageContext);
       setTopic(topicToUse);
       setLesson(data);
@@ -555,12 +583,14 @@ const SpanishPracticeApp = () => {
     cloze_with_mixed_options: lesson?.cloze_with_mixed_options || [],
     guided_dialogues: lesson?.guided_dialogues || [],
     writing_prompts: lesson?.writing_prompts || [],
-    reading_comprehension: lesson?.reading_comprehension || []
+    reading_comprehension: lesson?.reading_comprehension || [],
+    error_bundles: lesson?.error_bundles || [],
+    error_bundles_shared_context: lesson?.error_bundles_shared_context || ''
   });
 
   const mergeLesson = (partial) => {
     // If we are adding any new exercises, reset checked state so they render unsubmitted
-    const addsExercises = ['fill_in_blanks', 'multiple_choice', 'cloze_passages', 'cloze_with_mixed_options', 'guided_dialogues', 'writing_prompts', 'reading_comprehension']
+    const addsExercises = ['fill_in_blanks', 'multiple_choice', 'cloze_passages', 'cloze_with_mixed_options', 'guided_dialogues', 'writing_prompts', 'reading_comprehension', 'error_bundles']
       .some(k => Array.isArray(partial?.[k]) && partial[k].length > 0);
 
     setLesson(prev => {
@@ -688,6 +718,18 @@ const SpanishPracticeApp = () => {
   };
 
   const [orchestratorValues, setOrchestratorValues] = useState({});
+  const [loadingErrorBundlesOnly, setLoadingErrorBundlesOnly] = useState(false);
+  const generateErrorBundlesOnly = async () => {
+    if (!topic.trim()) return;
+    setLoadingErrorBundlesOnly(true);
+    setErrorMsg('');
+    try {
+      const data = await generateErrorBundles(topic, Number(errorBundleCount), languageContext);
+      if (!lesson) setLesson(ensureLessonSkeleton());
+      mergeLesson({ topic, error_bundles: data.items || [], error_bundles_shared_context: data.shared_context || '' });
+    } catch (e) { console.error(e); setErrorMsg('Failed to generate error bundles'); }
+    finally { setLoadingErrorBundlesOnly(false); }
+  };
 
   const checkAnswers = () => {
     setSubmitted(true);

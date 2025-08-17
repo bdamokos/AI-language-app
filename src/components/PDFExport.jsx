@@ -760,6 +760,88 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     );
   };
 
+  // Simple diff utilities for Error Bundles (best-effort)
+  const computeSimpleDiffParts = (originalText = '', fixedText = '') => {
+    const a = String(originalText);
+    const b = String(fixedText);
+    if (a === b) {
+      return { pre: a, origMid: '', origPost: '', fixMid: '', fixPost: '' };
+    }
+    const minLen = Math.min(a.length, b.length);
+    let lcp = 0;
+    while (lcp < minLen && a[lcp] === b[lcp]) lcp++;
+    let aEnd = a.length - 1;
+    let bEnd = b.length - 1;
+    let lcs = 0;
+    while (
+      aEnd - lcs >= lcp &&
+      bEnd - lcs >= lcp &&
+      a[aEnd - lcs] === b[bEnd - lcs]
+    ) {
+      lcs++;
+    }
+    const pre = a.slice(0, lcp);
+    const origMid = a.slice(lcp, a.length - lcs);
+    const origPost = a.slice(a.length - lcs);
+    const fixMid = b.slice(lcp, b.length - lcs);
+    const fixPost = b.slice(b.length - lcs);
+    return { pre, origMid, origPost, fixMid, fixPost };
+  };
+
+  const renderIncorrectWithDiff = (originalText, fixedText) => {
+    const parts = computeSimpleDiffParts(originalText, fixedText);
+    const reconstructed = `${parts.pre}${parts.origMid}${parts.origPost}`;
+    if (!parts.origMid || reconstructed !== String(originalText)) {
+      return (<Text style={styles.text}>Incorrect shown: {originalText}</Text>);
+    }
+    // Guard against accidental duplication (origMid repeating pre)
+    const showPre = parts.pre && !parts.origMid.startsWith(parts.pre);
+    return (
+      <Text style={styles.text}>
+        Incorrect shown: 
+        {showPre ? (<Text style={styles.inlineText}> {parts.pre}</Text>) : null}
+        <Text style={[styles.inlineText, { color: '#b91c1c', textDecoration: 'line-through' }]}>{parts.origMid}</Text>
+        {parts.origPost ? (<Text style={styles.inlineText}>{parts.origPost}</Text>) : null}
+      </Text>
+    );
+  };
+
+  const renderFixWithDiff = (originalText, fixedText) => {
+    const parts = computeSimpleDiffParts(originalText, fixedText);
+    const reconstructed = `${parts.pre}${parts.fixMid}${parts.fixPost}`;
+    if (!parts.fixMid || reconstructed !== String(fixedText)) {
+      return (<Text style={styles.text}>Fix: {fixedText}</Text>);
+    }
+    const showPre = parts.pre && !parts.fixMid.startsWith(parts.pre);
+    return (
+      <Text style={styles.text}>
+        Fix:
+        {showPre ? (<Text style={styles.inlineText}> {parts.pre}</Text>) : null}
+        <Text style={[styles.inlineText, { color: '#059669', textDecoration: 'underline' }]}>{parts.fixMid}</Text>
+        {parts.fixPost ? (<Text style={styles.inlineText}>{parts.fixPost}</Text>) : null}
+      </Text>
+    );
+  };
+
+  const renderInlineIncorrectWithDiff = (originalText, fixedText) => {
+    const parts = computeSimpleDiffParts(originalText, fixedText);
+    const reconstructed = `${parts.pre}${parts.origMid}${parts.origPost}`;
+    if (!parts.origMid || reconstructed !== String(originalText)) {
+      return (
+        <Text style={styles.text}>{originalText}<Text style={styles.inlineText}> — incorrect</Text></Text>
+      );
+    }
+    const showPre = parts.pre && !parts.origMid.startsWith(parts.pre);
+    return (
+      <Text style={styles.text}>
+        {showPre ? (<Text style={styles.inlineText}>{parts.pre}</Text>) : null}
+        <Text style={[styles.inlineText, { color: '#b91c1c', textDecoration: 'line-through' }]}>{parts.origMid}</Text>
+        {parts.origPost ? (<Text style={styles.inlineText}>{parts.origPost}</Text>) : null}
+        <Text style={styles.inlineText}> — incorrect</Text>
+      </Text>
+    );
+  };
+
   // Helper function to render FIB solutions with answers in green bold
   const renderFIBSolution = (item) => {
     if (!item?.sentence) return null;
@@ -1296,6 +1378,47 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             ))}
           </View>
         )}
+
+        {/* Error Bundles Section */}
+        {Array.isArray(lesson.error_bundles) && lesson.error_bundles.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Error Bundles</Text>
+            <Text style={[styles.text, { fontSize: 10, fontStyle: 'italic', marginBottom: 12, color: '#6b7280' }]}>
+              Underline the correct options or correct the sentence.
+            </Text>
+            {typeof lesson.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context && (
+              <Text style={styles.context}>Context: {lesson.error_bundles_shared_context}</Text>
+            )}
+            {lesson.error_bundles.map((item, idx) => {
+              const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
+              const correctIndex = sentences.findIndex(s => s && s.correct);
+              const total = lesson.error_bundles.length;
+              const fixCount = Math.floor(total * 0.4);
+              const isFix = idx >= total - fixCount;
+              const wrongIndices = sentences.map((s, i) => (s && s.correct ? null : i)).filter(i => i !== null);
+              const incorrectIndex = wrongIndices.length > 0 ? wrongIndices[idx % wrongIndices.length] : 0;
+              const incorrectSentence = sentences[incorrectIndex] || {};
+              return (
+                <View key={`err-${idx}`} style={{ marginBottom: 12 }}>
+                  <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}> {String.fromCharCode(97 + idx)}.</Text>
+                  {!isFix ? (
+                    <View style={{ marginLeft: 12 }}>
+                      {sentences.map((s, si) => (
+                        <Text key={`err-opt-${idx}-${si}`} style={styles.text}>☐ {s?.text}</Text>
+                      ))}
+                    </View>
+                  ) : (
+                    <View style={{ marginLeft: 12 }}>
+                      <Text style={styles.text}>Incorrect: {incorrectSentence.text}</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
       </Page>
 
       {/* Solutions Page */}
@@ -1532,6 +1655,67 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                 ))}
               </View>
             ))}
+          </View>
+        )}
+
+        {/* Error Bundles Solutions */}
+        {Array.isArray(lesson.error_bundles) && lesson.error_bundles.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Error Bundles - Solutions</Text>
+            {lesson.error_bundles.map((item, idx) => {
+              const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
+              const correctIndex = sentences.findIndex(s => s && s.correct);
+              const correctSentence = correctIndex >= 0 ? sentences[correctIndex] : null;
+              const total = lesson.error_bundles.length;
+              const fixCount = Math.floor(total * 0.4);
+              const isFix = idx >= total - fixCount;
+              const wrongIndices = sentences.map((s, i) => (s && s.correct ? null : i)).filter(i => i !== null);
+              const incorrectIndex = wrongIndices.length > 0 ? wrongIndices[idx % wrongIndices.length] : 0;
+              const incorrectSentence = sentences[incorrectIndex] || {};
+              return (
+                <View key={`err-sol-${idx}`} style={{ marginBottom: 12 }}>
+                  <Text style={styles.exerciseTitle}>{String.fromCharCode(97 + idx)}.</Text>
+                  {!isFix ? (
+                    <View style={{ marginLeft: 12 }}>
+                      {sentences.map((s, si) => {
+                        const isCorrect = !!s?.correct;
+                        if (isCorrect) {
+                          return (
+                            <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 6 }}>
+                              <Text style={styles.text}>
+                                <Text style={[styles.inlineText, { color: '#059669', fontWeight: 'bold' }]}>{s.text}</Text>
+                                <Text style={styles.inlineText}> — correct</Text>
+                              </Text>
+                              {s.rationale && (
+                                <Text style={styles.rationale}>Reason: {s.rationale}</Text>
+                              )}
+                            </View>
+                          );
+                        }
+                        // Incorrect: show sentence with diff highlight (inline helper) then reason + fix
+                        return (
+                          <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 8 }}>
+                            {renderInlineIncorrectWithDiff(s?.text || '', s?.fix || '')}
+                            {s?.rationale && (
+                              <Text style={styles.rationale}>Reason: {s.rationale}</Text>
+                            )}
+                            {s?.fix && renderFixWithDiff(s?.text || '', s.fix)}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  ) : (
+                    <View style={{ marginLeft: 12 }}>
+                      {renderIncorrectWithDiff(incorrectSentence.text, incorrectSentence.fix || '')}
+                      {incorrectSentence?.fix && renderFixWithDiff(incorrectSentence.text, incorrectSentence.fix)}
+                      {incorrectSentence?.rationale && (
+                        <Text style={styles.rationale}>Rationale: {incorrectSentence.rationale}</Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
           </View>
         )}
       </Page>

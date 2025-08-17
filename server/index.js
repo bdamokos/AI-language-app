@@ -658,6 +658,7 @@ app.post('/api/generate', async (req, res) => {
       if (/^cloze_mixed_single_/.test(String(schemaName))) return 'cloze_mixed';
       if (schemaName === 'guided_dialogues_list') return 'guided_dialogues';
       if (schemaName === 'reading_list') return 'reading';
+      if (schemaName === 'error_bundle_list') return 'error_bundle';
       return 'unknown';
     })();
 
@@ -680,10 +681,16 @@ app.post('/api/generate', async (req, res) => {
     if (cacheLayout && type && type !== 'explanation' && type !== 'unknown') {
       const poolKey = `${type}:${languageName}:${level}:${challengeMode}:${currentModel}:${schemaVersion}:${promptSha12}`;
       const bucketKey = makeBucketKey({ type, language: languageName, level, challengeMode, grammarTopic });
-      // Parse desired count if present
+      // Parse desired count if present (supports prompt text and JSON payloads)
       let desiredCount = 1;
       const countMatch = user.match(/Create exactly\s+(\d+)\b/i);
       if (countMatch) desiredCount = Math.max(1, Math.min(50, Number(countMatch[1])));
+      try {
+        const parsedUser = JSON.parse(user);
+        if (parsedUser && typeof parsedUser.count === 'number') {
+          desiredCount = Math.max(1, Math.min(50, Number(parsedUser.count)));
+        }
+      } catch {}
       // For cloze and cloze_mixed single schema, clamp to 1
       if (type === 'cloze' || type === 'cloze_mixed') desiredCount = 1;
 
@@ -694,7 +701,7 @@ app.post('/api/generate', async (req, res) => {
       const seenList = seenCookieMatch ? decodeURIComponent(seenCookieMatch[1]).split(',').filter(Boolean) : [];
       const seenSet = new Set(seenList);
 
-      const useGrouped = type === 'fib' || type === 'mcq';
+      const useGrouped = type === 'fib' || type === 'mcq' || type === 'error_bundle';
       // Build a cross-model family key so we include other-model pools too
       const family = { type, language: languageName, level, challengeMode, schemaVersion, promptSha12 };
       const { items: cachedItems, shas: cachedShas } = useGrouped
@@ -767,6 +774,7 @@ app.post('/api/generate', async (req, res) => {
             case 'fib': return Number(process.env.CACHE_PER_TYPE_FACTOR_FIB || 10);
             case 'mcq': return Number(process.env.CACHE_PER_TYPE_FACTOR_MCQ || 5);
             case 'reading': return Number(process.env.CACHE_PER_TYPE_FACTOR_READING || 2);
+            case 'error_bundle': return Number(process.env.CACHE_PER_TYPE_FACTOR_ERROR_BUNDLE || 5);
             default: return 1;
           }
         })();

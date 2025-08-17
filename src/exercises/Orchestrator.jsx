@@ -9,6 +9,7 @@ import WritingPromptExercise, { scoreWritingPrompt, generateWritingPrompts } fro
 import ReadingExercise, { scoreReading } from './ReadingExercise.jsx';
 import ExplanationComponent, { generateExplanation } from './ExplanationComponent.jsx';
 import { normalizeText } from './utils.js';
+import ErrorBundleExercise, { scoreErrorBundle, generateErrorBundles } from './ErrorBundleExercise.jsx';
 
 /**
  * Lesson Orchestrator: renders a collection of exercise items with standardized API.
@@ -31,6 +32,7 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
     if (Array.isArray(lesson?.guided_dialogues)) arr.push(['dialogue', lesson.guided_dialogues]);
     if (Array.isArray(lesson?.writing_prompts)) arr.push(['writing', lesson.writing_prompts]);
     if (Array.isArray(lesson?.reading_comprehension)) arr.push(['reading', lesson.reading_comprehension]);
+    if (Array.isArray(lesson?.error_bundles)) arr.push(['error', lesson.error_bundles]);
     return arr;
   }, [lesson]);
 
@@ -48,6 +50,14 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
           {type === 'dialogue' && items.length > 0 && <h3 className="font-semibold text-gray-800">Guided Dialogues</h3>}
           {type === 'writing' && items.length > 0 && <h3 className="font-semibold text-gray-800">Writing Prompts</h3>}
           {type === 'reading' && items.length > 0 && <h3 className="font-semibold text-gray-800">Reading Comprehension</h3>}
+          {type === 'error' && items.length > 0 && (
+            <div>
+              <h3 className="font-semibold text-gray-800">Error Bundles (Select or Fix)</h3>
+              {typeof lesson?.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context && (
+                <p className="text-xs text-gray-600 mt-1">Context: {lesson.error_bundles_shared_context}</p>
+              )}
+            </div>
+          )}
           {items.map((item, idx) => {
             const keyPrefix = `${idBase}:${type}:${idx}`;
             const val = values?.[keyPrefix] ?? (type === 'mcq' ? null : {});
@@ -218,6 +228,39 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
                 </div>
               );
             }
+            if (type === 'error') {
+              // Deterministic 60/40 split: last 40% are fix mode
+              const total = items.length;
+              const fixCount = Math.floor(total * 0.4);
+              const isFix = idx >= total - fixCount;
+              const currentValue = values?.[keyPrefix];
+              return (
+                <div key={keyPrefix} className="space-y-2">
+                  <ErrorBundleExercise
+                    item={item}
+                    value={typeof currentValue === 'number' || typeof currentValue === 'string' ? currentValue : (isFix ? '' : null)}
+                    onChange={(v) => onChange(keyPrefix, v)}
+                    checked={checked}
+                    strictAccents={strictAccents}
+                    idPrefix={keyPrefix}
+                    onFocusKey={onFocusKey}
+                    mode={isFix ? 'fix' : 'select'}
+                  />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             return null;
           })}
         </div>
@@ -278,6 +321,17 @@ export function scoreLesson(lesson, values, strictAccents = true) {
       add(scoreReading(item, values?.[key] || {}));
     });
   }
+  if (Array.isArray(lesson?.error_bundles)) {
+    const total = lesson.error_bundles.length;
+    const fixCount = Math.floor(total * 0.4);
+    lesson.error_bundles.forEach((item, idx) => {
+      const key = `lesson:error:${idx}`;
+      const val = values?.[key];
+      const isFix = idx >= total - fixCount;
+      // Use idx as seed for stable incorrect selection
+      add(scoreErrorBundle(item, val, eq, strictAccents, idx));
+    });
+  }
   return { correct, total };
 }
 
@@ -296,18 +350,20 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     cloze_passages: Math.max(0, Math.min(10, Number(counts?.cloze_passages ?? 0))),
     cloze_with_mixed_options: Math.max(0, Math.min(10, Number(counts?.cloze_with_mixed_options ?? 0))),
     guided_dialogues: Math.max(0, Math.min(10, Number(counts?.guided_dialogues ?? 0))),
-    writing_prompts: Math.max(0, Math.min(10, Number(counts?.writing_prompts ?? 0)))
+    writing_prompts: Math.max(0, Math.min(10, Number(counts?.writing_prompts ?? 0))),
+    error_bundles: Math.max(0, Math.min(12, Number(counts?.error_bundles ?? 0)))
   };
 
   // Generate all exercise types in parallel using component generation functions
-  const [explanation, fibData, mcqData, clozeData, clozeMixData, dialogueData, writingData] = await Promise.all([
+  const [explanation, fibData, mcqData, clozeData, clozeMixData, dialogueData, writingData, errorBundleData] = await Promise.all([
     generateExplanation(topic, languageContext),
     safeCounts.fill_in_blanks > 0 ? generateFIB(topic, safeCounts.fill_in_blanks, languageContext) : Promise.resolve({ items: [] }),
     safeCounts.multiple_choice > 0 ? generateMCQ(topic, safeCounts.multiple_choice, languageContext) : Promise.resolve({ items: [] }),
     safeCounts.cloze_passages > 0 ? generateCloze(topic, safeCounts.cloze_passages, languageContext) : Promise.resolve({ items: [] }),
     safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options, languageContext) : Promise.resolve({ items: [] }),
     safeCounts.guided_dialogues > 0 ? generateGuidedDialogues(topic, safeCounts.guided_dialogues, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.writing_prompts > 0 ? generateWritingPrompts(topic, safeCounts.writing_prompts, languageContext) : Promise.resolve({ items: [] })
+    safeCounts.writing_prompts > 0 ? generateWritingPrompts(topic, safeCounts.writing_prompts, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.error_bundles > 0 ? generateErrorBundles(topic, safeCounts.error_bundles, { language: languageContext.language, level: languageContext.level, challengeMode: languageContext.challengeMode }) : Promise.resolve({ items: [] })
   ]);
 
   // Build lesson bundle
@@ -326,6 +382,9 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     cloze_with_mixed_options: clozeMixData.items || [],
     guided_dialogues: dialogueData.items || [],
     writing_prompts: writingData.items || []
+    ,
+    error_bundles: errorBundleData.items || [],
+    error_bundles_shared_context: errorBundleData.shared_context || ''
   };
 }
 

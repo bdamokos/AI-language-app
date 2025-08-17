@@ -7,6 +7,7 @@ export const schemaVersions = {
   writing_prompts: 1,
   guided_dialogues: 1,
   reading: 2,
+  error_bundle: 1,
   // UI/tutorial versioning for onboarding tour
   onboarding: 1
 };
