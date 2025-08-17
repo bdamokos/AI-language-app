@@ -288,7 +288,6 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
             />
             <p className="text-xs text-gray-500 mt-1 text-center">
               AI-generated illustration
-              {generatedImage.data?.[0]?.cost && ` • $${Number(generatedImage.data[0].cost).toFixed(4)}`}
             </p>
           </div>
         )}
