@@ -33,6 +33,29 @@ export default function MCQExercise({ item, value, onChange, checked, idPrefix }
           );
         })}
       </ul>
+      {checked && (() => {
+        const correctIndex = options.findIndex(o => o && o.correct);
+        const selectedOpt = (typeof selectedIndex === 'number' && selectedIndex >= 0) ? options[selectedIndex] : null;
+        const correctOpt = correctIndex >= 0 ? options[correctIndex] : null;
+        if (selectedOpt && !selectedOpt.correct) {
+          return (
+            <div className="mt-2 space-y-1">
+              {selectedOpt.rationale && (
+                <p className="text-xs text-red-700">Why your choice is incorrect: {selectedOpt.rationale}</p>
+              )}
+              {correctOpt && (
+                <p className="text-xs text-green-700">Correct answer: {correctOpt.text}{correctOpt.rationale ? ` — ${correctOpt.rationale}` : ''}</p>
+              )}
+            </div>
+          );
+        }
+        if (selectedOpt && selectedOpt.correct && selectedOpt.rationale) {
+          return (
+            <p className="text-xs text-green-700 mt-2">Why this is correct: {selectedOpt.rationale}</p>
+          );
+        }
+        return null;
+      })()}
       {checked && item?.explanation && (
         <p className="text-xs text-gray-600 mt-2">{item.explanation}</p>
       )}

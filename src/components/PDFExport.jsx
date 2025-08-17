@@ -1336,15 +1336,25 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                 {item.options && Array.isArray(item.options) && (
                   <View style={{ marginLeft: 16 }}>
                     {item.options.map((option, optIdx) => {
+                      const label = `${String.fromCharCode(65 + optIdx)}. ${option.text}`;
                       if (option.correct) {
                         return (
                           <View key={`correct-${optIdx}`}>
-                            <Text style={[styles.answer, { marginBottom: 4 }]}>
-                              Correct Answer: {String.fromCharCode(65 + optIdx)}. {option.text}
+                            <Text style={[styles.answer, { marginBottom: 4 }]}> 
+                              Correct Answer: {label}
                             </Text>
                             {option.rationale && (
                               <Text style={styles.rationale}>Rationale: {option.rationale}</Text>
                             )}
+                          </View>
+                        );
+                      }
+                      // Print incorrect option rationales if provided
+                      if (option.rationale) {
+                        return (
+                          <View key={`incorrect-${optIdx}`}>
+                            <Text style={[styles.text, { marginBottom: 2 }]}>Incorrect: {label}</Text>
+                            <Text style={[styles.rationale, { marginLeft: 2 }]}>Why incorrect: {option.rationale}</Text>
                           </View>
                         );
                       }
