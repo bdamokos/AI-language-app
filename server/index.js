@@ -805,7 +805,7 @@ app.post('/api/explain', async (req, res) => {
   try {
     const { topic, exercise, userAnswer } = req.body || {};
     if (!exercise?.sentence) return res.status(400).json({ error: 'exercise is required' });
-    const system = `You are a Spanish language tutor. Provide clear, helpful explanations for exercise mistakes using markdown formatting.`;
+    const system = `You are a language tutor. Provide clear, helpful explanations for exercise mistakes using markdown formatting.`;
     const schema = {
       type: 'object', additionalProperties: false,
       properties: {
@@ -813,7 +813,7 @@ app.post('/api/explain', async (req, res) => {
       },
       required: ['explanation']
     };
-    const user = `Spanish exercise explanation needed:
+    const user = `Language learning exercise explanation needed:
 
 Topic: ${topic}
 Exercise: ${exercise.sentence}
@@ -852,7 +852,7 @@ Use markdown formatting for clarity (bold for **important terms**, code blocks f
 app.post('/api/recommend', async (req, res) => {
   try {
     const { topic, score, percentage, wrongExercises } = req.body || {};
-    const system = `You are a Spanish language learning advisor. Analyze user performance and recommend the next optimal practice topic.`;
+    const system = `You are a language learning advisor. Analyze user performance and recommend the next optimal practice topic.`;
     const schema = {
       type: 'object', additionalProperties: false,
       properties: {
@@ -861,7 +861,7 @@ app.post('/api/recommend', async (req, res) => {
       },
       required: ['recommendation', 'reasoning']
     };
-    const user = `Analyze the user's Spanish practice results and suggest a next topic:
+    const user = `Analyze the user's practice results and suggest a next topic:
 
 Current topic: ${topic}
 Score: ${score?.correct}/${score?.total} (${Number(percentage).toFixed(1)}%)
