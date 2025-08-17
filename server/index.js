@@ -602,6 +602,46 @@ function recoverItemsFromPartialJson(raw) {
   }
 }
 
+// MCQ option deduplication: remove duplicate option.text values within an item.
+// Prefer keeping the option marked as correct among duplicates; otherwise keep the earliest.
+// Returns { item, changed, valid } where valid requires at least 2 distinct options.
+function dedupeMcqItemOptions(originalItem) {
+  try {
+    const item = originalItem && typeof originalItem === 'object' ? { ...originalItem } : originalItem;
+    const options = Array.isArray(item?.options) ? item.options.slice() : [];
+    if (!Array.isArray(options) || options.length === 0) {
+      return { item: originalItem, changed: false, valid: false };
+    }
+    const textToChoice = new Map();
+    const order = [];
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i] || {};
+      const text = String(opt.text || '');
+      if (!textToChoice.has(text)) {
+        textToChoice.set(text, opt);
+        order.push(text);
+      } else {
+        const kept = textToChoice.get(text);
+        if (opt && opt.correct && !kept.correct) {
+          // Prefer the correct one if duplicate texts differ in correctness
+          textToChoice.set(text, opt);
+        }
+        // otherwise, keep the first seen
+      }
+    }
+    const newOptions = order.map(t => textToChoice.get(t));
+    const changed = newOptions.length !== options.length;
+    const valid = newOptions.length >= 2;
+    if (!changed) {
+      return { item: originalItem, changed: false, valid };
+    }
+    const nextItem = { ...item, options: newOptions };
+    return { item: nextItem, changed: true, valid };
+  } catch {
+    return { item: originalItem, changed: false, valid: true };
+  }
+}
+
 // Generic LLM generation endpoint (will be extended for persistent cache)
 app.post('/api/generate', async (req, res) => {
   try {
@@ -660,13 +700,30 @@ app.post('/api/generate', async (req, res) => {
       const { items: cachedItems, shas: cachedShas } = useGrouped
         ? await selectUnseenCrossModelGrouped(cacheLayout, family, seenSet, desiredCount, currentModel)
         : await selectUnseenCrossModel(cacheLayout, family, seenSet, desiredCount, currentModel);
-      let resultItems = cachedItems.map(r => {
+      // Build initial results from cache
+      let resultPairs = cachedItems.map((r, idx) => {
         const it = { ...r.content };
         if (r.localImageUrl) it.localImageUrl = r.localImageUrl;
         if (r.groupId) it.exerciseGroupId = r.groupId;
-        return it;
+        return { item: it, sha: cachedShas[idx] };
       });
-      let resultShas = cachedShas;
+
+      // MCQ: dedupe option texts in cached items before deciding shortfall
+      if (type === 'mcq') {
+        const before = resultPairs.length;
+        let dedupedCount = 0;
+        resultPairs = resultPairs.map(({ item, sha }) => {
+          const { item: fixed, changed, valid } = dedupeMcqItemOptions(item);
+          if (changed) dedupedCount++;
+          return valid ? { item: fixed, sha } : null;
+        }).filter(Boolean);
+        if (dedupedCount > 0) {
+          console.warn(`[MCQ] Deduped option texts for ${dedupedCount}/${before} cached items (removed duplicates).`);
+        }
+      }
+
+      let resultItems = resultPairs.map(p => p.item);
+      let resultShas = resultPairs.map(p => p.sha);
 
       // If not enough, call LLM for the shortfall
       if (resultItems.length < desiredCount) {
@@ -689,7 +746,20 @@ app.post('/api/generate', async (req, res) => {
             throw e;
           }
         }
-        const generated = Array.isArray(parsed?.items) ? parsed.items : [];
+        let generated = Array.isArray(parsed?.items) ? parsed.items : [];
+        // MCQ: dedupe option texts in newly generated items; drop invalid ones (< 2 distinct options)
+        if (type === 'mcq') {
+          const beforeGen = generated.length;
+          let changedGen = 0;
+          generated = generated.map(it => {
+            const { item: fixed, changed, valid } = dedupeMcqItemOptions(it);
+            if (changed) changedGen++;
+            return valid ? fixed : null;
+          }).filter(Boolean);
+          if (changedGen > 0) {
+            console.warn(`[MCQ] Deduped option texts for ${changedGen}/${beforeGen} newly generated items (removed duplicates).`);
+          }
+        }
         const toAdd = generated.slice(0, need);
         const baseLimit = Number(process.env.CACHE_EXERCISES_PER_TYPE_MAX || 100);
         const factor = (() => {
@@ -799,6 +869,20 @@ app.post('/api/generate', async (req, res) => {
     if (isExplanation && explanationPersistentKey) {
       const withKey = { ...parsed, _cacheKey: explanationPersistentKey };
       return res.json(withKey);
+    }
+    // Fallback path (no persistent cache or not an explanation): apply MCQ dedupe if applicable
+    if (type === 'mcq' && parsed && Array.isArray(parsed.items)) {
+      const before = parsed.items.length;
+      let changed = 0;
+      const deduped = parsed.items.map(it => {
+        const { item: fixed, changed: c, valid } = dedupeMcqItemOptions(it);
+        if (c) changed++;
+        return valid ? fixed : null;
+      }).filter(Boolean);
+      if (changed > 0) {
+        console.warn(`[MCQ] Deduped option texts for ${changed}/${before} items (no-cache path).`);
+      }
+      parsed.items = deduped;
     }
     return res.json(parsed);
   } catch (err) {
