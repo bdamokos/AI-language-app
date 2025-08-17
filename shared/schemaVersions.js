@@ -5,7 +5,9 @@ export const schemaVersions = {
   cloze: 1,
   cloze_mixed: 1,
   writing_prompts: 1,
-  guided_dialogues: 1
+  guided_dialogues: 1,
+  // UI/tutorial versioning for onboarding tour
+  onboarding: 1
 };
 
 

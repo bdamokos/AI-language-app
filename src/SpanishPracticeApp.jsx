@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight, Globe, GraduationCap } from 'lucide-react';
+import Joyride, { STATUS } from 'react-joyride';
+import { schemaVersions } from '../shared/schemaVersions.js';
 import Orchestrator, { scoreLesson, generateLesson } from './exercises/Orchestrator.jsx';
 import { scoreFIB, generateFIB } from './exercises/FIBExercise.jsx';
 import { scoreMCQ, generateMCQ } from './exercises/MCQExercise.jsx';
@@ -47,6 +49,71 @@ const SpanishPracticeApp = () => {
   const [clozeMixCount, setClozeMixCount] = useState(2);
   const [dialogueCount, setDialogueCount] = useState(2);
   const [writingCount, setWritingCount] = useState(2);
+
+  // Onboarding / tour state
+  const [isTourRunning, setIsTourRunning] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const ONBOARDING_VERSION = String(schemaVersions?.onboarding ?? 1);
+  const ONBOARDING_COOKIE_NAME = 'onboarding_version';
+
+  const getCookie = (name) => {
+    if (typeof document === 'undefined') return undefined;
+    const pair = document.cookie.split('; ').find(row => row.startsWith(name + '='));
+    return pair ? decodeURIComponent(pair.split('=')[1]) : undefined;
+  };
+  const setCookie = (name, value, days = 365) => {
+    if (typeof document === 'undefined') return;
+    const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
+    document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
+  };
+
+  const hasSeenOnboarding = () => {
+    const v = getCookie(ONBOARDING_COOKIE_NAME);
+    // Support legacy string format like 'v1'
+    if (v && v.startsWith('v')) return v.substring(1) === ONBOARDING_VERSION;
+    return v === ONBOARDING_VERSION;
+  };
+
+  const tourSteps = [
+    {
+      target: '#exercise-generation-controls',
+      content: 'Use these buttons to generate exercises on the fly. They will appear below the explanation. You can generate new sets as many times as you like. <br><br> (Be conscious of the AI costs, this is a hobby project :) Generation may take some time as we are using cheap or free models.)',
+      placement: 'bottom'
+    },
+    {
+      target: '#check-answers-button',
+      content: 'When you are done, click here to check your answers and get feedback.',
+      placement: 'top'
+    },
+    {
+      target: '#export-pdf-button',
+      content: 'Export the entire lesson and solutions to a nicely formatted PDF.',
+      placement: 'left'
+    },
+    {
+      target: 'body',
+      content: 'Want to change the exercise topic? Just reload your browser to start fresh.',
+      placement: 'center'
+    }
+  ];
+
+  useEffect(() => {
+    // Auto-start the tour once explanation is present, only if user has not seen this version
+    if (lesson?.explanation && !hasSeenOnboarding()) {
+      // Wait a tick to ensure anchors exist in the DOM
+      const t = setTimeout(() => setIsTourRunning(true), 300);
+      return () => clearTimeout(t);
+    }
+  }, [lesson]);
+
+  const handleJoyrideCallback = (data) => {
+    const { status } = data;
+    if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
+      // Store as plain number string to simplify future comparisons
+      setCookie(ONBOARDING_COOKIE_NAME, ONBOARDING_VERSION, 365);
+      setIsTourRunning(false);
+    }
+  };
 
   const normalizeText = (text) => normalizeTextUtil(text, strictAccents);
 
@@ -267,7 +334,7 @@ const SpanishPracticeApp = () => {
           <PDFExport lesson={lesson} orchestratorValues={orchestratorValues} strictAccents={strictAccents} />
         </div>
         {/* On-demand exercise generation controls inside the lesson */}
-        <div className="mt-3 p-3 bg-gray-50 rounded">
+        <div id="exercise-generation-controls" className="mt-3 p-3 bg-gray-50 rounded">
           <div className="font-semibold text-gray-800 mb-2">Add content</div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-center">
             <button
@@ -704,6 +771,60 @@ const SpanishPracticeApp = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+      {/* Onboarding tour */}
+      <Joyride
+        steps={tourSteps}
+        run={isTourRunning}
+        continuous
+        showSkipButton
+        showProgress
+        disableBeacon
+        disableScrolling={false}
+        scrollToFirstStep
+        locale={{ last: 'Finish' }}
+        spotlightPadding={8}
+        callback={handleJoyrideCallback}
+      />
+
+      {/* Floating help button */}
+      <button
+        type="button"
+        aria-label="Help and tutorial"
+        onClick={() => setIsHelpOpen(true)}
+        className="fixed bottom-6 right-6 z-40 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-3 shadow-lg"
+      >
+        <HelpCircle size={22} />
+      </button>
+
+      {/* Help modal */}
+      {isHelpOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setIsHelpOpen(false)} />
+          <div className="relative bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">How this app works</h3>
+            <ul className="list-disc pl-5 space-y-2 text-sm text-gray-700">
+            <li>Once you've set your language and level, and chosen your topic, click "Start Lesson" to generate an explanation and start practicing. </li>
+              <li>Generate exercises using the buttons in the "Add content" panel under the explanation.</li>
+              <li>Exercises appear below the explanation. You can generate new sets as many times as you want. (Be conscious of the AI costs, this is a hobby project :)</li>
+              <li>Click <strong>Check Answers</strong> at the bottom to see feedback and get recommendations.</li>
+              <li>Use <strong>Export PDF</strong> in the header to download a full worksheet with solutions and images.</li>
+              <li>To change the exercise topic, just reload your browser and start a new lesson.</li>
+            </ul>
+            <li>
+              <strong>Privacy:</strong> We do <span className="font-semibold text-green-700">not</span> save any individual visitor data (such as your IP address or your performance on exercises). However, the explanations, exercises, and illustrations generated by the AI <span className="font-semibold text-blue-700">are</span> saved and may be shown to other users who select the same combination of language, difficulty, and topic. This helps reduce AI costs and improve performance for everyone.
+            </li>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button onClick={() => setIsHelpOpen(false)} className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">Close</button>
+              <button
+                onClick={() => { setIsHelpOpen(false); setIsTourRunning(true); }}
+                className="px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Start tutorial
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {!languageContext ? (
         <LanguageLevelSelector onStart={handleLanguageLevelStart} />
       ) : (
@@ -919,6 +1040,7 @@ const SpanishPracticeApp = () => {
 
               {!submitted ? (
                 <button
+                  id="check-answers-button"
                   onClick={checkAnswers}
                   className="w-full bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition-colors"
                 >
