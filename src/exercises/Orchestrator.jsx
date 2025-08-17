@@ -6,6 +6,7 @@ import ClozeExercise, { scoreCloze, generateCloze } from './ClozeExercise.jsx';
 import ClozeMixedExercise, { scoreClozeMixed, generateClozeMixed } from './ClozeMixedExercise.jsx';
 import GuidedDialogueExercise, { scoreGuidedDialogue, generateGuidedDialogues } from './GuidedDialogueExercise.jsx';
 import WritingPromptExercise, { scoreWritingPrompt, generateWritingPrompts } from './WritingPromptExercise.jsx';
+import ReadingExercise, { scoreReading } from './ReadingExercise.jsx';
 import ExplanationComponent, { generateExplanation } from './ExplanationComponent.jsx';
 import { normalizeText } from './utils.js';
 
@@ -29,6 +30,7 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
     if (Array.isArray(lesson?.cloze_with_mixed_options)) arr.push(['clozeMix', lesson.cloze_with_mixed_options]);
     if (Array.isArray(lesson?.guided_dialogues)) arr.push(['dialogue', lesson.guided_dialogues]);
     if (Array.isArray(lesson?.writing_prompts)) arr.push(['writing', lesson.writing_prompts]);
+    if (Array.isArray(lesson?.reading_comprehension)) arr.push(['reading', lesson.reading_comprehension]);
     return arr;
   }, [lesson]);
 
@@ -45,6 +47,7 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
           {type === 'clozeMix' && items.length > 0 && <h3 className="font-semibold text-gray-800">Cloze (Mixed Options)</h3>}
           {type === 'dialogue' && items.length > 0 && <h3 className="font-semibold text-gray-800">Guided Dialogues</h3>}
           {type === 'writing' && items.length > 0 && <h3 className="font-semibold text-gray-800">Writing Prompts</h3>}
+          {type === 'reading' && items.length > 0 && <h3 className="font-semibold text-gray-800">Reading Comprehension</h3>}
           {items.map((item, idx) => {
             const keyPrefix = `${idBase}:${type}:${idx}`;
             const val = values?.[keyPrefix] ?? (type === 'mcq' ? null : {});
@@ -196,6 +199,25 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
                 </div>
               );
             }
+            if (type === 'reading') {
+              return (
+                <div key={keyPrefix} className="space-y-2">
+                  <ReadingExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
+                  {hasAnyGroupInSection && isGroupEnd && (
+                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+                      <span>Rate this set</span>
+                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
+                        <ThumbsUp size={14} /> Like
+                      </button>
+                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
+                        <ThumbsDown size={14} /> Dislike
+                      </button>
+                      {alreadyRated && <span className="ml-1">Thanks!</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             return null;
           })}
         </div>
@@ -248,6 +270,12 @@ export function scoreLesson(lesson, values, strictAccents = true) {
     lesson.writing_prompts.forEach((item, idx) => {
       const key = `lesson:writing:${idx}`;
       add(scoreWritingPrompt(item, values?.[key] || {}, eq));
+    });
+  }
+  if (Array.isArray(lesson?.reading_comprehension)) {
+    lesson.reading_comprehension.forEach((item, idx) => {
+      const key = `lesson:reading:${idx}`;
+      add(scoreReading(item, values?.[key] || {}));
     });
   }
   return { correct, total };

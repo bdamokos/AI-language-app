@@ -617,6 +617,7 @@ app.post('/api/generate', async (req, res) => {
       if (/^cloze_single_/.test(String(schemaName))) return 'cloze';
       if (/^cloze_mixed_single_/.test(String(schemaName))) return 'cloze_mixed';
       if (schemaName === 'guided_dialogues_list') return 'guided_dialogues';
+      if (schemaName === 'reading_list') return 'reading';
       return 'unknown';
     })();
 
@@ -695,6 +696,7 @@ app.post('/api/generate', async (req, res) => {
           switch (type) {
             case 'fib': return Number(process.env.CACHE_PER_TYPE_FACTOR_FIB || 10);
             case 'mcq': return Number(process.env.CACHE_PER_TYPE_FACTOR_MCQ || 5);
+            case 'reading': return Number(process.env.CACHE_PER_TYPE_FACTOR_READING || 2);
             default: return 1;
           }
         })();

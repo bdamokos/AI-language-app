@@ -205,6 +205,14 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         });
       }
 
+      if (lesson.reading_comprehension) {
+        lesson.reading_comprehension.forEach((item, idx) => {
+          if (item.generatedImage) {
+            images[`reading:${idx}`] = item.generatedImage;
+          }
+        });
+      }
+
       console.log('[PDF] Collected images:', images);
       setCollectedImages(images);
     };
@@ -1127,6 +1135,102 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           </View>
         )}
 
+        {/* Reading Comprehension Section */}
+        {Array.isArray(lesson.reading_comprehension) && lesson.reading_comprehension.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Reading Comprehension</Text>
+            {lesson.reading_comprehension.map((item, idx) => (
+              <View key={`reading-${idx}`} style={{ marginBottom: 20 }}>
+                <Text style={styles.exerciseTitle}>
+                  Passage {idx + 1}{item.title ? `: ${item.title}` : ''}
+                </Text>
+                {item.passage && (
+                  <Text style={styles.passage}>{item.passage}</Text>
+                )}
+                {/* Image if available */}
+                {getImageByKey(`reading:${idx}`) && (
+                  <View style={{ width: 200, alignSelf: 'center' }}>
+                    {renderImage(getImageByKey(`reading:${idx}`), 'AI-generated illustration')}
+                  </View>
+                )}
+                {/* Glossary table */}
+                {Array.isArray(item.glossary) && item.glossary.length > 0 && (
+                  <View style={{ marginTop: 8, border: '1 solid #d1d5db' }}>
+                    {/* Header */}
+                    <View style={{ flexDirection: 'row', backgroundColor: '#f3f4f6', borderBottom: '1 solid #d1d5db' }}>
+                      {['Term','POS','Definition / Translation','Example'].map((h, i) => (
+                        <View key={i} style={{ flex: 1, padding: 6, borderRight: i < 3 ? '1 solid #d1d5db' : 'none' }}>
+                          <Text style={[styles.text, { fontWeight: 'bold', fontSize: 11 }]}>{h}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    {/* Rows */}
+                    {item.glossary.map((g, gi) => (
+                      <View key={gi} style={{ flexDirection: 'row', borderBottom: gi < item.glossary.length - 1 ? '1 solid #e5e7eb' : 'none' }}>
+                        <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10, fontWeight: 'bold' }]}>{g.term}</Text></View>
+                        <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10 }]}>{g.pos}</Text></View>
+                        <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10 }]}>{g.definition}{g.translation ? ` — ${g.translation}` : ''}</Text></View>
+                        <View style={{ flex: 1, padding: 6 }}><Text style={[styles.text, { fontSize: 10 }]}>{g.example}</Text></View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {/* True/False */}
+                {Array.isArray(item.true_false) && item.true_false.length > 0 && (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>True / False</Text>
+                    {item.true_false.map((t, ti) => (
+                      <Text key={`tf-${ti}`} style={styles.text}>
+                        {String.fromCharCode(97 + ti)}. {t.statement}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+                {/* Comprehension Questions */}
+                {Array.isArray(item.comprehension_questions) && item.comprehension_questions.length > 0 && (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Comprehension Questions</Text>
+                    {item.comprehension_questions.map((q, qi) => (
+                      <View key={`qa-${qi}`} style={{ marginBottom: 4 }}>
+                        <Text style={styles.text}>{qi + 1}. {q.question}</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {/* Productive Prompts */}
+                {Array.isArray(item.productive_prompts) && item.productive_prompts.length > 0 && (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Productive Prompts</Text>
+                    {item.productive_prompts.map((p, pi) => (
+                      <View key={`pp-${pi}`} style={{ marginBottom: 4 }}>
+                        <Text style={styles.text}>{pi + 1}. {(p && p.prompt) ? p.prompt : p}</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {/* Opinion Questions */}
+                {Array.isArray(item.opinion_questions) && item.opinion_questions.length > 0 && (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Opinion Questions</Text>
+                    {item.opinion_questions.map((q, qi) => (
+                      <View key={`op-${qi}`} style={{ marginBottom: 4 }}>
+                        <Text style={styles.text}>{qi + 1}. {(q && q.question) ? q.question : q}</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Guided Dialogues Section */}
         {Array.isArray(lesson.guided_dialogues) && lesson.guided_dialogues.length > 0 && (
           <View style={styles.section}>
@@ -1303,6 +1407,79 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                 </View>
               );
             })}
+          </View>
+        )}
+
+        {/* Reading Comprehension Solutions */}
+        {Array.isArray(lesson.reading_comprehension) && lesson.reading_comprehension.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Reading Comprehension - Solutions</Text>
+            {lesson.reading_comprehension.map((item, idx) => (
+              <View key={`reading-sol-${idx}`} style={{ marginBottom: 16 }}>
+                <Text style={styles.exerciseTitle}>Passage {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                {/* True/False answers */}
+                {Array.isArray(item.true_false) && item.true_false.length > 0 && (
+                  <View style={{ marginTop: 4 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>True / False Answers</Text>
+                    {item.true_false.map((t, ti) => (
+                      <Text key={`tf-sol-${ti}`} style={styles.answer}>
+                        {String.fromCharCode(97 + ti)}. {t.answer ? 'True' : 'False'} — {t.statement}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+                {/* Model answers for comprehension */}
+                {Array.isArray(item.comprehension_questions) && item.comprehension_questions.length > 0 && (
+                  <View style={{ marginTop: 6 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Model Answers</Text>
+                    {item.comprehension_questions.map((q, qi) => (
+                      <View key={`qa-sol-${qi}`} style={{ marginBottom: 4 }}>
+                        <Text style={styles.text}>{qi + 1}. {q.question}</Text>
+                        <Text style={styles.answer}>Answer: {q.model_answer}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {/* Model answers for productive prompts */}
+                {Array.isArray(item.productive_prompts) && item.productive_prompts.length > 0 && (
+                  <View style={{ marginTop: 6 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Productive Prompts - Model Answers</Text>
+                    {item.productive_prompts.map((p, pi) => (
+                      <View key={`pp-sol-${pi}`} style={{ marginBottom: 4 }}>
+                        <Text style={styles.text}>{pi + 1}. {(p && p.prompt) ? p.prompt : String(p)}</Text>
+                        {p && p.model_answer && (
+                          <Text style={styles.answer}>Answer: {p.model_answer}</Text>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {/* Opinion model answers */}
+                {Array.isArray(item.opinion_questions) && item.opinion_questions.length > 0 && (
+                  <View style={{ marginTop: 6 }}>
+                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Opinion Questions - Model Answers</Text>
+                    {item.opinion_questions.map((q, qi) => (
+                      <View key={`op-sol-${qi}`} style={{ marginBottom: 4 }}>
+                        <Text style={styles.text}>{qi + 1}. {(q && q.question) ? q.question : q}</Text>
+                        {q && q.model_answers && (
+                          <View style={{ marginLeft: 12 }}>
+                            {q.model_answers.agree && (
+                              <Text style={styles.answer}>Agree: {q.model_answers.agree}</Text>
+                            )}
+                            {q.model_answers.disagree && (
+                              <Text style={styles.answer}>Disagree: {q.model_answers.disagree}</Text>
+                            )}
+                            {q.model_answers.neutral && (
+                              <Text style={styles.answer}>Neutral: {q.model_answers.neutral}</Text>
+                            )}
+                          </View>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ))}
           </View>
         )}
 

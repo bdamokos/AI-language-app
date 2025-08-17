@@ -10,6 +10,7 @@ import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExerc
 import { generateExplanation } from './exercises/ExplanationComponent.jsx';
 import { generateGuidedDialogues } from './exercises/GuidedDialogueExercise.jsx';
 import { generateWritingPrompts } from './exercises/WritingPromptExercise.jsx';
+import { generateReading } from './exercises/ReadingExercise.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
@@ -49,6 +50,7 @@ const SpanishPracticeApp = () => {
   const [clozeMixCount, setClozeMixCount] = useState(2);
   const [dialogueCount, setDialogueCount] = useState(2);
   const [writingCount, setWritingCount] = useState(2);
+  const [readingCount, setReadingCount] = useState(1);
 
   // Onboarding / tour state
   const [isPreTourRunning, setIsPreTourRunning] = useState(false);
@@ -457,6 +459,15 @@ const SpanishPracticeApp = () => {
               >{loadingWritingOnly ? 'Generating...' : `Add Writing Prompts (${writingCount})`}</button>
               <input type="number" min={1} max={10} value={writingCount} onChange={e => setWritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
             </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={generateReadingOnly}
+                disabled={loadingReadingOnly || !topic.trim()}
+                className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded hover:bg-emerald-700 text-sm"
+              >{loadingReadingOnly ? 'Generating...' : `Generate Reading Passage (${readingCount})`}</button>
+              <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+            </div>
           </div>
         </div>
         <Orchestrator
@@ -541,7 +552,8 @@ const SpanishPracticeApp = () => {
     cloze_passages: lesson?.cloze_passages || [],
     cloze_with_mixed_options: lesson?.cloze_with_mixed_options || [],
     guided_dialogues: lesson?.guided_dialogues || [],
-    writing_prompts: lesson?.writing_prompts || []
+    writing_prompts: lesson?.writing_prompts || [],
+    reading_comprehension: lesson?.reading_comprehension || []
   });
 
   const mergeLesson = (partial) => {
@@ -644,6 +656,19 @@ const SpanishPracticeApp = () => {
       mergeLesson({ topic, writing_prompts: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate writing prompts'); }
     finally { setLoadingWritingOnly(false); }
+  };
+
+  const [loadingReadingOnly, setLoadingReadingOnly] = useState(false);
+  const generateReadingOnly = async () => {
+    if (!topic.trim()) return;
+    setLoadingReadingOnly(true);
+    setErrorMsg('');
+    try {
+      const data = await generateReading(topic, Number(readingCount), languageContext);
+      if (!lesson) setLesson(ensureLessonSkeleton());
+      mergeLesson({ topic, reading_comprehension: data.items || [] });
+    } catch (e) { console.error(e); setErrorMsg('Failed to generate reading comprehension'); }
+    finally { setLoadingReadingOnly(false); }
   };
 
   const handleAnswerChange = (key, value) => {
