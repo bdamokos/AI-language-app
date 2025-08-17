@@ -342,26 +342,31 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
   } maxTokens=${maxTokens} promptPreview="${preview}..." structured=${jsonSchema ? 'yes' : 'no'}`);
   if (provider === 'openrouter') {
     assertEnv(runtimeConfig.openrouter.apiKey, 'Missing OPENROUTER_API_KEY');
-    const buildOpenRouterPayload = (maxTokensValue) => ({
-      model: runtimeConfig.openrouter.model,
-      messages: [
-        system ? { role: 'system', content: system } : null,
-        { role: 'user', content: user }
-      ].filter(Boolean),
-      max_tokens: maxTokensValue,
-      reasoning: { exclude: true, effort: 'low', enabled: false },
-      ...(jsonSchema ? {
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: schemaName || 'structured_output',
-            strict: true,
-            // Some providers (e.g., OpenAI) require `required` to include all properties recursively
-            schema: coerceSchemaRequiredAll(jsonSchema)
+    const buildOpenRouterPayload = (maxTokensValue) => {
+      const modelId = runtimeConfig.openrouter.model || '';
+      const enableReasoningByDefault = /^openai\/gpt-/i.test(String(modelId));
+      return {
+        model: modelId,
+        messages: [
+          system ? { role: 'system', content: system } : null,
+          { role: 'user', content: user }
+        ].filter(Boolean),
+        max_tokens: maxTokensValue,
+        // Enable low-effort reasoning by default for OpenAI GPT models to avoid mandatory reasoning errors
+        reasoning: enableReasoningByDefault ? { effort: 'low' } : { exclude: true, effort: 'low', enabled: false },
+        ...(jsonSchema ? {
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: schemaName || 'structured_output',
+              strict: true,
+              // Some providers (e.g., OpenAI) require `required` to include all properties recursively
+              schema: coerceSchemaRequiredAll(jsonSchema)
+            }
           }
-        }
-      } : {})
-    });
+        } : {})
+      };
+    };
 
     const doOpenRouterRequest = async (maxTokensValue) => {
       const payload = buildOpenRouterPayload(maxTokensValue);
