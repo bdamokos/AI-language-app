@@ -309,14 +309,16 @@ export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, coun
 }
 
 function collectPoolFamilyShas(idx, family) {
-  const { type, language, level, challengeMode, schemaVersion, promptSha12 } = family;
+  const { type, language, level, challengeMode, schemaVersion } = family;
   const keys = Object.keys(idx.pools || {});
   const result = [];
   for (const key of keys) {
     const parts = String(key).split(':');
+    // Formats:
+    //  - 7 parts: [type, language, level, challengeMode, model, schemaVersion, promptSha12]
     if (parts.length !== 7) continue;
-    const [t, lang, lvl, chall, /*model*/, ver, sha12] = parts;
-    if (t === type && lang === language && lvl === level && chall === String(challengeMode) && ver === String(schemaVersion) && sha12 === promptSha12) {
+    const [t, lang, lvl, chall, /*model*/, ver] = parts;
+    if (t === type && lang === language && lvl === level && chall === String(challengeMode) && ver === String(schemaVersion)) {
       const list = idx.pools[key] || [];
       for (const sha of list) result.push(sha);
     }
