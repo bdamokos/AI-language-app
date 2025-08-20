@@ -15,8 +15,9 @@ import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
 import { generateErrorBundles } from './exercises/ErrorBundleExercise.jsx';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
+import useBaseText from './hooks/useBaseText.js';
 
-const SpanishPracticeApp = () => {
+const AIPracticeApp = () => {
   // Language and level context
   const [languageContext, setLanguageContext] = useState(null);
   
@@ -53,6 +54,9 @@ const SpanishPracticeApp = () => {
   const [writingCount, setWritingCount] = useState(2);
   const [readingCount, setReadingCount] = useState(1);
   const [errorBundleCount, setErrorBundleCount] = useState(4);
+  const { fetchBaseText } = useBaseText();
+  const [readingBaseText, setReadingBaseText] = useState(null);
+  const [readingChapterCursor, setReadingChapterCursor] = useState(0);
 
   // Onboarding / tour state
   const [isPreTourRunning, setIsPreTourRunning] = useState(false);
@@ -654,9 +658,34 @@ const SpanishPracticeApp = () => {
     setLoadingClozeOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateCloze(topic, Number(clozeCount), languageContext);
+      // Ensure we have a base text and chapter
+      let base = readingBaseText;
+      if (!base) {
+        base = await fetchBaseText({
+          topic,
+          language: languageContext?.language || 'es',
+          level: languageContext?.level || 'B1',
+          challengeMode: !!languageContext?.challengeMode
+        });
+        if (base) setReadingBaseText(base);
+        setReadingChapterCursor(0);
+      }
+      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      const desired = Math.max(1, Math.min(10, Number(clozeCount)));
+      const collected = [];
+      if (base && chapters.length > 0) {
+        for (let i = 0; i < desired; i++) {
+          const index = Math.min(readingChapterCursor + i, chapters.length - 1);
+          const chapter = chapters[index];
+          const resp = await generateCloze(topic, { ...languageContext, baseText: base, chapter });
+          if (resp?.items?.[0]) collected.push(resp.items[0]);
+        }
+        // Advance cursor
+        setReadingChapterCursor((prev) => Math.min(prev + desired, chapters.length - 1));
+      }
+      const items = collected.length > 0 ? collected : [];
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, cloze_passages: data.items || [] });
+      mergeLesson({ topic, cloze_passages: items });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze'); }
     finally { setLoadingClozeOnly(false); }
   };
@@ -666,9 +695,34 @@ const SpanishPracticeApp = () => {
     setLoadingClozeMixOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateClozeMixed(topic, Number(clozeMixCount), languageContext);
+      // Ensure we have a base text and chapter
+      let base = readingBaseText;
+      if (!base) {
+        base = await fetchBaseText({
+          topic,
+          language: languageContext?.language || 'es',
+          level: languageContext?.level || 'B1',
+          challengeMode: !!languageContext?.challengeMode
+        });
+        if (base) setReadingBaseText(base);
+        setReadingChapterCursor(0);
+      }
+      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      const desired = Math.max(1, Math.min(10, Number(clozeMixCount)));
+      const collected = [];
+      if (base && chapters.length > 0) {
+        for (let i = 0; i < desired; i++) {
+          const index = Math.min(readingChapterCursor + i, chapters.length - 1);
+          const chapter = chapters[index];
+          const resp = await generateClozeMixed(topic, { ...languageContext, baseText: base, chapter });
+          if (resp?.items?.[0]) collected.push(resp.items[0]);
+        }
+        // Advance cursor
+        setReadingChapterCursor((prev) => Math.min(prev + desired, chapters.length - 1));
+      }
+      const items = collected.length > 0 ? collected : [];
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, cloze_with_mixed_options: data.items || [] });
+      mergeLesson({ topic, cloze_with_mixed_options: items });
       } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
     finally { setLoadingClozeMixOnly(false); }
   };
@@ -703,7 +757,35 @@ const SpanishPracticeApp = () => {
     setLoadingReadingOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateReading(topic, Number(readingCount), languageContext);
+      // Try to use base-text-aware generation when possible
+      let data;
+      try {
+        // Reuse an existing base text if available; otherwise create/select a new one
+        let base = readingBaseText;
+        if (!base) {
+          base = await fetchBaseText({
+            topic,
+            language: languageContext?.language || 'es',
+            level: languageContext?.level || 'B1',
+            challengeMode: !!languageContext?.challengeMode
+          });
+          if (base) setReadingBaseText(base);
+          setReadingChapterCursor(0);
+        }
+        const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+        if (base && chapters.length > 0) {
+          const index = Math.min(readingChapterCursor, chapters.length - 1);
+          const chapter = chapters[index];
+          data = await generateReading(topic, Number(readingCount), { ...languageContext, baseText: base, chapter });
+          // Advance cursor for next click
+          setReadingChapterCursor((prev) => Math.min(prev + 1, chapters.length - 1));
+        }
+      } catch {
+        // Fallback to non-base-text generation
+      }
+      if (!data) {
+        data = await generateReading(topic, Number(readingCount), languageContext);
+      }
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, reading_comprehension: data.items || [] });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate reading comprehension'); }
@@ -1274,6 +1356,6 @@ const SpanishPracticeApp = () => {
   );
 };
 
-export default SpanishPracticeApp;
+export default AIPracticeApp;
 
 
