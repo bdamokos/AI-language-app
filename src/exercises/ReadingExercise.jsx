@@ -312,9 +312,13 @@ export function scoreReading(item, value) {
 }
 
 /**
- * Generate Reading Comprehension exercises
+ * Generate Reading Comprehension exercises - base text aware version
  */
 export async function generateReading(topic, count = 1, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+  // Check if we have a base text chapter context
+  if (languageContext.chapter) {
+    return generateReadingFromBaseText(topic, count, languageContext);
+  }
   // Single-call path
   if (count === 1) {
     return generateSingleReading(topic, null, languageContext);
@@ -472,6 +476,163 @@ Return STRICT JSON only per schema.`;
   }
 
   return response.json();
+}
+
+/**
+ * Generate Reading Comprehension exercises from base text chapters
+ */
+async function generateReadingFromBaseText(topic, count = 1, languageContext) {
+  const languageName = languageContext.language;
+  const level = languageContext.level;
+  const challengeMode = languageContext.challengeMode;
+  const chapter = languageContext.chapter;
+  const baseText = languageContext.baseText;
+
+  if (!chapter || !chapter.passage) {
+    throw new Error('No base text chapter provided for reading comprehension');
+  }
+
+  const system = `You are creating reading comprehension exercises using an existing text passage. Extract meaningful T/F statements, comprehension questions, and supporting materials directly from the given passage. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging analysis)' : ''}.`;
+
+  const user = `Create reading comprehension exercises based on the following passage from "${baseText?.title || 'Unknown'}":
+
+**Chapter: ${chapter.title}**
+**Passage:**
+${chapter.passage}
+
+**Grammar Focus:** ${topic}
+
+Requirements:
+- Use the EXACT passage provided above - do not modify the text
+- Create an appropriate title (≤ 60 characters) that reflects the chapter content
+- Generate an image_prompt that captures the scene/mood of this specific chapter
+- Identify 4-6 key vocabulary terms from the passage for the glossary (with POS, definition, translation, example)
+- Extract 4-5 TRUE/FALSE statements that can be verified directly from the passage text
+- Create 3-4 comprehension questions about the content, with model answers
+- Generate 1-2 productive prompts that connect to the chapter themes, with model answers
+- Create exactly 3 opinion questions that invite reflection on the chapter content, with agree/disagree/neutral model answers
+
+**Important:** All questions and vocabulary must be based on what's actually in the passage. Don't invent facts not present in the text.
+
+Return STRICT JSON only per schema.`;
+
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array', minItems: 1, maxItems: 1, items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            title: { type: 'string', maxLength: 60 },
+            passage: { type: 'string' },
+            image_prompt: { type: 'string' },
+            glossary: {
+              type: 'array', minItems: 4, maxItems: 6, items: {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  term: { type: 'string' },
+                  pos: { type: 'string', enum: ['noun','verb','adj','adv','expr'] },
+                  definition: { type: 'string' },
+                  translation: { type: ['string','null'] },
+                  example: { type: 'string' }
+                },
+                required: ['term','pos','definition','translation','example']
+              }
+            },
+            true_false: {
+              type: 'array', minItems: 4, maxItems: 5, items: {
+                type: 'object', additionalProperties: false,
+                properties: { statement: { type: 'string' }, answer: { type: 'boolean' } },
+                required: ['statement','answer']
+              }
+            },
+            comprehension_questions: {
+              type: 'array', minItems: 3, maxItems: 4, items: {
+                type: 'object', additionalProperties: false,
+                properties: { question: { type: 'string' }, model_answer: { type: 'string' } },
+                required: ['question','model_answer']
+              }
+            },
+            productive_prompts: { 
+              type: 'array', minItems: 1, maxItems: 2, items: { 
+                type: 'object', additionalProperties: false,
+                properties: { prompt: { type: 'string' }, model_answer: { type: 'string' } },
+                required: ['prompt','model_answer']
+              }
+            },
+            opinion_questions: { 
+              type: 'array', minItems: 3, maxItems: 3, items: {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  question: { type: 'string' },
+                  model_answers: { 
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                      agree: { type: 'string' },
+                      disagree: { type: 'string' },
+                      neutral: { type: 'string' }
+                    },
+                    required: ['agree', 'disagree', 'neutral']
+                  }
+                },
+                required: ['question', 'model_answers']
+              }
+            },
+            difficulty: { type: 'string' },
+            base_text_info: {
+              type: 'object',
+              properties: {
+                base_text_id: { type: 'string' },
+                chapter_number: { type: 'number' },
+                chapter_title: { type: 'string' }
+              }
+            }
+          },
+          required: ['title','passage','image_prompt','glossary','true_false','comprehension_questions','productive_prompts','opinion_questions']
+        }
+      }
+    },
+    required: ['items']
+  };
+
+  const response = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system,
+      user,
+      jsonSchema: schema,
+      schemaName: 'reading_from_base_text',
+      metadata: { 
+        language: languageName, 
+        level, 
+        challengeMode, 
+        topic,
+        baseTextId: baseText?.id,
+        chapterNumber: chapter?.number,
+        chapterTitle: chapter?.title
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate reading comprehension from base text: ${response.status}`);
+  }
+
+  const result = await response.json();
+  
+  // Add base text metadata to the result
+  if (result.items && result.items[0]) {
+    result.items[0].base_text_info = {
+      base_text_id: baseText?.id,
+      chapter_number: chapter?.number, 
+      chapter_title: chapter?.title
+    };
+    // Ensure we use the original passage
+    result.items[0].passage = chapter.passage;
+  }
+
+  return result;
 }
 
 
