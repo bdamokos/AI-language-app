@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import SpanishPracticeApp from './SpanishPracticeApp.jsx';
+import AIPracticeApp from './AIPracticeApp.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
 import { Settings as SettingsIcon } from 'lucide-react';
 
@@ -28,7 +28,7 @@ export default function App() {
       <div className="min-h-screen bg-gray-50">
         <div className="py-6">
           <div className="max-w-5xl mx-auto">
-            <SpanishPracticeApp />
+            <AIPracticeApp />
           </div>
         </div>
       </div>
@@ -48,7 +48,7 @@ export default function App() {
       <div className="py-6">
         <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className={settingsOpen ? 'lg:col-span-2' : 'lg:col-span-3'}>
-            <SpanishPracticeApp />
+            <AIPracticeApp />
           </div>
           {settingsOpen && (
             <div>
