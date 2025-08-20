@@ -6,10 +6,11 @@ import ClozeExercise, { scoreCloze, generateCloze } from './ClozeExercise.jsx';
 import ClozeMixedExercise, { scoreClozeMixed, generateClozeMixed } from './ClozeMixedExercise.jsx';
 import GuidedDialogueExercise, { scoreGuidedDialogue, generateGuidedDialogues } from './GuidedDialogueExercise.jsx';
 import WritingPromptExercise, { scoreWritingPrompt, generateWritingPrompts } from './WritingPromptExercise.jsx';
-import ReadingExercise, { scoreReading } from './ReadingExercise.jsx';
+import ReadingExercise, { scoreReading, generateReading } from './ReadingExercise.jsx';
 import ExplanationComponent, { generateExplanation } from './ExplanationComponent.jsx';
 import { normalizeText } from './utils.js';
 import ErrorBundleExercise, { scoreErrorBundle, generateErrorBundles } from './ErrorBundleExercise.jsx';
+import { BaseTextChapterTracker, EXERCISE_CATEGORIES, createChapterContext } from './baseTextOrchestrator.js';
 
 /**
  * Lesson Orchestrator: renders a collection of exercise items with standardized API.
@@ -351,41 +352,253 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     cloze_with_mixed_options: Math.max(0, Math.min(10, Number(counts?.cloze_with_mixed_options ?? 0))),
     guided_dialogues: Math.max(0, Math.min(10, Number(counts?.guided_dialogues ?? 0))),
     writing_prompts: Math.max(0, Math.min(10, Number(counts?.writing_prompts ?? 0))),
-    error_bundles: Math.max(0, Math.min(12, Number(counts?.error_bundles ?? 0)))
+    error_bundles: Math.max(0, Math.min(12, Number(counts?.error_bundles ?? 0))),
+    reading_comprehension: Math.max(0, Math.min(10, Number(counts?.reading_comprehension ?? 0)))
   };
 
-  // Generate all exercise types in parallel using component generation functions
-  const [explanation, fibData, mcqData, clozeData, clozeMixData, dialogueData, writingData, errorBundleData] = await Promise.all([
-    generateExplanation(topic, languageContext),
-    safeCounts.fill_in_blanks > 0 ? generateFIB(topic, safeCounts.fill_in_blanks, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.multiple_choice > 0 ? generateMCQ(topic, safeCounts.multiple_choice, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.cloze_passages > 0 ? generateCloze(topic, safeCounts.cloze_passages, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.cloze_with_mixed_options > 0 ? generateClozeMixed(topic, safeCounts.cloze_with_mixed_options, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.guided_dialogues > 0 ? generateGuidedDialogues(topic, safeCounts.guided_dialogues, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.writing_prompts > 0 ? generateWritingPrompts(topic, safeCounts.writing_prompts, languageContext) : Promise.resolve({ items: [] }),
-    safeCounts.error_bundles > 0 ? generateErrorBundles(topic, safeCounts.error_bundles, { language: languageContext.language, level: languageContext.level, challengeMode: languageContext.challengeMode }) : Promise.resolve({ items: [] })
-  ]);
+  // Initialize base text orchestration
+  const chapterTracker = new BaseTextChapterTracker();
+  
+  // Fetch base texts for different exercise categories
+  const baseTexts = await fetchBaseTextsForLesson(chapterTracker, languageContext, safeCounts);
+  
+  // Generate exercises with orchestrated base text allocation
+  const results = await generateOrchestredExercises(topic, safeCounts, languageContext, chapterTracker);
 
-  // Build lesson bundle
+  // Build lesson bundle with orchestration metadata
   return {
-    version: '1.0',
+    version: '1.1', // Updated version for orchestrated lessons
     language: languageContext.language,
     topic,
     pedagogy: { 
-      approach: 'scaffolded+spiral', 
-      strategy_notes: 'Component-driven generation with distributed prompts' 
+      approach: 'orchestrated-base-text', 
+      strategy_notes: 'Base text chapters allocated to create synergies between exercises'
     },
-    explanation,
-    fill_in_blanks: fibData.items || [],
-    multiple_choice: mcqData.items || [],
-    cloze_passages: clozeData.items || [],
-    cloze_with_mixed_options: clozeMixData.items || [],
-    guided_dialogues: dialogueData.items || [],
-    writing_prompts: writingData.items || []
-    ,
-    error_bundles: errorBundleData.items || [],
-    error_bundles_shared_context: errorBundleData.shared_context || ''
+    base_texts: baseTexts, // Multiple base texts may be used
+    orchestration: chapterTracker.getDebugInfo(),
+    explanation: results.explanation,
+    fill_in_blanks: results.fibData.items || [],
+    multiple_choice: results.mcqData.items || [],
+    cloze_passages: results.clozeData.items || [],
+    cloze_with_mixed_options: results.clozeMixData.items || [],
+    guided_dialogues: results.dialogueData.items || [],
+    writing_prompts: results.writingData.items || [],
+    reading_comprehension: results.readingData.items || [],
+    error_bundles: results.errorBundleData.items || [],
+    error_bundles_shared_context: results.errorBundleData.shared_context || ''
   };
+}
+
+/**
+ * Fetch base texts needed for the lesson based on exercise counts
+ */
+async function fetchBaseTextsForLesson(chapterTracker, languageContext, safeCounts) {
+  const baseTexts = [];
+  const fetchedIds = new Set();
+  
+  // Determine how many base texts we need
+  const needsSequential = safeCounts.reading_comprehension > 0 || safeCounts.cloze_passages > 0 || safeCounts.cloze_with_mixed_options > 0;
+  const needsIsolated = safeCounts.fill_in_blanks > 0 || safeCounts.multiple_choice > 0 || safeCounts.error_bundles > 0;
+  
+  if (needsSequential) {
+    // Fetch primary base text for sequential exercises
+    const baseText = await fetchBaseText(languageContext, []);
+    if (baseText) {
+      chapterTracker.addBaseText(baseText);
+      baseTexts.push(baseText);
+      fetchedIds.add(baseText.id);
+    }
+  }
+  
+  if (needsIsolated) {
+    // Fetch secondary base text for isolated exercises if needed
+    const exclusions = Array.from(fetchedIds);
+    const isolatedBaseText = await fetchBaseText(languageContext, exclusions);
+    if (isolatedBaseText && !fetchedIds.has(isolatedBaseText.id)) {
+      chapterTracker.addBaseText(isolatedBaseText);
+      baseTexts.push(isolatedBaseText);
+    }
+  }
+  
+  return baseTexts;
+}
+
+/**
+ * Fetch a single base text with exclusions
+ */
+async function fetchBaseText(languageContext, excludeIds = []) {
+  try {
+    const resp = await fetch('/api/base-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        topic: 'lesson_generation', // Topic doesn't matter for base text selection
+        language: languageContext.language, 
+        level: languageContext.level, 
+        challengeMode: languageContext.challengeMode, 
+        excludeIds 
+      })
+    });
+    if (resp.ok) return await resp.json();
+  } catch (e) {
+    console.warn('Failed to fetch base text:', e);
+  }
+  return null;
+}
+
+/**
+ * Generate all exercises with orchestrated base text chapter allocation
+ */
+async function generateOrchestredExercises(topic, safeCounts, languageContext, chapterTracker) {
+  // Generate independent exercises (no base text needed)
+  const independentPromises = [
+    generateExplanation(topic, languageContext),
+    safeCounts.guided_dialogues > 0 ? generateGuidedDialogues(topic, safeCounts.guided_dialogues, languageContext) : Promise.resolve({ items: [] }),
+    safeCounts.writing_prompts > 0 ? generateWritingPrompts(topic, safeCounts.writing_prompts, languageContext) : Promise.resolve({ items: [] })
+  ];
+  
+  // Generate sequential exercises (reading, cloze, cloze_mixed) - these share chapters
+  const sequentialPromises = [
+    generateSequentialExercise('reading_comprehension', safeCounts.reading_comprehension, topic, languageContext, chapterTracker),
+    generateSequentialExercise('cloze_passages', safeCounts.cloze_passages, topic, languageContext, chapterTracker),
+    generateSequentialExercise('cloze_with_mixed_options', safeCounts.cloze_with_mixed_options, topic, languageContext, chapterTracker)
+  ];
+  
+  // Generate isolated exercises (fib, mcq, error) - these avoid sequential chapters
+  const isolatedPromises = [
+    generateIsolatedExercise('fill_in_blanks', safeCounts.fill_in_blanks, topic, languageContext, chapterTracker),
+    generateIsolatedExercise('multiple_choice', safeCounts.multiple_choice, topic, languageContext, chapterTracker),
+    generateIsolatedExercise('error_bundles', safeCounts.error_bundles, topic, languageContext, chapterTracker)
+  ];
+
+  // Wait for all exercises to complete
+  const [
+    [explanation, dialogueData, writingData],
+    [readingData, clozeData, clozeMixData],
+    [fibData, mcqData, errorBundleData]
+  ] = await Promise.all([
+    Promise.all(independentPromises),
+    Promise.all(sequentialPromises),
+    Promise.all(isolatedPromises)
+  ]);
+
+  return {
+    explanation,
+    dialogueData,
+    writingData,
+    readingData,
+    clozeData,
+    clozeMixData,
+    fibData,
+    mcqData,
+    errorBundleData
+  };
+}
+
+/**
+ * Generate a sequential exercise with chapter allocation
+ */
+async function generateSequentialExercise(exerciseType, count, topic, languageContext, chapterTracker) {
+  if (count <= 0) return { items: [] };
+  
+  // Try to allocate a chapter from available base texts
+  const baseTexts = Object.keys(chapterTracker.baseTexts);
+  let chapterAllocation = null;
+  
+  for (const baseTextId of baseTexts) {
+    chapterAllocation = chapterTracker.allocateSequentialChapter(baseTextId, exerciseType);
+    if (chapterAllocation) break;
+  }
+  
+  if (!chapterAllocation) {
+    console.warn(`No chapter available for sequential exercise: ${exerciseType}`);
+    return { items: [] };
+  }
+  
+  // Create context for exercise generation
+  const context = createChapterContext(
+    chapterTracker.baseTexts[chapterAllocation.baseTextId],
+    chapterAllocation.chapterIndex,
+    chapterAllocation.allocationInfo
+  );
+  
+  // Generate exercise based on type (placeholder for now)
+  return await generateExerciseWithContext(exerciseType, count, topic, languageContext, context);
+}
+
+/**
+ * Generate an isolated exercise with chapter allocation
+ */
+async function generateIsolatedExercise(exerciseType, count, topic, languageContext, chapterTracker) {
+  if (count <= 0) return { items: [] };
+  
+  // Try to allocate a chapter from available base texts
+  const baseTexts = Object.keys(chapterTracker.baseTexts);
+  let chapterAllocation = null;
+  
+  for (const baseTextId of baseTexts) {
+    chapterAllocation = chapterTracker.allocateIsolatedChapter(baseTextId, exerciseType);
+    if (chapterAllocation) break;
+  }
+  
+  if (!chapterAllocation) {
+    console.warn(`No chapter available for isolated exercise: ${exerciseType}`);
+    // Fallback to old generation method without base text
+    return await generateExerciseWithoutBaseText(exerciseType, count, topic, languageContext);
+  }
+  
+  // Create context for exercise generation
+  const context = createChapterContext(
+    chapterTracker.baseTexts[chapterAllocation.baseTextId],
+    chapterAllocation.chapterIndex,
+    chapterAllocation.allocationInfo
+  );
+  
+  // Generate exercise based on type
+  return await generateExerciseWithContext(exerciseType, count, topic, languageContext, context);
+}
+
+/**
+ * Generate exercise with base text context (placeholder implementations)
+ */
+async function generateExerciseWithContext(exerciseType, count, topic, languageContext, context) {
+  // For now, fallback to existing generation methods
+  // TODO: Implement base-text-aware generation for each exercise type
+  
+  switch (exerciseType) {
+    case 'reading_comprehension':
+      return generateReading(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    case 'cloze_passages':
+      return generateCloze(topic, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    case 'cloze_with_mixed_options':
+      return generateClozeMixed(topic, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    case 'fill_in_blanks':
+      return generateFIB(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    case 'multiple_choice':
+      return generateMCQ(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    case 'error_bundles':
+      return generateErrorBundles(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    default:
+      return { items: [] };
+  }
+}
+
+/**
+ * Fallback generation without base text
+ */
+async function generateExerciseWithoutBaseText(exerciseType, count, topic, languageContext) {
+  switch (exerciseType) {
+    case 'reading_comprehension':
+      return generateReading(topic, count, languageContext);
+    case 'fill_in_blanks':
+      return generateFIB(topic, count, languageContext);
+    case 'multiple_choice':
+      return generateMCQ(topic, count, languageContext);
+    case 'error_bundles':
+      return generateErrorBundles(topic, count, languageContext);
+    default:
+      return { items: [] };
+  }
 }
 
 

@@ -684,6 +684,7 @@ app.post('/api/generate', async (req, res) => {
       if (schemaName === 'writing_prompts_list') return 'writing_prompts';
       if (/^cloze_single_/.test(String(schemaName))) return 'cloze';
       if (/^cloze_mixed_single_/.test(String(schemaName))) return 'cloze_mixed';
+      if (schemaName === 'unified_cloze') return 'unified_cloze';
       if (schemaName === 'guided_dialogues_list') return 'guided_dialogues';
       if (schemaName === 'reading_list') return 'reading';
       if (schemaName === 'error_bundle_list') return 'error_bundle';
