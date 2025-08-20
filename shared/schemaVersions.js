@@ -1,5 +1,6 @@
 export const schemaVersions = {
   explanation: 1,
+  base_text: 2,
   fib: 2,
   mcq: 2,
   cloze: 1,

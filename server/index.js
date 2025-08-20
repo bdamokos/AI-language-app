@@ -5,7 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
+import { BASE_TEXT_SYSTEM_PROMPT, generateBaseTextUserPrompt, BASE_TEXT_SCHEMA, addSourceMetadata, calculateTextSuitability, checkTextSuitability } from './baseTextPrompts.js';
+import { pickRandomTopicSuggestion } from '../src/exercises/utils.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
@@ -15,7 +17,8 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 // Persistent cache directories (lazy-init)
-const CACHE_DIR = getCacheDir(process.env.CACHE_DIR, '/data');
+// Default fallback is a local .cache directory; override via CACHE_DIR env in prod
+const CACHE_DIR = getCacheDir(process.env.CACHE_DIR, path.resolve(process.cwd(), '.cache'));
 // Register static image route immediately to avoid being shadowed by SPA fallback
 try {
   const imagesDirAbsolute = path.join(CACHE_DIR, 'images');
@@ -35,7 +38,8 @@ const initCache = (async () => {
         explanationItemsDir: cacheLayout.explanationItemsDir,
         exercisesDir: cacheLayout.exercisesDir,
         exerciseItemsDir: cacheLayout.exerciseItemsDir,
-        imagesDir: cacheLayout.imagesDir
+        imagesDir: cacheLayout.imagesDir,
+        baseTextsDir: cacheLayout.baseTextsDir
       });
     } catch {}
     // Purge outdated schemas (can be disabled on constrained devices)
@@ -674,6 +678,7 @@ app.post('/api/generate', async (req, res) => {
     // Identify type from schemaName
     const type = (() => {
       if (schemaName === 'explanation') return 'explanation';
+      if (schemaName === 'base_text') return 'base_text';
       if (schemaName === 'fib_list') return 'fib';
       if (schemaName === 'mcq_list') return 'mcq';
       if (schemaName === 'writing_prompts_list') return 'writing_prompts';
@@ -699,6 +704,39 @@ app.post('/api/generate', async (req, res) => {
     const schemaVersion = schemaVersions[type] || (type === 'explanation' ? schemaVersions.explanation : 1);
     const promptSha = sha256Hex(`${system || ''}\n${user}\n${schemaName}\n${languageName}:${level}:${challengeMode}`);
     const promptSha12 = promptSha.slice(0, 12);
+
+    // Base text persistent cache handling
+    if (cacheLayout && type === 'base_text') {
+      const currentModel = runtimeConfig.provider === 'openrouter' ? runtimeConfig.openrouter.model : runtimeConfig.ollama.model;
+      const topic = (metadata?.topic || (user.match(/about:\s*([^\n]+)/i)?.[1] || 'unknown')).trim();
+      const baseKey = `base:${languageName}:${level}:${challengeMode}:${topic}:${currentModel}:${schemaVersion}:${promptSha12}`;
+      const rec = await getBaseText(cacheLayout, baseKey);
+      if (rec && rec.content) {
+        return res.json({ ...rec.content, _cacheKey: baseKey });
+      }
+      const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+      const text = await callLLM({ system, user, jsonSchema: useStructured ? jsonSchema : undefined, schemaName });
+      let parsed;
+      try {
+        parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
+      } catch (e) {
+        console.error('[PARSE]', e.message, e.rawPreview || '');
+        return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
+      }
+      try {
+        // Deterministic ID for the base text
+        const idSource = `${languageName}:${level}:${challengeMode}:${topic}:${currentModel}:${schemaVersion}:${promptSha}`;
+        const baseTextId = sha256Hex(idSource).slice(0, 16);
+        const withId = { ...parsed, id: baseTextId, language: languageName, level, challengeMode, topic };
+        const meta = { language: languageName, level, challengeMode, topic, model: currentModel, schemaVersion, promptSha, promptSha12, baseTextId };
+        const cap = Number(process.env.CACHE_BASE_TEXTS_MAX || 500);
+        await setBaseText(cacheLayout, baseKey, meta, withId, cap);
+        return res.json({ ...withId, _cacheKey: baseKey });
+      } catch (e) {
+        console.warn('[CACHE] Failed to persist base text:', e?.message);
+        return res.json(parsed);
+      }
+    }
 
     // If this is an exercise request, try persistent cache first with per-user unseen selection
     if (cacheLayout && type && type !== 'explanation' && type !== 'unknown') {
@@ -735,6 +773,8 @@ app.post('/api/generate', async (req, res) => {
         const it = { ...r.content };
         if (r.localImageUrl) it.localImageUrl = r.localImageUrl;
         if (r.groupId) it.exerciseGroupId = r.groupId;
+        if (r.meta && r.meta.baseTextId) it.baseTextId = r.meta.baseTextId;
+        if (r.meta && r.meta.baseTextChapter !== undefined) it.baseTextChapter = r.meta.baseTextChapter;
         return { item: it, sha: cachedShas[idx] };
       });
 
@@ -802,9 +842,9 @@ app.post('/api/generate', async (req, res) => {
           }
         })();
         const perTypeLimit = Math.max(baseLimit, Math.floor(baseLimit * (Number.isFinite(factor) && factor > 0 ? factor : 1)));
-        const { addedShas, groupId } = await addExercisesToPool(cacheLayout, { type, poolKey, bucketKey, language: languageName, level, challengeMode, grammarTopic, model: currentModel, schemaVersion }, toAdd, perTypeLimit);
+        const { addedShas, groupId } = await addExercisesToPool(cacheLayout, { type, poolKey, bucketKey, language: languageName, level, challengeMode, grammarTopic, model: currentModel, schemaVersion, baseTextId: metadata?.baseTextId, baseTextChapter: metadata?.baseTextChapter }, toAdd, perTypeLimit);
         // Attach groupId to items so frontend can rate the batch
-        resultItems = resultItems.concat(toAdd.map(it => ({ ...it, exerciseGroupId: groupId })));
+        resultItems = resultItems.concat(toAdd.map(it => ({ ...it, exerciseGroupId: groupId, ...(metadata?.baseTextId ? { baseTextId: metadata.baseTextId } : {}), ...(metadata?.baseTextChapter !== undefined ? { baseTextChapter: metadata.baseTextChapter } : {}) })));
         resultShas = resultShas.concat(addedShas);
       }
 
@@ -920,6 +960,100 @@ app.post('/api/generate', async (req, res) => {
     console.error(err);
     const status = /Missing/i.test(err?.message || '') ? 400 : 500;
     return res.status(status).json({ error: 'Failed to generate content', details: err?.message, provider: runtimeConfig.provider });
+  }
+});
+
+// Base text selection/generation endpoint
+app.post('/api/base-text', async (req, res) => {
+  try {
+    if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
+    const { topic: userTopic, language = 'es', level = 'B1', challengeMode = false, excludeIds = [], focus } = req.body || {};
+    
+    // Use topic roulette instead of user grammar topic for base text generation
+    const topicSuggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: userTopic });
+    const topic = topicSuggestion?.topic || 'daily life';
+    
+    if (!topic || !String(topic).trim()) return res.status(400).json({ error: 'topic generation failed' });
+
+    const currentModel = runtimeConfig.provider === 'openrouter' ? runtimeConfig.openrouter.model : runtimeConfig.ollama.model;
+    const schemaVersion = schemaVersions.base_text || 1;
+
+    // Try to find existing base texts using suitability matrix - topic-agnostic selection
+    // This allows reusing any suitable base text regardless of original topic
+    const idx = await loadBaseTextsIndex(cacheLayout);
+    const excludeSet = new Set((Array.isArray(excludeIds) ? excludeIds : []).map(id => String(id)));
+    const suitableCandidates = [];
+    
+    for (const [key, entry] of Object.entries(idx.items || {})) {
+      const m = entry?.meta || {};
+      // Match by language and schema version only (topic-agnostic for reusability)
+      if (m.language === language && Number(m.schemaVersion) === Number(schemaVersion)) {
+        const rec = await getBaseText(cacheLayout, key);
+        const id = rec?.content?.id || rec?.content?.baseTextId || m.baseTextId;
+        if (!id || excludeSet.has(id)) continue; // Respect exclusions to prevent spoilers
+        
+        // Check suitability using the new matrix logic
+        const suitabilityCheck = checkTextSuitability(rec?.content, level, challengeMode);
+        if (suitabilityCheck.suitable) {
+          suitableCandidates.push({
+            content: rec.content,
+            priority: suitabilityCheck.priority,
+            reason: suitabilityCheck.reason,
+            originalTopic: m.topic // Keep track of original topic for debugging
+          });
+        }
+      }
+    }
+    
+    if (suitableCandidates.length > 0) {
+      // Sort by priority (highest first), then by most recent
+      suitableCandidates.sort((a, b) => b.priority - a.priority);
+      return res.json(suitableCandidates[0].content);
+    }
+
+    // Otherwise, generate a new one via /api/generate with schemaName base_text
+    const baseSystem = BASE_TEXT_SYSTEM_PROMPT;
+    const baseUser = generateBaseTextUserPrompt(topic, language, level, challengeMode, focus);
+    const baseSchema = BASE_TEXT_SCHEMA;
+    const useStructured = ['openrouter', 'ollama'].includes(runtimeConfig.provider);
+    const text = await callLLM({ system: baseSystem, user: baseUser, jsonSchema: useStructured ? baseSchema : undefined, schemaName: 'base_text' });
+    let parsed;
+    try {
+      parsed = useStructured ? JSON.parse(text) : tryParseJsonLoose(text);
+    } catch (e) {
+      console.error('[PARSE]', e.message, e.rawPreview || '');
+      return res.status(502).json({ error: 'Upstream returned invalid JSON', details: e.message, provider: runtimeConfig.provider });
+    }
+    // Persist with deterministic id and source metadata
+    const promptSha = sha256Hex(`${baseSystem}\n${baseUser}\nbase_text\n${language}:${level}:${challengeMode}`);
+    const promptSha12 = promptSha.slice(0, 12);
+    const baseKey = `base:${language}:${level}:${challengeMode}:${topic}:${currentModel}:${schemaVersion}:${promptSha12}`;
+    const idSource = `${language}:${level}:${challengeMode}:${topic}:${currentModel}:${schemaVersion}:${promptSha}`;
+    const baseTextId = sha256Hex(idSource).slice(0, 16);
+    const withSourceMeta = addSourceMetadata(parsed, currentModel);
+    const withId = { ...withSourceMeta, id: baseTextId, language, level, challengeMode, topic };
+    
+    // Calculate and store suitability matrix in metadata for efficient lookups
+    const suitability = calculateTextSuitability(withId.chapters || []);
+    const meta = { 
+      language, 
+      level, 
+      challengeMode, 
+      topic, 
+      model: currentModel, 
+      schemaVersion, 
+      promptSha, 
+      promptSha12, 
+      baseTextId,
+      suitability // Store calculated suitability for efficient filtering
+    };
+    
+    const cap = Number(process.env.CACHE_BASE_TEXTS_MAX || 500);
+    await setBaseText(cacheLayout, baseKey, meta, withId, cap);
+    return res.json(withId);
+  } catch (e) {
+    console.error('[BASE-TEXT]', e);
+    return res.status(500).json({ error: e?.message || 'Failed to select or generate base text' });
   }
 });
 

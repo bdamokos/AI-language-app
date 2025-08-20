@@ -13,16 +13,21 @@ export async function ensureCacheLayout(cacheDir) {
   const exercisesDir = path.join(cacheDir, 'exercises');
   const exerciseItemsDir = path.join(exercisesDir, 'items');
   const imagesDir = path.join(cacheDir, 'images');
+  const baseTextsDir = path.join(cacheDir, 'base_texts');
+  const baseTextItemsDir = path.join(baseTextsDir, 'items');
   await fs.mkdir(cacheDir, { recursive: true });
   await fs.mkdir(explanationsDir, { recursive: true });
   await fs.mkdir(exerciseItemsDir, { recursive: true });
   await fs.mkdir(explanationItemsDir, { recursive: true });
   await fs.mkdir(imagesDir, { recursive: true });
+  await fs.mkdir(baseTextsDir, { recursive: true });
+  await fs.mkdir(baseTextItemsDir, { recursive: true });
   // Seed empty indexes if missing
   await seedIndexIfMissing(path.join(explanationsDir, 'index.json'), { items: {}, stats: {} });
   await seedIndexIfMissing(path.join(exercisesDir, 'index.json'), { items: {}, pools: {}, buckets: {}, groups: {}, stats: {} });
   await seedIndexIfMissing(path.join(imagesDir, 'index.json'), { items: {} });
-  return { explanationsDir, explanationItemsDir, exercisesDir, exerciseItemsDir, imagesDir };
+  await seedIndexIfMissing(path.join(baseTextsDir, 'index.json'), { items: {}, lru: [], stats: {} });
+  return { explanationsDir, explanationItemsDir, exercisesDir, exerciseItemsDir, imagesDir, baseTextsDir, baseTextItemsDir };
 }
 
 async function seedIndexIfMissing(indexPath, initial) {
@@ -153,6 +158,86 @@ export async function setExplanation(layout, cacheKey, meta, content, maxCapacit
     }
   }
   await writeJson(indexPath, idx);
+}
+
+// -----------------------------
+// Base texts persistent cache
+// -----------------------------
+
+export async function getBaseText(layout, cacheKey) {
+  const indexPath = path.join(layout.baseTextsDir, 'index.json');
+  const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
+  const entry = idx.items?.[cacheKey];
+  if (!entry) return null;
+  try {
+    const filePath = path.join(layout.baseTextItemsDir, entry.file);
+    const data = await readJson(filePath);
+    // Touch LRU and stats
+    entry.hits = (entry.hits || 0) + 1;
+    entry.lastAccessAt = new Date().toISOString();
+    idx.lru = (idx.lru || []).filter(k => k !== cacheKey);
+    idx.lru.push(cacheKey);
+    // Increment stats by meta key
+    try {
+      const m = entry.meta || {};
+      const statKey = `${m.language || 'unknown'}|${m.level || 'unknown'}|${m.challengeMode ? '1' : '0'}|${m.topic || 'unknown'}`;
+      idx.stats = idx.stats || {};
+      const s = idx.stats[statKey] || { hits: 0, generations: 0 };
+      s.hits = (s.hits || 0) + 1;
+      idx.stats[statKey] = s;
+    } catch {}
+    await writeJson(indexPath, idx);
+    return data;
+  } catch {
+    // If the file is missing, clean up the index
+    const indexPath = path.join(layout.baseTextsDir, 'index.json');
+    const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
+    delete idx.items[cacheKey];
+    idx.lru = (idx.lru || []).filter(k => k !== cacheKey);
+    await writeJson(indexPath, idx);
+    return null;
+  }
+}
+
+export async function setBaseText(layout, cacheKey, meta, content, maxCapacity = 500) {
+  const indexPath = path.join(layout.baseTextsDir, 'index.json');
+  const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
+  const fileBase = sha256Hex(cacheKey).slice(0, 16) + '.json';
+  const filePath = path.join(layout.baseTextItemsDir, fileBase);
+  const now = new Date().toISOString();
+  const record = {
+    key: cacheKey,
+    meta,
+    content,
+    createdAt: now,
+    lastAccessAt: now,
+    hits: 0,
+    likes: 0,
+    dislikes: 0
+  };
+  await writeJson(filePath, record);
+  idx.items[cacheKey] = { file: fileBase, createdAt: now, lastAccessAt: now, hits: 0, likes: 0, dislikes: 0, meta };
+  idx.lru = (idx.lru || []).filter(k => k !== cacheKey);
+  idx.lru.push(cacheKey);
+  // Prune LRU if over capacity
+  while ((idx.lru || []).length > maxCapacity) {
+    const oldKey = idx.lru.shift();
+    if (oldKey && idx.items[oldKey]) {
+      const oldFile = idx.items[oldKey].file;
+      delete idx.items[oldKey];
+      try { await fs.unlink(path.join(layout.baseTextItemsDir, oldFile)); } catch {}
+    }
+  }
+  await writeJson(indexPath, idx);
+}
+
+export async function loadBaseTextsIndex(layout) {
+  const indexPath = path.join(layout.baseTextsDir, 'index.json');
+  const idx = (await readJson(indexPath)) || { items: {}, lru: [], stats: {} };
+  idx.items = idx.items || {};
+  idx.lru = idx.lru || [];
+  idx.stats = idx.stats || {};
+  return idx;
 }
 
 // -----------------------------
@@ -439,14 +524,14 @@ async function evictFromBucketIfNeeded(layout, idx, bucketKey, perTypeLimit) {
   }
 }
 
-export async function addExercisesToPool(layout, { type, poolKey, bucketKey, language, level, challengeMode, grammarTopic, model, schemaVersion }, items, perTypeLimit = 100, groupIdInput = null) {
+export async function addExercisesToPool(layout, { type, poolKey, bucketKey, language, level, challengeMode, grammarTopic, model, schemaVersion, baseTextId, baseTextChapter }, items, perTypeLimit = 100, groupIdInput = null) {
   const idx = await loadExercisesIndex(layout);
   const now = new Date().toISOString();
   idx.pools[poolKey] = idx.pools[poolKey] || [];
   idx.buckets[bucketKey] = idx.buckets[bucketKey] || [];
   const groupId = groupIdInput || sha256Hex(`${type}:${language}:${level}:${challengeMode}:${grammarTopic || ''}:${model}:${schemaVersion}:${now}:${Math.random()}`).slice(0, 16);
   // Initialize group meta
-  idx.groups[groupId] = idx.groups[groupId] || { type, poolKey, meta: { language, level, challengeMode, grammarTopic, model, schemaVersion }, itemShas: [], createdAt: now, likes: 0, dislikes: 0 };
+  idx.groups[groupId] = idx.groups[groupId] || { type, poolKey, meta: { language, level, challengeMode, grammarTopic, model, schemaVersion, ...(baseTextId ? { baseTextId } : {}), ...(baseTextChapter !== undefined ? { baseTextChapter } : {}) }, itemShas: [], createdAt: now, likes: 0, dislikes: 0 };
   const addedShas = [];
   for (const content of items) {
     const exerciseSha = sha256Hex(JSON.stringify(content) + `\n${type}\n${language}\n${level}\n${model}\n${schemaVersion}`);
@@ -456,7 +541,7 @@ export async function addExercisesToPool(layout, { type, poolKey, bucketKey, lan
     const record = {
       exerciseSha,
       type,
-      meta: { language, level, challengeMode, grammarTopic, model, schemaVersion },
+      meta: { language, level, challengeMode, grammarTopic, model, schemaVersion, ...(baseTextId ? { baseTextId } : {}), ...(baseTextChapter !== undefined ? { baseTextChapter } : {}) },
       content,
       createdAt: now,
       lastAccessAt: now,
