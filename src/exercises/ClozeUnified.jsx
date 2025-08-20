@@ -130,36 +130,30 @@ Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
 **Original Passage:**
 ${chapter.passage}
 
+**CRITICAL: You must create SEPARATE segments for text and blanks. Do NOT put underscores or blanks in text segments.**
+
+**Segment Format Requirements:**
+1. **Text segments**: contain only regular text with NO blanks or underscores
+2. **Blank segments**: separate objects with solution, hint, distractors, etc.
+3. **Alternating structure**: text → blank → text → blank → text (etc.)
+
+**Example of CORRECT segment structure:**
+For sentence "María vive en Madrid"
+- Segment 1: {"type": "text", "content": "María "}
+- Segment 2: {"type": "blank", "solution": "vive", "hint": "lives", "distractors": ["vivía", "vivirá", "vivió"], ...}  
+- Segment 3: {"type": "text", "content": " en Madrid"}
+
+**WRONG - DO NOT DO THIS:**
+- {"type": "text", "content": "María _____ en Madrid"}
+
 **Requirements:**
-1. **Story Coherence**: Maintain the narrative flow and setting from the original chapter
-2. **Grammar Integration**: Strategically adapt the text to include multiple "${topic}" opportunities  
-3. **Segment Structure**: Break the adapted passage into alternating text and blank segments
-4. **Blank Quality**: Each blank should test a specific linguistic element with clear pedagogical value
-5. **Difficulty Levels**: Mark each blank as easy/medium/hard for adaptive difficulty
-6. **Distractors**: Provide 3-4 plausible wrong answers that represent common errors
-7. **Explanations**: Explain why the solution is correct and why each distractor is incorrect
+1. Adapt the passage to include multiple "${topic}" opportunities
+2. Create 6-8 strategic blank segments (not text with underscores!)
+3. Each blank segment must have: solution, hint, distractors (3-4), explanation, difficulty_level, grammar_focus
+4. Text segments contain only plain text without any blanks
+5. Maintain story coherence and narrative flow
 
-**Guidelines:**
-- Aim for 8-12 meaningful blanks total
-- No more than 2 blanks per sentence
-- Include blanks for: verb forms, articles, prepositions, vocabulary, verb tenses
-- Hints should guide without giving away the answer
-- Distractors should be grammatically similar but contextually wrong
-
-Example 1: 
-Grammar topic: "past tense"
-
-**Example original passage:**
-"Antes de viajar, compré los boletos en línea."
-
-**Example segment structure:**
-Text: "Antes de viajar," → Blank: solution="compré" → Text: "los boletos en línea."
-
-Example 2: 
-Grammar topic: "present tense"
-
-**Example original passage:**
-"El otro día, compré los boletos en línea."
+Create alternating text and blank segments that reconstruct the adapted passage when combined.
 
 Notice that the original passage does not contain the grammar topic, therefore rewrite it to include it.
 
