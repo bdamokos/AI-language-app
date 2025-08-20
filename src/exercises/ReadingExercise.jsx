@@ -47,6 +47,18 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
     const doGen = async () => {
       if (!imageGenerationEnabled) return;
       if (!item?.image_prompt) return;
+      // If a cached local image URL is present on the item, use it and skip generation
+      if (item?.localImageUrl) {
+        const cached = { data: [{ url: item.localImageUrl }] };
+        setGeneratedImage(cached);
+        if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
+          const exerciseIndex = idPrefix.split(':').pop();
+          window.globalImageStore[`reading:${exerciseIndex}`] = cached;
+        }
+        // Prevent subsequent generation attempts for this item
+        lastKeyRef.current = `local:${item.localImageUrl}`;
+        return;
+      }
       const sig = `${item.image_prompt}`;
       if (lastKeyRef.current === sig) return;
       if (isGeneratingRef.current) return;
@@ -74,7 +86,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
     };
     doGen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageGenerationEnabled, item?.image_prompt, idPrefix, item?.exerciseSha]);
+  }, [imageGenerationEnabled, item?.image_prompt, idPrefix, item?.exerciseSha, item?.localImageUrl]);
 
   const tfItems = Array.isArray(item?.true_false) ? item.true_false : [];
   const qaItems = Array.isArray(item?.comprehension_questions) ? item.comprehension_questions : [];
