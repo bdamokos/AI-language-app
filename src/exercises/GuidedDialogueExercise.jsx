@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
  * Guided Dialogue exercise
@@ -99,6 +100,9 @@ export async function generateGuidedDialogues(topic, count = 2, languageContext 
 
   const system = `Generate ${languageName} guided dialogues. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
 
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
+
   const user = `Create exactly ${count} dialogues in ${languageName} about: ${topic}.
 
 Requirements:
@@ -108,7 +112,8 @@ Requirements:
 - Provide suggested_hide_speaker indicating which speaker’s lines would be best to hide pedagogically
 - Provide 1-2 short hints that guide the student without giving away the full answers
 - Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}
-- Choose real world sentences, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+- Choose real world sentences, not synthetic ones.
+${topicLine}
 - Keep content age-appropriate and culturally relevant`;
 
   const schema = {

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
  * Writing Prompt exercise (open-ended)
@@ -71,13 +72,17 @@ export async function generateWritingPrompts(topic, count = 2, languageContext =
 
   const system = `Generate ${languageName} open-ended writing prompts designed to elicit target grammar or vocabulary usage. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
 
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
+
   const user = `Create exactly ${count} writing prompt sets in ${languageName} about: ${topic}.
 
 For each set:
 - Include 3-5 open-ended questions (prompts) that encourage use of the target grammar or vocabulary
 - Provide a concise studentInstructions string
 - Include example_answers with short sample responses (one per prompt) to show expected complexity and style
-- Choose real world themes, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+- Choose real world themes, not synthetic ones.
+${topicLine}
 - Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}`;
 
   const schema = {

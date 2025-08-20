@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import useImageGeneration from '../hooks/useImageGeneration.js';
+import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
  * Reading Comprehension exercise
@@ -365,11 +366,15 @@ async function generateSingleReading(topic, passageNumber = null, languageContex
 
   const system = `Generate ${languageName} reading comprehension passages with supporting materials. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging; allow more complex syntax and subordinate clauses)' : ''}.`;
 
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
+
   const user = `Create exactly 1 reading comprehension set${passageContext} in ${languageName} about: ${topic}.
 
 Requirements:
 - Title: \u2264 60 characters.
-- Choose real world sentences, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+- Choose real world sentences, not synthetic ones.
+${topicLine}
 - Passage length: ${lengthTarget}. Ensure it naturally uses the target grammar/topic: ${topic}.
 - Include an image_prompt: short, descriptive, no text overlays.
 - New vocabulary: up to ${maxNewWords} terms in a glossary with part of speech, definition, optional translation, and an example sentence in ${languageName}.

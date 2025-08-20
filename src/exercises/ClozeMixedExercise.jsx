@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { normalizeText, splitByBlanks, sanitizeClozeItem } from './utils.js';
+import { normalizeText, splitByBlanks, sanitizeClozeItem, pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
  * Cloze with mixed options per blank (dropdowns)
@@ -217,11 +217,14 @@ async function generateSingleClozeMixedPassage(topic, passageNumber = null, lang
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
   
   const system = `Generate a single ${languageName} cloze passage with multiple-choice options for each blank. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence).
 
 Key requirements:
-- Create a longer, more engaging passage that tells a story or explains a concept. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+- Create a longer, more engaging passage that tells a story or explains a concept.
+${topicLine}
 - Use exactly 5 underscores (_____) to represent each blank - no more, no less
 - For each blank, provide 4 options: the correct answer plus 3 plausible distractors
 - Provide helpful hints that guide students without giving away the answer

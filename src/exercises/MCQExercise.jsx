@@ -1,4 +1,5 @@
 import React from 'react';
+import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
  * Multiple-choice exercise renderer
@@ -82,12 +83,16 @@ export async function generateMCQ(topic, count = 5, languageContext = { language
   const challengeMode = languageContext.challengeMode;
   
   const system = `Generate ${languageName} multiple-choice questions with 4 options, one correct, with rationales. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
-  
+
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
+
   const user = `Create exactly ${count} ${languageName} MCQs about: ${topic}. 
 
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
-Choose real world sentences, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+Choose real world sentences, not synthetic ones.
+${topicLine}
 
 Include plausible distractors and ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}.`;
 

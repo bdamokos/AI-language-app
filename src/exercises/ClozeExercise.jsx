@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem } from './utils.js';
+import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem, pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 import useImageGeneration from '../hooks/useImageGeneration.js';
 
 /**
@@ -383,11 +383,14 @@ async function generateSingleClozePassage(topic, passageNumber = null, languageC
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
   
   const system = `Generate a single ${languageName} cloze passage that is engaging and educational. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence). 
 
 Key requirements:
-- Create a longer, more engaging passage that tells a story or explains a concept. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+- Create a longer, more engaging passage that tells a story or explains a concept.
+${topicLine}
 - Use exactly 5 underscores (_____) to represent each blank - no more, no less
 - Provide helpful hints that guide students without giving away the answer
 - Include rationale explaining why the answer is correct

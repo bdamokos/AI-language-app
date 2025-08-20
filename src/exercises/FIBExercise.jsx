@@ -1,6 +1,6 @@
 import React from 'react';
 import { Check } from 'lucide-react';
-import { normalizeText, countBlanks, splitByBlanks } from './utils.js';
+import { normalizeText, countBlanks, splitByBlanks, pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
  * Fill-in-the-blank exercise component (renderer-only)
@@ -92,6 +92,9 @@ export async function generateFIB(topic, count = 5, languageContext = { language
   
   const system = `Generate ${languageName} language fill-in-the-blank exercises with exactly five underscores (_____) for blanks. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
   
+  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
+  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
+
   const user = `Create exactly ${count} ${languageName} language fill-in-the-blank exercises about: ${topic}.
 
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
@@ -106,7 +109,8 @@ Rules:
 - If exercise is simple, you can provide fewer hints or make the third hint show first letters
 - "context" field is optional - include interesting cultural notes, regional differences, or usage tips when relevant. Do not include the solution or spoilers in the context field. E.g. If the solution is "Madrid", the cultural context could be "This city has been the capital of Spain for centuries" instead of "Madrid has been the capital of Spain for centuries".
 - Make exercises progressively harder
-- Choose real world sentences, not synthetic ones. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
+- Choose real world sentences, not synthetic ones.
+${topicLine}
 - The exercises are to be in the target language, which is ${languageName}
 - Ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}`;
 
