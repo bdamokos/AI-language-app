@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
 import { BASE_TEXT_SYSTEM_PROMPT, generateBaseTextUserPrompt, BASE_TEXT_SCHEMA, addSourceMetadata, calculateTextSuitability, checkTextSuitability } from './baseTextPrompts.js';
-import { pickRandomTopicSuggestion } from '../src/exercises/utils.js';
+import { pickRandomTopicSuggestion } from '../shared/topicRoulette.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
 
 dotenv.config();
