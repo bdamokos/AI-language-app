@@ -601,6 +601,26 @@ export async function purgeOutdatedSchemas(layout, schemaVersions) {
     if (toDelete.length > 0) await writeJson(expIndexPath, expIdx);
   } catch {}
 
+  // Base texts
+  try {
+    const baseIdxPath = path.join(layout.baseTextsDir, 'index.json');
+    const baseIdx = (await readJson(baseIdxPath)) || { items: {}, lru: [] };
+    const desiredBaseVersion = Number(schemaVersions.base_text || 1);
+    const toDelete = [];
+    for (const [key, entry] of Object.entries(baseIdx.items || {})) {
+      const v = Number(entry?.meta?.schemaVersion || 0);
+      if (v !== desiredBaseVersion) {
+        toDelete.push({ key, file: entry.file });
+      }
+    }
+    for (const d of toDelete) {
+      try { await fs.unlink(path.join(layout.baseTextItemsDir, d.file)); } catch {}
+      delete baseIdx.items[d.key];
+      baseIdx.lru = (baseIdx.lru || []).filter(k => k !== d.key);
+    }
+    if (toDelete.length > 0) await writeJson(baseIdxPath, baseIdx);
+  } catch {}
+
   // Exercises
   try {
     const exIdx = await loadExercisesIndex(layout);
