@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { normalizeText, splitByBlanks, sanitizeClozeItem, pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
+import { normalizeText, splitByBlanks, sanitizeClozeItem } from './utils.js';
+import { generateUnifiedCloze, convertToClozeMixed, filterBlanksByDifficulty } from './ClozeUnified.jsx';
 
 /**
  * Cloze with mixed options per blank (dropdowns)
@@ -162,20 +163,48 @@ export function scoreClozeMixed(item, value, eq) {
  * @returns {Promise<{items: Array}>} Generated ClozeMixed exercises
  */
 export async function generateClozeMixed(topic, count = 2, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
-  // For single passage, use the original approach
+  // Check if we have base text chapter context (unified approach)
+  if (languageContext.chapter && languageContext.baseText) {
+    console.log('Using unified cloze generation for ClozeMixed with base text');
+    
+    try {
+      // Generate unified cloze
+      const unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
+      const unifiedItem = unifiedResult.items[0];
+      
+      // Apply difficulty filtering based on challenge mode and level
+      const targetDifficulties = languageContext.challengeMode 
+        ? ['easy', 'medium', 'hard'] 
+        : ['easy', 'medium'];
+      const maxBlanks = languageContext.challengeMode ? 12 : 8;
+      
+      const filteredItem = filterBlanksByDifficulty(unifiedItem, targetDifficulties, maxBlanks);
+      
+      // Convert to ClozeMixed format
+      const clozeMixedItem = convertToClozeMixed(filteredItem);
+      
+      return { items: [clozeMixedItem] };
+      
+    } catch (error) {
+      console.warn('Unified ClozeMixed generation failed, falling back to traditional approach:', error.message);
+      // Fall back to traditional generation
+      return generateSingleClozeMixedPassage(topic, null, languageContext);
+    }
+  }
+  
+  // Traditional approach for non-base-text scenarios
   if (count === 1) {
     return generateSingleClozeMixedPassage(topic, null, languageContext);
   }
   
-  // For multiple passages, generate them sequentially to avoid overwhelming the API
+  // For multiple passages, generate them sequentially
   const allItems = [];
   const errors = [];
   
   for (let i = 0; i < count; i++) {
     try {
-      // Add a small delay between requests to avoid overwhelming the API
       if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
       const result = await generateSingleClozeMixedPassage(topic, i + 1, languageContext);
@@ -186,18 +215,14 @@ export async function generateClozeMixed(topic, count = 2, languageContext = { l
     } catch (error) {
       console.error(`Error generating ClozeMixed passage ${i + 1}:`, error);
       errors.push({ passage: i + 1, error: error.message });
-      
-      // Continue with other passages even if one fails
       continue;
     }
   }
   
-  // If we got no items at all, throw an error
   if (allItems.length === 0) {
     throw new Error(`Failed to generate any ClozeMixed passages. Errors: ${errors.map(e => `Passage ${e.passage}: ${e.error}`).join('; ')}`);
   }
   
-  // Log if we had partial failures
   if (errors.length > 0) {
     console.warn(`Generated ${allItems.length} passages with ${errors.length} failures:`, errors);
   }
@@ -217,14 +242,11 @@ async function generateSingleClozeMixedPassage(topic, passageNumber = null, lang
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
-  const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
-  const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
   
   const system = `Generate a single ${languageName} cloze passage with multiple-choice options for each blank. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence).
 
 Key requirements:
-- Create a longer, more engaging passage that tells a story or explains a concept.
-${topicLine}
+- Create a longer, more engaging passage that tells a story or explains a concept. Unless the topic is pre-defined (e.g. hotel check-in) rather than generic (e.g. "past tense"), the topic should be surprising and interesting, not obvious.
 - Use exactly 5 underscores (_____) to represent each blank - no more, no less
 - For each blank, provide 4 options: the correct answer plus 3 plausible distractors
 - Provide helpful hints that guide students without giving away the answer

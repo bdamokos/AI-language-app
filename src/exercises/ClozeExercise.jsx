@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem, pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 import useImageGeneration from '../hooks/useImageGeneration.js';
+import { generateUnifiedCloze, convertToTraditionalCloze, filterBlanksByDifficulty } from './ClozeUnified.jsx';
 
 /**
  * Cloze passage with free-text blanks
@@ -321,27 +322,55 @@ export function scoreCloze(item, value, eq) {
 }
 
 /**
- * Generate Cloze exercises using the generic LLM endpoint
+ * Generate Cloze exercises using the unified system
  * @param {string} topic - The topic to generate exercises about
  * @param {number} count - Number of exercises to generate (1-10)
- * @param {Object} languageContext - Language and level context { language, level, challengeMode }
- * @returns {Promise<{items: Array}>} Generated Cloze exercises
+ * @param {Object} languageContext - Language and level context { language, level, challengeMode, chapter?, baseText? }
+ * @returns {Promise<{items: Array}>} Generated Cloze exercises in traditional format
  */
 export async function generateCloze(topic, count = 2, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
-  // For single passage, use the original approach
+  // Check if we have base text chapter context (unified approach)
+  if (languageContext.chapter && languageContext.baseText) {
+    console.log('Using unified cloze generation with base text');
+    
+    try {
+      // Generate unified cloze
+      const unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
+      const unifiedItem = unifiedResult.items[0];
+      
+      // Apply difficulty filtering based on challenge mode and level
+      const targetDifficulties = languageContext.challengeMode 
+        ? ['easy', 'medium', 'hard'] 
+        : ['easy', 'medium'];
+      const maxBlanks = languageContext.challengeMode ? 12 : 8;
+      
+      const filteredItem = filterBlanksByDifficulty(unifiedItem, targetDifficulties, maxBlanks);
+      
+      // Convert to traditional cloze format
+      const traditionalItem = convertToTraditionalCloze(filteredItem);
+      
+      return { items: [traditionalItem] };
+      
+    } catch (error) {
+      console.warn('Unified cloze generation failed, falling back to traditional approach:', error.message);
+      // Fall back to traditional generation
+      return generateSingleClozePassage(topic, null, languageContext);
+    }
+  }
+  
+  // Traditional approach for non-base-text scenarios
   if (count === 1) {
     return generateSingleClozePassage(topic, null, languageContext);
   }
   
-  // For multiple passages, generate them sequentially to avoid overwhelming the API
+  // For multiple passages, generate them sequentially
   const allItems = [];
   const errors = [];
   
   for (let i = 0; i < count; i++) {
     try {
-      // Add a small delay between requests to avoid overwhelming the API
       if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
       const result = await generateSingleClozePassage(topic, i + 1, languageContext);
@@ -352,18 +381,14 @@ export async function generateCloze(topic, count = 2, languageContext = { langua
     } catch (error) {
       console.error(`Error generating cloze passage ${i + 1}:`, error);
       errors.push({ passage: i + 1, error: error.message });
-      
-      // Continue with other passages even if one fails
       continue;
     }
   }
   
-  // If we got no items at all, throw an error
   if (allItems.length === 0) {
     throw new Error(`Failed to generate any cloze passages. Errors: ${errors.map(e => `Passage ${e.passage}: ${e.error}`).join('; ')}`);
   }
   
-  // Log if we had partial failures
   if (errors.length > 0) {
     console.warn(`Generated ${allItems.length} passages with ${errors.length} failures:`, errors);
   }
@@ -377,27 +402,29 @@ export async function generateCloze(topic, count = 2, languageContext = { langua
  * @param {number} passageNumber - Optional passage number for context
  * @returns {Promise<{items: Array}>} Generated Cloze exercise
  */
-async function generateSingleClozePassage(topic, passageNumber = null, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+async function generateSingleClozePassage(topic, passageNumber = null, languageContext = { language: 'es', level: 'B1', challengeMode: false, baseText: null }) {
   const passageContext = passageNumber ? ` (Passage ${passageNumber})` : '';
   
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
+  const baseText = languageContext.baseText || null;
+  const baseTextId = baseText?.id || null;
+  const chapter = Array.isArray(baseText?.chapters) && baseText.chapters[2] ? baseText.chapters[2] : null; // default: chapter 3 for Cloze
   const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
   const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
   
   const system = `Generate a single ${languageName} cloze passage that is engaging and educational. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. The passage should be 3-5 paragraphs long (approximately 150-250 words) with 8-16 meaningful blanks strategically placed throughout the text (maximum two per sentence). 
 
 Key requirements:
-- Create a longer, more engaging passage that tells a story or explains a concept.
-${topicLine}
+
 - Use exactly 5 underscores (_____) to represent each blank - no more, no less
 - Provide helpful hints that guide students without giving away the answer
 - Include rationale explaining why the answer is correct
 - Ensure blanks test different aspects: vocabulary, grammar, verb conjugations, etc.
 - Make the content culturally relevant and age-appropriate
 - Maximum of 2 blanks per sentence to maintain readability
-- Ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}
+
 
 IMPORTANT: Each blank must be represented by exactly 5 underscores (_____). Do not use fewer or more underscores.
 
@@ -413,11 +440,14 @@ Complete solution: "María vive en Madrid. Ella trabaja como profesora. Su casa 
 
 Provide a clear student instruction as a separate field named studentInstructions. Do not include the instruction text inside the passage itself.`;
   
+  const baseContext = chapter ? `Use the following source text as context; extract gaps from it when possible. If insufficient, create a new passage consistent with the story context.\n\nSource chapter title: ${chapter.title || ''}\nSource chapter passage:\n${chapter.passage}\n` : '';
+
   const user = `Create exactly 1 ${languageName} cloze passage about: ${topic}${passageContext}. 
 
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
-The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: each blank must use exactly 5 underscores (_____).`;
+The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: each blank must use exactly 5 underscores (_____).
+${baseContext}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
@@ -467,7 +497,9 @@ The passage should be substantial (3-5 paragraphs) with 8-16 blanks. Remember: e
         language: languageName,
         level,
         challengeMode,
-        topic
+        topic,
+        ...(baseTextId ? { baseTextId } : {}),
+        ...(chapter ? { baseTextChapter: 3 } : {})
       }
     })
   });
