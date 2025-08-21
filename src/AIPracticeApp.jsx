@@ -48,10 +48,10 @@ const AIPracticeApp = () => {
   const [loadingDialogueOnly, setLoadingDialogueOnly] = useState(false);
   const [loadingWritingOnly, setLoadingWritingOnly] = useState(false);
   const [mcqCount, setMcqCount] = useState(5);
-  const [clozeCount, setClozeCount] = useState(2);
-  const [clozeMixCount, setClozeMixCount] = useState(2);
-  const [dialogueCount, setDialogueCount] = useState(2);
-  const [writingCount, setWritingCount] = useState(2);
+  const [clozeCount, setClozeCount] = useState(1);
+  const [clozeMixCount, setClozeMixCount] = useState(1);
+  const [dialogueCount, setDialogueCount] = useState(1);
+  const [writingCount, setWritingCount] = useState(1);
   const [readingCount, setReadingCount] = useState(1);
   const [errorBundleCount, setErrorBundleCount] = useState(4);
   const { fetchBaseText } = useBaseText();
