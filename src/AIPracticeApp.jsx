@@ -899,12 +899,20 @@ const AIPracticeApp = () => {
       try {
         // Reuse an existing base text if available; otherwise create/select a new one
         let base = readingBaseText;
-        if (!base) {
+        // Avoid creating multiple readings from the same base text: if this base text already
+        // has a reading in the current lesson, fetch a different base text excluding used ones.
+        const usedReadingBaseTextIds = Array.isArray(lesson?.reading_comprehension)
+          ? lesson.reading_comprehension
+              .map(it => it?.base_text_info?.base_text_id || it?.base_text_id)
+              .filter(Boolean)
+          : [];
+        if (!base || (base && usedReadingBaseTextIds.includes(base.id))) {
           base = await fetchBaseText({
             topic,
             language: languageContext?.language || 'es',
             level: languageContext?.level || 'B1',
-            challengeMode: !!languageContext?.challengeMode
+            challengeMode: !!languageContext?.challengeMode,
+            excludeIds: usedReadingBaseTextIds
           });
           if (base) setReadingBaseText(base);
           setReadingChapterCursor(0);

@@ -270,7 +270,7 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
   const chapterTracker = new BaseTextChapterTracker();
   
   // Fetch base texts for different exercise categories
-  const baseTexts = await fetchBaseTextsForLesson(chapterTracker, languageContext, safeCounts);
+  const baseTexts = await fetchBaseTextsForLesson(topic, chapterTracker, languageContext, safeCounts);
   
   // Generate exercises with orchestrated base text allocation
   const results = await generateOrchestredExercises(topic, safeCounts, languageContext, chapterTracker);
@@ -302,7 +302,7 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
 /**
  * Fetch base texts needed for the lesson based on exercise counts
  */
-async function fetchBaseTextsForLesson(chapterTracker, languageContext, safeCounts) {
+async function fetchBaseTextsForLesson(topic, chapterTracker, languageContext, safeCounts) {
   const baseTexts = [];
   const fetchedIds = new Set();
   
@@ -312,7 +312,7 @@ async function fetchBaseTextsForLesson(chapterTracker, languageContext, safeCoun
   
   if (needsSequential) {
     // Fetch primary base text for sequential exercises
-    const baseText = await fetchBaseText(languageContext, []);
+    const baseText = await fetchBaseText(topic, languageContext, []);
     if (baseText) {
       chapterTracker.addBaseText(baseText);
       baseTexts.push(baseText);
@@ -323,7 +323,7 @@ async function fetchBaseTextsForLesson(chapterTracker, languageContext, safeCoun
   if (needsIsolated) {
     // Fetch secondary base text for isolated exercises if needed
     const exclusions = Array.from(fetchedIds);
-    const isolatedBaseText = await fetchBaseText(languageContext, exclusions);
+    const isolatedBaseText = await fetchBaseText(topic, languageContext, exclusions);
     if (isolatedBaseText && !fetchedIds.has(isolatedBaseText.id)) {
       chapterTracker.addBaseText(isolatedBaseText);
       baseTexts.push(isolatedBaseText);
@@ -336,13 +336,13 @@ async function fetchBaseTextsForLesson(chapterTracker, languageContext, safeCoun
 /**
  * Fetch a single base text with exclusions
  */
-async function fetchBaseText(languageContext, excludeIds = []) {
+async function fetchBaseText(topic, languageContext, excludeIds = []) {
   try {
     const resp = await fetch('/api/base-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        topic: 'lesson_generation', // Topic doesn't matter for base text selection
+        topic: topic, // Pass lesson topic so server can avoid base texts already used for reading at this topic/difficulty
         language: languageContext.language, 
         level: languageContext.level, 
         challengeMode: languageContext.challengeMode, 

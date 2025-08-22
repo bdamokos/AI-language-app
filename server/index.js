@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup, updateBaseTextRecord, rebuildBaseTextsIndex } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup, updateBaseTextRecord, rebuildBaseTextsIndex, loadExercisesIndex } from './cacheStore.js';
 import { BASE_TEXT_SYSTEM_PROMPT, generateBaseTextUserPrompt, BASE_TEXT_SCHEMA, addSourceMetadata, calculateTextSuitability, checkTextSuitability } from './baseTextPrompts.js';
 import { pickRandomTopicSuggestion } from '../shared/topicRoulette.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
@@ -700,6 +700,7 @@ app.post('/api/generate', async (req, res) => {
       if (schemaName === 'unified_cloze') return 'unified_cloze';
       if (schemaName === 'guided_dialogues_list') return 'guided_dialogues';
       if (schemaName === 'reading_list') return 'reading';
+      if (schemaName === 'reading_from_base_text') return 'reading';
       if (schemaName === 'error_bundle_list') return 'error_bundle';
       return 'unknown';
     })();
@@ -777,6 +778,48 @@ app.post('/api/generate', async (req, res) => {
       const seenSet = new Set(seenList);
 
       const useGrouped = type === 'fib' || type === 'mcq' || type === 'error_bundle';
+
+      // Special-case: For reading requests tied to a specific base text, if an item for this
+      // base text already exists for the same topic/language/level/challenge combo, return it
+      // instead of generating a new one (ignore seen to prevent duplicates per base text).
+      if (type === 'reading' && metadata && typeof metadata.baseTextId === 'string' && metadata.baseTextId.trim()) {
+        try {
+          const exIdx = await loadExercisesIndex(cacheLayout);
+          let foundSha = null;
+          for (const [sha, entry] of Object.entries(exIdx.items || {})) {
+            if (!entry) continue;
+            if (entry.type !== 'reading') continue;
+            const m = entry.meta || {};
+            if (
+              (m.language === languageName) &&
+              (m.level === level) &&
+              (Boolean(m.challengeMode) === Boolean(challengeMode)) &&
+              (m.grammarTopic === grammarTopic) &&
+              (m.baseTextId === metadata.baseTextId)
+            ) {
+              foundSha = sha; break;
+            }
+          }
+          if (foundSha) {
+            const rec = await readExerciseItem(cacheLayout, foundSha);
+            if (rec && rec.content) {
+              // Update seen cookie with this sha prefix so weighting logic remains consistent
+              try {
+                const cookieName = `seen_exercises_${type}_v${schemaVersion}`;
+                const prefixes = [String(foundSha).slice(0, 12)];
+                const cookieHeader = String(req.headers['cookie'] || '');
+                const seenCookieMatch = cookieHeader.match(new RegExp(`${cookieName}=([^;]+)`));
+                const seenList = seenCookieMatch ? decodeURIComponent(seenCookieMatch[1]).split(',').filter(Boolean) : [];
+                const maxSeen = Number(process.env.COOKIE_MAX_SEEN_PER_TYPE || 50);
+                const merged = Array.from(new Set([...seenList, ...prefixes])).slice(-maxSeen);
+                const cookieVal = encodeURIComponent(merged.join(','));
+                res.append('Set-Cookie', `${cookieName}=${cookieVal}; Path=/; Max-Age=2592000; SameSite=Lax`);
+              } catch {}
+              return res.json({ items: [{ ...rec.content, exerciseSha: foundSha }] });
+            }
+          }
+        } catch {}
+      }
       // Build a cross-model family key so we include other-model pools too
       const family = { type, language: languageName, level, challengeMode, schemaVersion, promptSha12 };
       const { items: cachedItems, shas: cachedShas } = useGrouped
@@ -1105,6 +1148,26 @@ app.post('/api/base-text', async (req, res) => {
     // Try to find existing base texts using suitability matrix - topic-agnostic selection
     // This allows reusing any suitable base text regardless of original topic
     const idx = await loadBaseTextsIndex(cacheLayout);
+    // Build a set of baseTextIds that already have a reading exercise for this topic+language+level+challenge
+    // This helps us avoid picking a base text that already has a reading, so we don't create duplicates
+    // when a new reading must be generated.
+    let usedReadingBaseTextIds = new Set();
+    try {
+      const exIdx = await loadExercisesIndex(cacheLayout);
+      for (const entry of Object.values(exIdx.items || {})) {
+        const m = entry?.meta || {};
+        if (
+          entry?.type === 'reading' &&
+          m.language === language &&
+          m.level === level &&
+          Boolean(m.challengeMode) === Boolean(challengeMode) &&
+          String(m.grammarTopic || '') === String(userTopic || '') &&
+          typeof m.baseTextId === 'string' && m.baseTextId.trim()
+        ) {
+          usedReadingBaseTextIds.add(m.baseTextId);
+        }
+      }
+    } catch {}
     const excludeSet = new Set((Array.isArray(excludeIds) ? excludeIds : []).map(id => String(id)));
     const suitableCandidates = [];
     
@@ -1130,9 +1193,12 @@ app.post('/api/base-text', async (req, res) => {
     }
     
     if (suitableCandidates.length > 0) {
-      // Sort by priority (highest first), then by most recent
-      suitableCandidates.sort((a, b) => b.priority - a.priority);
-      return res.json(suitableCandidates[0].content);
+      // Prefer base texts that haven't been used for a reading at this topic/difficulty
+      const unusedPreferred = suitableCandidates.filter(c => !usedReadingBaseTextIds.has(c.content?.id));
+      const pickFrom = unusedPreferred.length > 0 ? unusedPreferred : suitableCandidates;
+      // Sort by priority (highest first)
+      pickFrom.sort((a, b) => b.priority - a.priority);
+      return res.json(pickFrom[0].content);
     }
 
     // Otherwise, generate a new one via /api/generate with schemaName base_text
