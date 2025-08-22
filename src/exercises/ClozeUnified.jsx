@@ -31,56 +31,51 @@ export const UNIFIED_CLOZE_SCHEMA = {
             type: 'array',
             minItems: 1,
             items: {
-              oneOf: [
-                {
-                  // Text segment
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    type: { type: 'string', enum: ['text'] },
-                    content: { type: 'string' }
-                  },
-                  required: ['type', 'content']
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { type: 'string', enum: ['text', 'blank'] },
+                // Text segment properties
+                content: { type: ['string', 'null'] },
+                // Blank segment properties
+                solution: { type: ['string', 'null'] },
+                hint: { type: ['string', 'null'] },
+                distractors: {
+                  type: ['array', 'null'],
+                  minItems: 3,
+                  maxItems: 4,
+                  items: { type: 'string' }
                 },
-                {
-                  // Blank segment
+                explanation: {
                   type: 'object',
                   additionalProperties: false,
                   properties: {
-                    type: { type: 'string', enum: ['blank'] },
                     solution: { type: 'string' },
-                    hint: { type: 'string' },
-                    distractors: {
+                    distractor_explanations: {
                       type: 'array',
-                      minItems: 3,
-                      maxItems: 4,
-                      items: { type: 'string' }
-                    },
-                    explanation: {
-                      type: 'object',
-                      additionalProperties: false,
-                      properties: {
-                        solution: { type: 'string' },
-                        distractors: {
-                          type: 'object',
-                          additionalProperties: { type: 'string' }
-                        }
-                      },
-                      required: ['solution', 'distractors']
-                    },
-                    difficulty_level: { 
-                      type: 'string', 
-                      enum: ['easy', 'medium', 'hard'],
-                      description: 'Relative difficulty of this blank within the exercise'
-                    },
-                    grammar_focus: {
-                      type: 'string',
-                      description: 'The specific grammar point this blank tests (e.g., ser vs estar, preterite vs imperfect)'
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          distractor: { type: 'string' },
+                          explanation: { type: 'string' }
+                        },
+                        required: ['distractor', 'explanation']
+                      }
                     }
-                  },
-                  required: ['type', 'solution', 'hint', 'distractors', 'explanation', 'difficulty_level', 'grammar_focus']
+                  }
+                },
+                difficulty_level: {
+                  type: ['string', 'null'],
+                  enum: ['easy', 'medium', 'hard'],
+                  description: 'Relative difficulty of this blank within the exercise'
+                },
+                grammar_focus: {
+                  type: ['string', 'null'],
+                  description: 'The specific grammar point this blank tests (e.g., ser vs estar, preterite vs imperfect)'
                 }
-              ]
+              },
+              required: ['type']
             }
           },
           difficulty: { type: 'string' },
@@ -218,13 +213,22 @@ export function convertToTraditionalCloze(unifiedItem) {
     } else if (segment.type === 'blank') {
       passage += '_____'; // Traditional 5-underscore format
       
+      // Convert distractor_explanations array to object format for compatibility
+      const distractorExplanations = {};
+      if (segment.explanation.distractor_explanations) {
+        segment.explanation.distractor_explanations.forEach(item => {
+          distractorExplanations[item.distractor] = item.explanation;
+        });
+      }
+
       blanks.push({
         index: blankIndex,
         answer: segment.solution,
         hint: segment.hint,
         rationale: segment.explanation.solution,
         difficulty_level: segment.difficulty_level,
-        grammar_focus: segment.grammar_focus
+        grammar_focus: segment.grammar_focus,
+        distractor_explanations: distractorExplanations
       });
       
       blankIndex++;
@@ -269,6 +273,14 @@ export function convertToClozeMixed(unifiedItem) {
       const shuffledOptions = shuffleArray(options);
       const correctIndex = shuffledOptions.indexOf(segment.solution);
       
+      // Convert distractor_explanations array to object format for compatibility
+      const distractorExplanations = {};
+      if (segment.explanation.distractor_explanations) {
+        segment.explanation.distractor_explanations.forEach(item => {
+          distractorExplanations[item.distractor] = item.explanation;
+        });
+      }
+
       blanks.push({
         index: blankIndex,
         options: shuffledOptions,
@@ -277,7 +289,7 @@ export function convertToClozeMixed(unifiedItem) {
         rationale: segment.explanation.solution,
         difficulty_level: segment.difficulty_level,
         grammar_focus: segment.grammar_focus,
-        distractor_explanations: segment.explanation.distractors
+        distractor_explanations: distractorExplanations
       });
       
       blankIndex++;
