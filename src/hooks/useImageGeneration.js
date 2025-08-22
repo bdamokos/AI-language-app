@@ -97,17 +97,19 @@ export default function useImageGeneration() {
         throw new Error(`Invalid response format from ${imageProvider} API`);
       }
       
-      // Persist image to server cache if exerciseSha provided and a remote URL exists
+      // Persist image to server cache if a remote URL exists and we have either exerciseSha or baseTextId
       try {
         const first = data?.data?.[0] || null;
         const remoteUrl = first?.url || first?.imageURL || null;
         const exerciseSha = options?.exerciseSha;
         const persistToCache = options?.persistToCache;
-        if (persistToCache && exerciseSha && remoteUrl) {
+        const baseTextId = options?.baseTextId;
+        const chapterNumber = options?.chapterNumber;
+        if (persistToCache && remoteUrl && (exerciseSha || baseTextId)) {
           const cacheResp = await fetch('/api/cache/exercise-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ exerciseSha, url: remoteUrl })
+            body: JSON.stringify({ exerciseSha, url: remoteUrl, ...(baseTextId ? { baseTextId } : {}), ...(chapterNumber !== undefined ? { chapterNumber } : {}) })
           });
           if (cacheResp.ok) {
             const cached = await cacheResp.json();

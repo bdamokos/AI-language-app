@@ -10,6 +10,12 @@ export default defineConfig({
         target: 'http://localhost:3000',
         changeOrigin: true,
         secure: false
+      },
+      // Proxy cached image assets served by the Express backend in dev
+      '/cache': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false
       }
     }
   }

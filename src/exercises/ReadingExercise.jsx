@@ -42,11 +42,52 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
     check();
   }, []);
 
+  // Attempt to use base-text-associated image if available
+  useEffect(() => {
+    const maybeUseBaseTextImage = async () => {
+      try {
+        const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
+        const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
+        if (!baseTextId) return;
+        // Skip if we already determined not found for this combo
+        if (lastKeyRef.current === `nf:${baseTextId}:${chapterNumber || 'cover'}`) return;
+        const resp = await fetch(`/api/base-text-content/${baseTextId}`);
+        if (!resp.ok) {
+          if (resp.status === 404) {
+            lastKeyRef.current = `nf:${baseTextId}:${chapterNumber || 'cover'}`;
+          }
+          return;
+        }
+        const base = await resp.json();
+        const images = base?.images || {};
+        let url = null;
+        if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
+          url = images.chapters[String(chapterNumber)].localUrl;
+        } else if (images?.cover?.localUrl) {
+          url = images.cover.localUrl;
+        }
+        if (url) {
+          const cached = { data: [{ url }] };
+          setGeneratedImage(cached);
+          if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
+            const exerciseIndex = idPrefix.split(':').pop();
+            window.globalImageStore[`reading:${exerciseIndex}`] = cached;
+          }
+          // mark signature to avoid regenerating for same
+          lastKeyRef.current = `base:${baseTextId}:${chapterNumber || 'cover'}`;
+        }
+      } catch {}
+    };
+    maybeUseBaseTextImage();
+  }, [item?.base_text_info?.base_text_id, item?.base_text_info?.chapter_number, item?.base_text_id, item?.chapter_number, idPrefix]);
+
   // Generate image based on image_prompt when present
   useEffect(() => {
     const doGen = async () => {
       if (!imageGenerationEnabled) return;
       if (!item?.image_prompt) return;
+      // If we already have an image (e.g., from base text), skip generation
+      if (generatedImage && getImageSource(generatedImage)) return;
       // If a cached local image URL is present on the item, use it and skip generation
       if (item?.localImageUrl) {
         const cached = { data: [{ url: item.localImageUrl }] };
@@ -65,13 +106,42 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
       isGeneratingRef.current = true;
       lastKeyRef.current = sig;
       try {
+        // Prefer existing base-text image if available
+        const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
+        const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
+        if (baseTextId) {
+          try {
+            const resp = await fetch(`/api/base-text-content/${baseTextId}`);
+            if (resp.ok) {
+              const base = await resp.json();
+              const images = base?.images || {};
+              let url = null;
+              if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
+                url = images.chapters[String(chapterNumber)].localUrl;
+              } else if (images?.cover?.localUrl) {
+                url = images.cover.localUrl;
+              }
+              if (url) {
+                const cached = { data: [{ url }] };
+                setGeneratedImage(cached);
+                if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
+                  const exerciseIndex = idPrefix.split(':').pop();
+                  window.globalImageStore[`reading:${exerciseIndex}`] = cached;
+                }
+                return; // Use existing, do not generate
+              }
+            }
+          } catch {}
+        }
         const img = await generateImage(item.image_prompt, {
           width: 1024,
           height: 1024,
           steps: 28,
           cfgScale: 3.5,
-          persistToCache: !!item?.exerciseSha,
-          exerciseSha: item?.exerciseSha
+          persistToCache: true,
+          exerciseSha: item?.exerciseSha,
+          baseTextId: item?.base_text_info?.base_text_id || item?.base_text_id,
+          chapterNumber: item?.base_text_info?.chapter_number || item?.chapter_number
         });
         setGeneratedImage(img);
         if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
@@ -86,7 +156,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
     };
     doGen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageGenerationEnabled, item?.image_prompt, idPrefix, item?.exerciseSha, item?.localImageUrl]);
+  }, [imageGenerationEnabled, item?.image_prompt, idPrefix, item?.exerciseSha, item?.localImageUrl, item?.base_text_info?.base_text_id, item?.base_text_info?.chapter_number, item?.base_text_id, item?.chapter_number]);
 
   const tfItems = Array.isArray(item?.true_false) ? item.true_false : [];
   const qaItems = Array.isArray(item?.comprehension_questions) ? item.comprehension_questions : [];

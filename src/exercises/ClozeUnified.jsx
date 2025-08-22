@@ -243,6 +243,7 @@ export function convertToTraditionalCloze(unifiedItem) {
     difficulty: unifiedItem.difficulty,
     base_text_id: unifiedItem.base_text_id,
     chapter_number: unifiedItem.chapter_number,
+    exerciseSha: unifiedItem.exerciseSha,
     total_blanks_available: unifiedItem.total_blanks,
     metadata: {
       suggested_blanks_easy: unifiedItem.suggested_blanks_easy,
@@ -304,6 +305,7 @@ export function convertToClozeMixed(unifiedItem) {
     difficulty: unifiedItem.difficulty,
     base_text_id: unifiedItem.base_text_id,
     chapter_number: unifiedItem.chapter_number,
+    exerciseSha: unifiedItem.exerciseSha,
     total_blanks_available: unifiedItem.total_blanks,
     metadata: {
       suggested_blanks_easy: unifiedItem.suggested_blanks_easy,

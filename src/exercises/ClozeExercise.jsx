@@ -58,6 +58,42 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
     checkImageGenerationEnabled();
   }, []);
 
+  // Try to use base text image if available (chapter-specific, else cover)
+  useEffect(() => {
+    const maybeUseBaseTextImage = async () => {
+      try {
+        const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
+        const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
+        if (!baseTextId) return;
+        if (lastItemRef.current === `nf:${baseTextId}:${chapterNumber || 'cover'}`) return;
+        const resp = await fetch(`/api/base-text-content/${baseTextId}`);
+        if (!resp.ok) {
+          if (resp.status === 404) lastItemRef.current = `nf:${baseTextId}:${chapterNumber || 'cover'}`;
+          return;
+        }
+        const base = await resp.json();
+        const images = base?.images || {};
+        let url = null;
+        if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
+          url = images.chapters[String(chapterNumber)].localUrl;
+        } else if (images?.cover?.localUrl) {
+          url = images.cover.localUrl;
+        }
+        if (url) {
+          const cached = { data: [{ url }] };
+          setGeneratedImage(cached);
+          if (window.globalImageStore && idPrefix) {
+            const exerciseIndex = idPrefix.split(':').pop();
+            const imageKey = `cloze:${exerciseIndex}`;
+            window.globalImageStore[imageKey] = cached;
+          }
+          lastItemRef.current = `base:${baseTextId}:${chapterNumber || 'cover'}`;
+        }
+      } catch {}
+    };
+    maybeUseBaseTextImage();
+  }, [item?.base_text_info?.base_text_id, item?.base_text_info?.chapter_number, item?.base_text_id, item?.chapter_number, idPrefix]);
+
   // Generate image when item changes (if image generation is enabled and no cached image exists)
   useEffect(() => {
     const generateContextualImage = async () => {
@@ -73,6 +109,11 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         return;
       }
       
+      // If we already have an image (e.g., pre-existing base text image), skip generation
+      if (generatedImage && getImageSource(generatedImage)) {
+        return;
+      }
+
       // If cached local image URL is present on the item, use it and skip generation
       if (item?.localImageUrl) {
         setGeneratedImage({ data: [{ url: item.localImageUrl }] });
@@ -105,14 +146,45 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         
         console.log('[CLOZE] Starting image generation for:', sanitizedItem.title);
         
+        // Prefer existing base-text image if available
+        try {
+          const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
+          const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
+          if (baseTextId) {
+            const resp = await fetch(`/api/base-text-content/${baseTextId}`);
+            if (resp.ok) {
+              const base = await resp.json();
+              const images = base?.images || {};
+              let url = null;
+              if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
+                url = images.chapters[String(chapterNumber)].localUrl;
+              } else if (images?.cover?.localUrl) {
+                url = images.cover.localUrl;
+              }
+              if (url) {
+                const cached = { data: [{ url }] };
+                setGeneratedImage(cached);
+                if (window.globalImageStore && idPrefix) {
+                  const exerciseIndex = idPrefix.split(':').pop();
+                  const imageKey = `cloze:${exerciseIndex}`;
+                  window.globalImageStore[imageKey] = cached;
+                }
+                return; // Use existing, skip generation
+              }
+            }
+          }
+        } catch {}
+
         const imageData = await generateImage(prompt, {
           width: 1024,
           height: 1024,
           steps: 28,
           cfgScale: 3.5,
           // Persist to server cache if the exercise has a stable ID
-          persistToCache: !!item?.exerciseSha,
-          exerciseSha: item?.exerciseSha
+          persistToCache: true,
+          exerciseSha: item?.exerciseSha,
+          baseTextId: item?.base_text_info?.base_text_id || item?.base_text_id,
+          chapterNumber: item?.base_text_info?.chapter_number || item?.chapter_number
         });
         
         // Log cost information in development mode

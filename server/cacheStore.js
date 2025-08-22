@@ -240,6 +240,54 @@ export async function loadBaseTextsIndex(layout) {
   return idx;
 }
 
+// Scan base_texts/items and rebuild index.json (idempotent)
+export async function rebuildBaseTextsIndex(layout) {
+  const indexPath = path.join(layout.baseTextsDir, 'index.json');
+  const idx = (await readJson(indexPath)) || { items: {}, lru: [], stats: {} };
+  idx.items = idx.items || {};
+  idx.lru = idx.lru || [];
+  try {
+    const files = await fs.readdir(layout.baseTextItemsDir);
+    const now = new Date().toISOString();
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const recPath = path.join(layout.baseTextItemsDir, f);
+        const rec = await readJson(recPath, null);
+        if (!rec) continue;
+        const cacheKey = rec.key || `base:${rec?.content?.id || f.replace(/\.json$/, '')}`;
+        idx.items[cacheKey] = {
+          file: f,
+          createdAt: rec.createdAt || now,
+          lastAccessAt: rec.lastAccessAt || now,
+          hits: Number(rec.hits || 0),
+          likes: Number(rec.likes || 0),
+          dislikes: Number(rec.dislikes || 0),
+          meta: rec.meta || {}
+        };
+        idx.lru = idx.lru.filter(k => k !== cacheKey).concat(cacheKey);
+      } catch {}
+    }
+    await writeJson(indexPath, idx);
+    return true;
+  } catch {
+    return false;
+  }
+}
+// Update a base text record by cache key
+export async function updateBaseTextRecord(layout, cacheKey, updater) {
+  const indexPath = path.join(layout.baseTextsDir, 'index.json');
+  const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
+  const entry = idx.items?.[cacheKey];
+  if (!entry) return false;
+  const filePath = path.join(layout.baseTextItemsDir, entry.file);
+  const rec = await readJson(filePath, null);
+  if (!rec) return false;
+  const updated = typeof updater === 'function' ? updater(rec) : rec;
+  await writeJson(filePath, updated);
+  return true;
+}
+
 // -----------------------------
 // Exercises persistent cache
 // -----------------------------
@@ -614,6 +662,22 @@ export async function purgeOutdatedSchemas(layout, schemaVersions) {
       }
     }
     for (const d of toDelete) {
+      // Attempt to remove any images referenced by this base text
+      try {
+        const recPath = path.join(layout.baseTextItemsDir, d.file);
+        const rec = await readJson(recPath, null);
+        const imgs = rec?.content?.images || {};
+        const toUnlink = [];
+        if (imgs.cover?.localPath) toUnlink.push(imgs.cover.localPath);
+        const chapters = imgs.chapters || {};
+        for (const k of Object.keys(chapters)) {
+          const it = chapters[k];
+          if (it?.localPath) toUnlink.push(it.localPath);
+        }
+        for (const p of toUnlink) {
+          try { await fs.unlink(p); } catch {}
+        }
+      } catch {}
       try { await fs.unlink(path.join(layout.baseTextItemsDir, d.file)); } catch {}
       delete baseIdx.items[d.key];
       baseIdx.lru = (baseIdx.lru || []).filter(k => k !== d.key);

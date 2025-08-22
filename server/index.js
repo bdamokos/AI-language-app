@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup } from './cacheStore.js';
+import { getCacheDir, ensureCacheLayout, readJson, writeJson, downloadImageToCache, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, makeExerciseFileName, updateExerciseRecord, selectUnseenFromPool, selectUnseenFromPoolGrouped, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, purgeOutdatedSchemas, incrementExerciseHits, rateExplanation, rateExerciseGroup, updateBaseTextRecord, rebuildBaseTextsIndex } from './cacheStore.js';
 import { BASE_TEXT_SYSTEM_PROMPT, generateBaseTextUserPrompt, BASE_TEXT_SCHEMA, addSourceMetadata, calculateTextSuitability, checkTextSuitability } from './baseTextPrompts.js';
 import { pickRandomTopicSuggestion } from '../shared/topicRoulette.js';
 import { schemaVersions } from '../shared/schemaVersions.js';
@@ -53,6 +53,16 @@ const initCache = (async () => {
       }
     } catch (e) {
       console.warn('[CACHE] Failed to purge outdated schemas:', e?.message);
+    }
+    // Rebuild base texts index if empty or corrupted
+    try {
+      const baseIdx = await loadBaseTextsIndex(cacheLayout);
+      if (!baseIdx.items || Object.keys(baseIdx.items).length === 0) {
+        const ok = await rebuildBaseTextsIndex(cacheLayout);
+        console.log(`[CACHE] Base texts reindex ${ok ? 'completed' : 'skipped/failed'}`);
+      }
+    } catch (e) {
+      console.warn('[CACHE] Failed to reindex base texts:', e?.message);
     }
   } catch (e) {
     console.warn('[CACHE] Failed to initialize cache directories:', e?.message);
@@ -978,25 +988,100 @@ app.get('/api/base-text-content/:baseTextId', async (req, res) => {
     // Resolve the cache key from the index using the human-friendly baseTextId
     const idx = await loadBaseTextsIndex(cacheLayout);
     let cacheKeyForId = null;
+    let foundVia = null;
     for (const [key, entry] of Object.entries(idx.items || {})) {
       const meta = entry?.meta || {};
       // Match against meta.baseTextId which is stored in the index
       if (String(meta.baseTextId || '').trim() === String(baseTextId).trim()) {
         cacheKeyForId = key;
+        foundVia = 'index.meta.baseTextId';
         break;
       }
     }
 
+    // Fallback: scan record content.id for older entries that may not have meta.baseTextId
     if (!cacheKeyForId) {
+      for (const [key] of Object.entries(idx.items || {})) {
+        try {
+          const rec = await getBaseText(cacheLayout, key);
+          const contentId = rec?.content?.id || rec?.content?.baseTextId;
+          if (contentId && String(contentId).trim() === String(baseTextId).trim()) {
+            cacheKeyForId = key;
+            foundVia = 'index.file.content.id';
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    // Last-resort recovery: scan base_texts/items directory and rehydrate index if we find a match
+    // If we find the record here, return it immediately to avoid races between concurrent requests
+    if (!cacheKeyForId) {
+      try {
+        const dir = cacheLayout.baseTextItemsDir;
+        const files = await fs.readdir(dir);
+        let directRecord = null;
+        for (const f of files) {
+          if (!f.endsWith('.json')) continue;
+          try {
+            const recPath = path.join(dir, f);
+            const rec = await readJson(recPath, null);
+            if (!rec) continue;
+            const contentId = rec?.content?.id || rec?.meta?.baseTextId;
+            if (contentId && String(contentId).trim() === String(baseTextId).trim()) {
+              // Rehydrate index entry for future lookups
+              const baseIdxPath = path.join(cacheLayout.baseTextsDir, 'index.json');
+              const baseIdx = (await readJson(baseIdxPath)) || { items: {}, lru: [] };
+              baseIdx.items = baseIdx.items || {};
+              baseIdx.lru = baseIdx.lru || [];
+              const now = new Date().toISOString();
+              const cacheKey = rec.key || `base:${rec?.meta?.language || 'unknown'}:${rec?.meta?.level || 'unknown'}:${!!rec?.meta?.challengeMode}:${rec?.meta?.topic || 'unknown'}:${rec?.meta?.model || 'unknown'}:${rec?.meta?.schemaVersion || 1}:${(rec?.meta?.promptSha || '').slice(0,12) || contentId}`;
+              baseIdx.items[cacheKey] = { file: f, createdAt: rec.createdAt || now, lastAccessAt: now, hits: Number(rec.hits || 0), likes: Number(rec.likes || 0), dislikes: Number(rec.dislikes || 0), meta: rec.meta || {} };
+              baseIdx.lru = baseIdx.lru.filter(k => k !== cacheKey).concat(cacheKey);
+              await writeJson(baseIdxPath, baseIdx);
+              cacheKeyForId = cacheKey;
+              directRecord = rec; // allow immediate return to avoid race
+              break;
+            }
+          } catch {}
+        }
+        if (directRecord) {
+          console.log(`[BASE-TEXT] ${baseTextId} -> 200 via filescan`);
+          return res.json(directRecord.content || directRecord);
+        }
+      } catch {}
+    }
+
+    if (!cacheKeyForId) {
+      console.warn(`[BASE-TEXT] ${baseTextId} -> 404 not found`);
       return res.status(404).json({ error: 'Base text not found' });
     }
 
     // Load the base text record via the resolved cache key
-    const record = await getBaseText(cacheLayout, cacheKeyForId);
-    if (!record) return res.status(404).json({ error: 'Base text not found' });
+    let record = await getBaseText(cacheLayout, cacheKeyForId);
+    if (!record) {
+      // Attempt recovery by scanning files and returning the record directly
+      try {
+        const dir = cacheLayout.baseTextItemsDir;
+        const files = await fs.readdir(dir);
+        for (const f of files) {
+          if (!f.endsWith('.json')) continue;
+          const recPath = path.join(dir, f);
+          const rec = await readJson(recPath, null);
+          const contentId = rec?.content?.id || rec?.meta?.baseTextId;
+          if (contentId && String(contentId).trim() === String(baseTextId).trim()) {
+            console.log(`[BASE-TEXT] ${baseTextId} -> 200 via filescan(recovery)`);
+            return res.json(rec.content || rec);
+          }
+        }
+      } catch {}
+      return res.status(404).json({ error: 'Base text not found' });
+    }
 
-    // Return the content only for client consumption
-    res.json(record.content || record);
+    // Return the content only for client consumption (include images map if present)
+    const payload = record.content || record;
+    console.log(`[BASE-TEXT] ${baseTextId} -> 200 via ${foundVia || 'index'}`);
+    res.json(payload);
   } catch (error) {
     console.error('Error fetching base text content:', error);
     res.status(500).json({ error: 'Failed to fetch base text content' });
@@ -1071,6 +1156,8 @@ app.post('/api/base-text', async (req, res) => {
     const baseTextId = sha256Hex(idSource).slice(0, 16);
     const withSourceMeta = addSourceMetadata(parsed, currentModel);
     const withId = { ...withSourceMeta, id: baseTextId, language, level, challengeMode, topic };
+    // Initialize images container on base text for later association
+    withId.images = withId.images && typeof withId.images === 'object' ? withId.images : { cover: null, chapters: {} };
     
     // Calculate and store suitability matrix in metadata for efficient lookups
     const suitability = calculateTextSuitability(withId.chapters || []);
@@ -1771,12 +1858,14 @@ app.post('/api/cache/exercise-image', async (req, res) => {
     }
     
     if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
-    const { exerciseSha, url } = req.body || {};
-    if (!exerciseSha || !url) return res.status(400).json({ error: 'exerciseSha and url are required' });
+    const { exerciseSha, url, baseTextId, chapterNumber } = req.body || {};
+    if (!url) return res.status(400).json({ error: 'url is required' });
     
-    // Validate exerciseSha to prevent path traversal
-    if (typeof exerciseSha !== 'string' || !/^[a-f0-9]{12,64}$/.test(exerciseSha)) {
-      return res.status(400).json({ error: 'Invalid exerciseSha format' });
+    // Validate exerciseSha if provided to prevent path traversal
+    if (exerciseSha !== undefined && exerciseSha !== null) {
+      if (typeof exerciseSha !== 'string' || !/^[a-f0-9]{12,64}$/.test(exerciseSha)) {
+        return res.status(400).json({ error: 'Invalid exerciseSha format' });
+      }
     }
     
     // Validate URL to prevent SSRF
@@ -1789,12 +1878,63 @@ app.post('/api/cache/exercise-image', async (req, res) => {
       return res.status(400).json({ error: 'Invalid URL format' });
     }
     
-    const dl = await downloadImageToCache({ imagesDir: cacheLayout.imagesDir, exerciseSha, url, fetchImpl: fetch, publicBase: '/cache/images' });
+    // Choose a storage key: prefer exerciseSha; otherwise derive a deterministic key from baseTextId+chapter+url
+    const storageKey = exerciseSha || (baseTextId ? sha256Hex(`${baseTextId}:${chapterNumber ?? 'cover'}:${url}`).slice(0, 32) : null);
+    if (!storageKey) {
+      return res.status(400).json({ error: 'exerciseSha or baseTextId is required' });
+    }
+
+    const dl = await downloadImageToCache({ imagesDir: cacheLayout.imagesDir, exerciseSha: storageKey, url, fetchImpl: fetch, publicBase: '/cache/images' });
     // Update exercise record to reference local image
-    await updateExerciseRecord(cacheLayout, exerciseSha, (rec) => {
-      const updated = { ...rec, localImagePath: dl.localPath, localImageUrl: dl.localUrl };
-      return updated;
-    });
+    if (exerciseSha) {
+      await updateExerciseRecord(cacheLayout, exerciseSha, (rec) => {
+        const updated = { ...rec, localImagePath: dl.localPath, localImageUrl: dl.localUrl };
+        return updated;
+      });
+    }
+
+    // If this image is associated with a base text, persist it under the base text record as well
+    if (baseTextId) {
+      try {
+        const idx = await loadBaseTextsIndex(cacheLayout);
+        let baseKey = null;
+        for (const [key, entry] of Object.entries(idx.items || {})) {
+          const meta = entry?.meta || {};
+          if (String(meta.baseTextId || '').trim() === String(baseTextId).trim()) {
+            baseKey = key; break;
+          }
+        }
+        if (baseKey) {
+          await updateBaseTextRecord(cacheLayout, baseKey, (rec) => {
+            const content = rec?.content || rec;
+            const images = content.images && typeof content.images === 'object' ? content.images : { cover: null, chapters: {} };
+            // Decide target slot: chapter-specific or cover
+            if (typeof chapterNumber === 'number') {
+              images.chapters = images.chapters || {};
+              images.chapters[String(chapterNumber)] = {
+                localUrl: dl.localUrl,
+                localPath: dl.localPath,
+                filename: dl.filename,
+                contentType: dl.contentType || null,
+                updatedAt: new Date().toISOString()
+              };
+            } else if (!images.cover) {
+              images.cover = {
+                localUrl: dl.localUrl,
+                localPath: dl.localPath,
+                filename: dl.filename,
+                contentType: dl.contentType || null,
+                updatedAt: new Date().toISOString()
+              };
+            }
+            content.images = images;
+            return { ...rec, content };
+          });
+        }
+      } catch (e) {
+        console.warn('[CACHE-IMG] Failed to annotate base text with image:', e?.message);
+      }
+    }
     return res.json({ ok: true, localUrl: dl.localUrl, localPath: dl.localPath });
   } catch (e) {
     console.error('[CACHE-IMG]', e);
