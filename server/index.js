@@ -1295,10 +1295,20 @@ app.post('/api/settings', (req, res) => {
         const eq = line.indexOf('=');
         if (eq === -1) continue;
         const k = line.slice(0, eq).trim();
-        const v = line.slice(eq + 1);
+        let v = line.slice(eq + 1);
+        // Handle quoted values (both single and double quotes)
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+          v = v.slice(1, -1); // Remove quotes
+        }
         if (k) map.set(k, v);
       }
-      const set = (k, v) => { if (typeof v === 'string') map.set(k, v); };
+      const set = (k, v) => {
+        if (typeof v === 'string') {
+          // Quote values that contain spaces to maintain .env format compliance
+          const stringValue = v;
+          map.set(k, stringValue.includes(' ') ? `"${stringValue}"` : stringValue);
+        }
+      };
       const setNum = (k, v) => { if (typeof v === 'number') map.set(k, v.toString()); };
       const setBool = (k, v) => { if (typeof v === 'boolean') map.set(k, v.toString()); };
       set('PROVIDER', runtimeConfig.provider);
