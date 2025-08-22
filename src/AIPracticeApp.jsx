@@ -406,6 +406,92 @@ const AIPracticeApp = () => {
     return segments;
   };
 
+  // Create generation controls component
+  const renderGenerationControls = () => (
+    <div id="exercise-generation-controls" className="mt-3 p-3 bg-gray-50 rounded">
+      <div className="font-semibold text-gray-800 mb-2">Add content</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-center">
+        <button
+          onClick={generateExplanationOnly}
+          disabled={loadingExplOnly || !topic.trim()}
+          className="w-full bg-gray-800 text-white py-2 px-4 rounded hover:bg-gray-900 text-sm"
+        >{loadingExplOnly ? 'Generating...' : 'Generate Explanation'}</button>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateFIBOnly}
+            disabled={loadingFibOnly || !topic.trim()}
+            className="flex-1 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm"
+          >{loadingFibOnly ? 'Generating...' : `Add FIB (${exerciseCount})`}</button>
+          <input type="number" min={1} max={20} value={exerciseCount} onChange={e => setExerciseCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateMCQOnly}
+            disabled={loadingMcqOnly || !topic.trim()}
+            className="flex-1 bg-teal-600 text-white py-2 px-4 rounded hover:bg-teal-700 text-sm"
+          >{loadingMcqOnly ? 'Generating...' : `Add MCQ (${mcqCount})`}</button>
+          <input type="number" min={1} max={20} value={mcqCount} onChange={e => setMcqCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateClozeOnly}
+            disabled={loadingClozeOnly || !topic.trim()}
+            className="flex-1 bg-amber-600 text-white py-2 px-4 rounded hover:bg-amber-700 text-sm"
+          >{loadingClozeOnly ? 'Generating...' : `Add Cloze (${clozeCount})`}</button>
+          <input type="number" min={1} max={10} value={clozeCount} onChange={e => setClozeCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateClozeMixOnly}
+            disabled={loadingClozeMixOnly || !topic.trim()}
+            className="flex-1 bg-fuchsia-600 text-white py-2 px-4 rounded hover:bg-fuchsia-700 text-sm"
+          >{loadingClozeMixOnly ? 'Generating...' : `Add Cloze-Mixed (${clozeMixCount})`}</button>
+          <input type="number" min={1} max={10} value={clozeMixCount} onChange={e => setClozeMixCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateDialogueOnly}
+            disabled={loadingDialogueOnly || !topic.trim()}
+            className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 text-sm"
+          >{loadingDialogueOnly ? 'Generating...' : `Add Guided Dialogues (${dialogueCount})`}</button>
+          <input type="number" min={1} max={10} value={dialogueCount} onChange={e => setDialogueCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateWritingOnly}
+            disabled={loadingWritingOnly || !topic.trim()}
+            className="flex-1 bg-rose-600 text-white py-2 px-4 rounded hover:bg-rose-700 text-sm"
+          >{loadingWritingOnly ? 'Generating...' : `Add Writing Prompts (${writingCount})`}</button>
+          <input type="number" min={1} max={10} value={writingCount} onChange={e => setWritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateReadingOnly}
+            disabled={loadingReadingOnly || !topic.trim()}
+            className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded hover:bg-emerald-700 text-sm"
+          >{loadingReadingOnly ? 'Generating...' : `Generate Reading Passage (${readingCount})`}</button>
+          <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={generateErrorBundlesOnly}
+            disabled={loadingErrorBundlesOnly || !topic.trim()}
+            className="flex-1 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 text-sm"
+          >{loadingErrorBundlesOnly ? 'Generating...' : `Add Error Bundles (${errorBundleCount})`}</button>
+          <input type="number" min={2} max={12} value={errorBundleCount} onChange={e => setErrorBundleCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+      </div>
+    </div>
+  );
+
   const renderLessonPanel = () => (
     lesson && (
       <div className="border rounded-lg p-4 space-y-3">
@@ -418,89 +504,6 @@ const AIPracticeApp = () => {
           </div>
           <PDFExport lesson={lesson} orchestratorValues={orchestratorValues} strictAccents={strictAccents} />
         </div>
-        {/* On-demand exercise generation controls inside the lesson */}
-        <div id="exercise-generation-controls" className="mt-3 p-3 bg-gray-50 rounded">
-          <div className="font-semibold text-gray-800 mb-2">Add content</div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-center">
-            <button
-              onClick={generateExplanationOnly}
-              disabled={loadingExplOnly || !topic.trim()}
-              className="w-full bg-gray-800 text-white py-2 px-4 rounded hover:bg-gray-900 text-sm"
-            >{loadingExplOnly ? 'Generating...' : 'Generate Explanation'}</button>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateFIBOnly}
-                disabled={loadingFibOnly || !topic.trim()}
-                className="flex-1 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm"
-              >{loadingFibOnly ? 'Generating...' : `Add FIB (${exerciseCount})`}</button>
-              <input type="number" min={1} max={20} value={exerciseCount} onChange={e => setExerciseCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateMCQOnly}
-                disabled={loadingMcqOnly || !topic.trim()}
-                className="flex-1 bg-teal-600 text-white py-2 px-4 rounded hover:bg-teal-700 text-sm"
-              >{loadingMcqOnly ? 'Generating...' : `Add MCQ (${mcqCount})`}</button>
-              <input type="number" min={1} max={20} value={mcqCount} onChange={e => setMcqCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateClozeOnly}
-                disabled={loadingClozeOnly || !topic.trim()}
-                className="flex-1 bg-amber-600 text-white py-2 px-4 rounded hover:bg-amber-700 text-sm"
-              >{loadingClozeOnly ? 'Generating...' : `Add Cloze (${clozeCount})`}</button>
-              <input type="number" min={1} max={10} value={clozeCount} onChange={e => setClozeCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateClozeMixOnly}
-                disabled={loadingClozeMixOnly || !topic.trim()}
-                className="flex-1 bg-fuchsia-600 text-white py-2 px-4 rounded hover:bg-fuchsia-700 text-sm"
-              >{loadingClozeMixOnly ? 'Generating...' : `Add Cloze-Mixed (${clozeMixCount})`}</button>
-              <input type="number" min={1} max={10} value={clozeMixCount} onChange={e => setClozeMixCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateDialogueOnly}
-                disabled={loadingDialogueOnly || !topic.trim()}
-                className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 text-sm"
-              >{loadingDialogueOnly ? 'Generating...' : `Add Guided Dialogues (${dialogueCount})`}</button>
-              <input type="number" min={1} max={10} value={dialogueCount} onChange={e => setDialogueCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateWritingOnly}
-                disabled={loadingWritingOnly || !topic.trim()}
-                className="flex-1 bg-rose-600 text-white py-2 px-4 rounded hover:bg-rose-700 text-sm"
-              >{loadingWritingOnly ? 'Generating...' : `Add Writing Prompts (${writingCount})`}</button>
-              <input type="number" min={1} max={10} value={writingCount} onChange={e => setWritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateReadingOnly}
-                disabled={loadingReadingOnly || !topic.trim()}
-                className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded hover:bg-emerald-700 text-sm"
-              >{loadingReadingOnly ? 'Generating...' : `Generate Reading Passage (${readingCount})`}</button>
-              <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={generateErrorBundlesOnly}
-                disabled={loadingErrorBundlesOnly || !topic.trim()}
-                className="flex-1 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 text-sm"
-              >{loadingErrorBundlesOnly ? 'Generating...' : `Add Error Bundles (${errorBundleCount})`}</button>
-              <input type="number" min={2} max={12} value={errorBundleCount} onChange={e => setErrorBundleCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
-            </div>
-          </div>
-        </div>
         <Orchestrator
           lesson={lesson}
           values={orchestratorValues}
@@ -509,6 +512,7 @@ const AIPracticeApp = () => {
           strictAccents={strictAccents}
           idBase="lesson"
           onFocusKey={(k) => setLastFocusedInput(k)}
+          renderGenerationControls={renderGenerationControls}
         />
       </div>
     )
@@ -652,7 +656,7 @@ const AIPracticeApp = () => {
       if (base && chapters.length > 0) {
         let remaining = desired;
         let chapterIndex = readingChapterCursor;
-        
+
         while (remaining > 0 && chapterIndex < chapters.length) {
           const chapter = chapters[chapterIndex];
           const batchSize = Math.min(remaining, 10); // Request up to 10 exercises per chapter
@@ -667,8 +671,10 @@ const AIPracticeApp = () => {
         setReadingChapterCursor(chapterIndex);
       }
       const items = collected.length > 0 ? collected : [];
+      // Add creation timestamp to each exercise
+      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, fill_in_blanks: items });
+      mergeLesson({ topic, fill_in_blanks: timestampedItems });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate FIB'); }
     finally { setLoadingFibOnly(false); }
   };
@@ -679,8 +685,10 @@ const AIPracticeApp = () => {
     setErrorMsg('');
     try {
       const data = await generateMCQ(topic, Number(mcqCount), languageContext);
+      // Add creation timestamp to each exercise
+      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, multiple_choice: data.items || [] });
+      mergeLesson({ topic, multiple_choice: timestampedItems });
       } catch (e) { console.error(e); setErrorMsg('Failed to generate MCQ'); }
     finally { setLoadingMcqOnly(false); }
   };
@@ -716,8 +724,10 @@ const AIPracticeApp = () => {
         setReadingChapterCursor((prev) => Math.min(prev + desired, chapters.length - 1));
       }
       const items = collected.length > 0 ? collected : [];
+      // Add creation timestamp to each exercise
+      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, cloze_passages: items });
+      mergeLesson({ topic, cloze_passages: timestampedItems });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze'); }
     finally { setLoadingClozeOnly(false); }
   };
@@ -753,8 +763,10 @@ const AIPracticeApp = () => {
         setReadingChapterCursor((prev) => Math.min(prev + desired, chapters.length - 1));
       }
       const items = collected.length > 0 ? collected : [];
+      // Add creation timestamp to each exercise
+      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, cloze_with_mixed_options: items });
+      mergeLesson({ topic, cloze_with_mixed_options: timestampedItems });
       } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
     finally { setLoadingClozeMixOnly(false); }
   };
@@ -765,8 +777,10 @@ const AIPracticeApp = () => {
     setErrorMsg('');
     try {
       const data = await generateGuidedDialogues(topic, Number(dialogueCount), languageContext);
+      // Add creation timestamp to each exercise
+      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, guided_dialogues: data.items || [] });
+      mergeLesson({ topic, guided_dialogues: timestampedItems });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate guided dialogues'); }
     finally { setLoadingDialogueOnly(false); }
   };
@@ -777,8 +791,10 @@ const AIPracticeApp = () => {
     setErrorMsg('');
     try {
       const data = await generateWritingPrompts(topic, Number(writingCount), languageContext);
+      // Add creation timestamp to each exercise
+      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, writing_prompts: data.items || [] });
+      mergeLesson({ topic, writing_prompts: timestampedItems });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate writing prompts'); }
     finally { setLoadingWritingOnly(false); }
   };
@@ -818,8 +834,10 @@ const AIPracticeApp = () => {
       if (!data) {
         data = await generateReading(topic, Number(readingCount), languageContext);
       }
+      // Add creation timestamp to each exercise
+      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, reading_comprehension: data.items || [] });
+      mergeLesson({ topic, reading_comprehension: timestampedItems });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate reading comprehension'); }
     finally { setLoadingReadingOnly(false); }
   };
@@ -839,8 +857,10 @@ const AIPracticeApp = () => {
     setErrorMsg('');
     try {
       const data = await generateErrorBundles(topic, Number(errorBundleCount), languageContext);
+      // Add creation timestamp to each exercise
+      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, error_bundles: data.items || [], error_bundles_shared_context: data.shared_context || '' });
+      mergeLesson({ topic, error_bundles: timestampedItems, error_bundles_shared_context: data.shared_context || '' });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate error bundles'); }
     finally { setLoadingErrorBundlesOnly(false); }
   };

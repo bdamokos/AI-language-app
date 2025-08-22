@@ -21,251 +21,161 @@ import { BaseTextChapterTracker, EXERCISE_CATEGORIES, createChapterContext } fro
  * - checked: boolean (global checked state)
  * - strictAccents: boolean
  * - idBase: string (namespace prefix)
+ * - renderGenerationControls: optional function to render exercise generation controls
  */
-export default function Orchestrator({ lesson, values, onChange, checked, strictAccents = true, idBase = 'lesson', onFocusKey }) {
+export default function Orchestrator({ lesson, values, onChange, checked, strictAccents = true, idBase = 'lesson', onFocusKey, renderGenerationControls }) {
   const [ratedGroups, setRatedGroups] = useState({});
-  const sections = useMemo(() => {
-    const arr = [];
-    if (Array.isArray(lesson?.fill_in_blanks)) arr.push(['fib', lesson.fill_in_blanks]);
-    if (Array.isArray(lesson?.multiple_choice)) arr.push(['mcq', lesson.multiple_choice]);
-    if (Array.isArray(lesson?.cloze_passages)) arr.push(['cloze', lesson.cloze_passages]);
-    if (Array.isArray(lesson?.cloze_with_mixed_options)) arr.push(['clozeMix', lesson.cloze_with_mixed_options]);
-    if (Array.isArray(lesson?.guided_dialogues)) arr.push(['dialogue', lesson.guided_dialogues]);
-    if (Array.isArray(lesson?.writing_prompts)) arr.push(['writing', lesson.writing_prompts]);
-    if (Array.isArray(lesson?.reading_comprehension)) arr.push(['reading', lesson.reading_comprehension]);
-    if (Array.isArray(lesson?.error_bundles)) arr.push(['error', lesson.error_bundles]);
-    return arr;
+  // Create a flat timeline of all exercises in creation order
+  const exerciseTimeline = useMemo(() => {
+    const timeline = [];
+    const exerciseTypes = [
+      ['fib', 'fill_in_blanks', 'Fill in the blanks'],
+      ['mcq', 'multiple_choice', 'Multiple Choice'],
+      ['cloze', 'cloze_passages', 'Cloze Passages'],
+      ['clozeMix', 'cloze_with_mixed_options', 'Cloze (Mixed Options)'],
+      ['dialogue', 'guided_dialogues', 'Guided Dialogues'],
+      ['writing', 'writing_prompts', 'Writing Prompts'],
+      ['reading', 'reading_comprehension', 'Reading Comprehension'],
+      ['error', 'error_bundles', 'Error Bundles']
+    ];
+
+    exerciseTypes.forEach(([typeKey, lessonKey, displayName]) => {
+      if (Array.isArray(lesson?.[lessonKey])) {
+        lesson[lessonKey].forEach((item, idx) => {
+          timeline.push({
+            type: typeKey,
+            lessonKey,
+            displayName,
+            item,
+            idx,
+            // Use createdAt timestamp if available, otherwise use array index as fallback
+            createdAt: item.createdAt || 0
+          });
+        });
+      }
+    });
+
+    // Sort by creation timestamp first, then by array index as tiebreaker
+    return timeline.sort((a, b) => {
+      // Primary sort: by createdAt timestamp
+      if (a.createdAt !== b.createdAt) {
+        return a.createdAt - b.createdAt;
+      }
+      // Secondary sort: by array index within same type
+      return a.idx - b.idx;
+    });
   }, [lesson]);
+
+  // Helper function to render an exercise by type
+  const renderExercise = (exerciseData) => {
+    const { type, item, idx, displayName } = exerciseData;
+    const keyPrefix = `${idBase}:${type}:${idx}`;
+    const val = values?.[keyPrefix] ?? (type === 'mcq' ? null : {});
+    const setVal = (subKey, subVal) => {
+      const newValue = type === 'mcq' ? subKey : { ...(val || {}), [String(subKey)]: subVal };
+      onChange(keyPrefix, newValue);
+    };
+
+    const groupId = item?.exerciseGroupId;
+    const hasGroup = typeof groupId === 'string' && groupId.length > 0;
+    const alreadyRated = hasGroup && ratedGroups[groupId];
+
+    const sendGroupVote = async (like) => {
+      if (!hasGroup || alreadyRated) return;
+      setRatedGroups(prev => ({ ...prev, [groupId]: like ? 'up' : 'down' }));
+      try {
+        await fetch('/api/rate/exercise-group', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupId, like })
+        });
+      } catch {}
+    };
+
+    // Check if this is the last exercise of its group
+    const currentIndex = exerciseTimeline.findIndex(ex => ex.type === type && ex.idx === idx);
+    const nextExercise = currentIndex < exerciseTimeline.length - 1 ? exerciseTimeline[currentIndex + 1] : null;
+    const isGroupEnd = hasGroup && (!nextExercise || nextExercise.item?.exerciseGroupId !== groupId);
+
+    const exerciseComponent = () => {
+      switch (type) {
+        case 'fib':
+          return <FIBExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
+        case 'mcq':
+          return <MCQExercise item={item} value={typeof val === 'number' ? val : null} onChange={(i) => onChange(keyPrefix, i)} checked={checked} idPrefix={keyPrefix} />;
+        case 'cloze':
+          return <ClozeExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
+        case 'clozeMix':
+          return <ClozeMixedExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} />;
+        case 'dialogue':
+          return <GuidedDialogueExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
+        case 'writing':
+          return <WritingPromptExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
+        case 'reading':
+          return <ReadingExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
+        case 'error':
+          // For error bundles, determine mode based on position within error bundles
+          const errorItems = lesson?.error_bundles || [];
+          const errorIdx = errorItems.findIndex(eb => eb === item);
+          const total = errorItems.length;
+          const fixCount = Math.floor(total * 0.4);
+          const isFix = errorIdx >= total - fixCount;
+          const currentValue = values?.[keyPrefix];
+          return (
+            <ErrorBundleExercise
+              item={item}
+              value={typeof currentValue === 'number' || typeof currentValue === 'string' ? currentValue : (isFix ? '' : null)}
+              onChange={(v) => onChange(keyPrefix, v)}
+              checked={checked}
+              strictAccents={strictAccents}
+              idPrefix={keyPrefix}
+              onFocusKey={onFocusKey}
+              mode={isFix ? 'fix' : 'select'}
+            />
+          );
+        default:
+          return null;
+      }
+    };
+
+    return (
+      <div key={keyPrefix} className="space-y-2">
+        {exerciseComponent()}
+        {hasGroup && isGroupEnd && (
+          <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+            <span>Rate this set</span>
+            <button
+              type="button"
+              onClick={() => sendGroupVote(true)}
+              disabled={alreadyRated}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`}
+              aria-label="Thumbs up"
+            >
+              <ThumbsUp size={14} /> Like
+            </button>
+            <button
+              type="button"
+              onClick={() => sendGroupVote(false)}
+              disabled={alreadyRated}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`}
+              aria-label="Thumbs down"
+            >
+              <ThumbsDown size={14} /> Dislike
+            </button>
+            {alreadyRated && <span className="ml-1">Thanks!</span>}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-3">
       {lesson?.explanation && (
         <ExplanationComponent explanation={lesson.explanation} />
       )}
-      {sections.map(([type, items]) => (
-        <div key={type} className="space-y-3">
-          {type === 'fib' && items.length > 0 && <h3 className="font-semibold text-gray-800">Fill in the blanks</h3>}
-          {type === 'mcq' && items.length > 0 && <h3 className="font-semibold text-gray-800">Multiple Choice</h3>}
-          {type === 'cloze' && items.length > 0 && <h3 className="font-semibold text-gray-800">Cloze Passages</h3>}
-          {type === 'clozeMix' && items.length > 0 && <h3 className="font-semibold text-gray-800">Cloze (Mixed Options)</h3>}
-          {type === 'dialogue' && items.length > 0 && <h3 className="font-semibold text-gray-800">Guided Dialogues</h3>}
-          {type === 'writing' && items.length > 0 && <h3 className="font-semibold text-gray-800">Writing Prompts</h3>}
-          {type === 'reading' && items.length > 0 && <h3 className="font-semibold text-gray-800">Reading Comprehension</h3>}
-          {type === 'error' && items.length > 0 && (
-            <div>
-              <h3 className="font-semibold text-gray-800">Error Bundles (Select or Fix)</h3>
-              {typeof lesson?.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context && (
-                <p className="text-xs text-gray-600 mt-1">Context: {lesson.error_bundles_shared_context}</p>
-              )}
-            </div>
-          )}
-          {items.map((item, idx) => {
-            const keyPrefix = `${idBase}:${type}:${idx}`;
-            const val = values?.[keyPrefix] ?? (type === 'mcq' ? null : {});
-            const setVal = (subKey, subVal) => {
-              const newValue = type === 'mcq' ? subKey : { ...(val || {}), [String(subKey)]: subVal };
-              onChange(keyPrefix, newValue);
-            };
-            const groupId = item?.exerciseGroupId; // present when pulled from cache or freshly added
-            const hasGroup = typeof groupId === 'string' && groupId.length > 0;
-            const hasAnyGroupInSection = items.some(it => typeof it?.exerciseGroupId === 'string' && it.exerciseGroupId);
-            const alreadyRated = hasGroup && ratedGroups[groupId];
-            const sendGroupVote = async (like) => {
-              if (!hasGroup || alreadyRated) return;
-              setRatedGroups(prev => ({ ...prev, [groupId]: like ? 'up' : 'down' }));
-              try {
-                await fetch('/api/rate/exercise-group', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ groupId, like })
-                });
-              } catch {}
-            };
-            const currentGroup = groupId || null;
-            const nextGroup = idx < items.length - 1 ? (items[idx + 1]?.exerciseGroupId || null) : null;
-            const isGroupEnd = hasGroup && (idx === items.length - 1 || nextGroup !== currentGroup);
-            if (type === 'fib') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <FIBExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button
-                        type="button"
-                        onClick={() => sendGroupVote(true)}
-                        disabled={alreadyRated}
-                        className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`}
-                        aria-label="Thumbs up"
-                      >
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => sendGroupVote(false)}
-                        disabled={alreadyRated}
-                        className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`}
-                        aria-label="Thumbs down"
-                      >
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'mcq') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <MCQExercise item={item} value={typeof val === 'number' ? val : null} onChange={(i) => onChange(keyPrefix, i)} checked={checked} idPrefix={keyPrefix} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'cloze') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <ClozeExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'clozeMix') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <ClozeMixedExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'dialogue') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <GuidedDialogueExercise item={item} value={val || {}} onChange={setVal} checked={checked} strictAccents={strictAccents} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'writing') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <WritingPromptExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'reading') {
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <ReadingExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (type === 'error') {
-              // Deterministic 60/40 split: last 40% are fix mode
-              const total = items.length;
-              const fixCount = Math.floor(total * 0.4);
-              const isFix = idx >= total - fixCount;
-              const currentValue = values?.[keyPrefix];
-              return (
-                <div key={keyPrefix} className="space-y-2">
-                  <ErrorBundleExercise
-                    item={item}
-                    value={typeof currentValue === 'number' || typeof currentValue === 'string' ? currentValue : (isFix ? '' : null)}
-                    onChange={(v) => onChange(keyPrefix, v)}
-                    checked={checked}
-                    strictAccents={strictAccents}
-                    idPrefix={keyPrefix}
-                    onFocusKey={onFocusKey}
-                    mode={isFix ? 'fix' : 'select'}
-                  />
-                  {hasAnyGroupInSection && isGroupEnd && (
-                    <div className="pt-2 border-t border-gray-200 flex items-center gap-2 text-xs text-gray-600">
-                      <span>Rate this set</span>
-                      <button type="button" onClick={() => sendGroupVote(true)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs up">
-                        <ThumbsUp size={14} /> Like
-                      </button>
-                      <button type="button" onClick={() => sendGroupVote(false)} disabled={alreadyRated} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`} aria-label="Thumbs down">
-                        <ThumbsDown size={14} /> Dislike
-                      </button>
-                      {alreadyRated && <span className="ml-1">Thanks!</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            return null;
-          })}
-        </div>
-      ))}
+      {exerciseTimeline.map(renderExercise)}
+      {renderGenerationControls && renderGenerationControls()}
     </div>
   );
 }
