@@ -186,7 +186,7 @@ export function scoreErrorBundle(item, value, eq, strictAccents = true, idxSeed 
  * Generate Error Bundle exercises using the generic LLM endpoint
  * @param {string} topic
  * @param {number} count
- * @param {{ language: string, level: string, challengeMode: boolean }} languageContext
+ * @param {{ language: string, level: string, challengeMode: boolean, baseText?: object, chapter?: object }} languageContext
  * @returns {Promise<{shared_context?: string, items: Array}>}
  */
 export async function generateErrorBundles(topic, count = 5, languageContext = { language: 'Spanish', level: 'B1', challengeMode: false }) {
@@ -194,10 +194,17 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
   const level = languageContext.level;
   const challenge = !!languageContext.challengeMode;
   const safeCount = Math.max(2, Math.min(12, Number(count || 5)));
+  const baseText = languageContext.baseText;
+  const chapter = languageContext.chapter;
 
-  const system = `You are a language pedagogy generator. Produce compact, CEFR-appropriate error bundles.\nEach item contains FOUR sentences about the given topic with EXACTLY ONE correct.\nFor each incorrect sentence, include a minimal corrected version ("fix") and a short rationale.\nReturn STRICT JSON only, matching the schema. Do not echo any inputs. No extra text outside JSON.\nAvoid sensitive content. Keep sentences natural and classroom-safe.`;
+  let baseTextInstructions = '';
+  if (baseText && chapter) {
+    baseTextInstructions = `\n\nBASE TEXT CONTEXT:\n- Use this chapter content as the primary source material: "${chapter.title || 'Chapter'}"\n- Extract vocabulary, grammar structures, and sentence patterns directly from the base text\n- Create error bundles that test understanding of the specific content in this chapter\n- Ensure all sentences relate to the themes and structures found in the provided text\n- When creating incorrect sentences, use patterns that appear in the base text but introduce the specified errors`;
+  }
 
-  const developer = `Constraints:\n- Target level: ${level}. Challenge=${challenge}.\n- Topic focus: ${topic}. Errors MUST reflect this topic only.\n- Sentence length per level: A1 4–8, A2 6–12, B1 10–16, B2 12–20, C1 14–24, C2 16–30. If challenge=true, use the higher bound.\n- Each item: exactly 4 sentences, exactly 1 correct; three incorrect each with ONE clear, topic-aligned error.\n- Provide concise rationales (≤120 chars) and MINIMAL fixes (change only what’s necessary).\n- Optionally include a shared_context (≤80 chars) to make items cohere and reduce repetition.\n- Output ONLY the JSON fields defined by the schema below (no language/level/topic/challenge in the output).`;
+  const system = `You are a language pedagogy generator. Produce compact, CEFR-appropriate error bundles.\nEach item contains FOUR sentences about the given topic with EXACTLY ONE correct.\nFor each incorrect sentence, include a minimal corrected version ("fix") and a short rationale.\nReturn STRICT JSON only, matching the schema. Do not echo any inputs. No extra text outside JSON.\nAvoid sensitive content. Keep sentences natural and classroom-safe.${baseTextInstructions}`;
+
+  const developer = `Constraints:\n- Target level: ${level}. Challenge=${challenge}.\n- Topic focus: ${topic}. Errors MUST reflect this topic only.\n${baseText && chapter ? `- Use the provided base text chapter as the source material for all sentences and errors.\n- Extract sentence patterns, vocabulary, and structures from the chapter content.` : ''}\n- Sentence length per level: A1 4–8, A2 6–12, B1 10–16, B2 12–20, C1 14–24, C2 16–30. If challenge=true, use the higher bound.\n- Each item: exactly 4 sentences, exactly 1 correct; three incorrect each with ONE clear, topic-aligned error.\n- Provide concise rationales (≤120 chars) and MINIMAL fixes (change only what’s necessary).\n- Optionally include a shared_context (≤80 chars) to make items cohere and reduce repetition.\n- Output ONLY the JSON fields defined by the schema below (no language/level/topic/challenge in the output).`;
 
   const userPayload = {
     language: String(languageName || ''),
@@ -206,6 +213,18 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
     topic: String(topic || ''),
     count: safeCount
   };
+
+  // Add base text context if available
+  if (baseText && chapter) {
+    userPayload.baseText = {
+      title: baseText.title || '',
+      chapter: {
+        title: chapter.title || '',
+        content: chapter.content || '',
+        summary: chapter.summary || ''
+      }
+    };
+  }
 
   const schema = {
     type: 'object',
@@ -251,7 +270,10 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
         level,
         challengeMode: challenge,
         topic,
-        exerciseType: 'error_bundle'
+        exerciseType: 'error_bundle',
+        baseTextId: baseText?.id,
+        chapterNumber: chapter?.number,
+        chapterTitle: chapter?.title
       }
     })
   });
@@ -260,7 +282,20 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
     throw new Error(`Failed to generate Error Bundle exercises: ${response.status}`);
   }
 
-  return response.json();
+  const result = await response.json();
+
+  // Add base text metadata to the result when base text is provided
+  if (result.items && result.items.length > 0 && baseText && chapter) {
+    result.items.forEach(item => {
+      item.base_text_info = {
+        base_text_id: baseText.id,
+        chapter_number: chapter?.number,
+        chapter_title: chapter.title
+      };
+    });
+  }
+
+  return result;
 }
 
 

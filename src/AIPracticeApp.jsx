@@ -57,6 +57,8 @@ const AIPracticeApp = () => {
   const { fetchBaseText } = useBaseText();
   const [readingBaseText, setReadingBaseText] = useState(null);
   const [readingChapterCursor, setReadingChapterCursor] = useState(0);
+  const [errorBundleBaseText, setErrorBundleBaseText] = useState(null);
+  const [errorBundleChapterCursor, setErrorBundleChapterCursor] = useState(0);
 
   // Onboarding / tour state
   const [isPreTourRunning, setIsPreTourRunning] = useState(false);
@@ -244,6 +246,10 @@ const AIPracticeApp = () => {
     setShowContext({});
     setLesson(null);
     setOrchestratorValues({});
+    setReadingBaseText(null);
+    setReadingChapterCursor(0);
+    setErrorBundleBaseText(null);
+    setErrorBundleChapterCursor(0);
   };
 
   const insertAccent = (accent) => {
@@ -856,11 +862,48 @@ const AIPracticeApp = () => {
     setLoadingErrorBundlesOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateErrorBundles(topic, Number(errorBundleCount), languageContext);
+      // Always fetch a base text - the endpoint handles generation if none exist
+      let base = errorBundleBaseText;
+      if (!base) {
+        base = await fetchBaseText({
+          topic,
+          language: languageContext?.language || 'es',
+          level: languageContext?.level || 'B1',
+          challengeMode: !!languageContext?.challengeMode
+        });
+        // fetchBaseText will either return an existing suitable base text or generate a new one
+        // If it throws an error, we let it bubble up
+        setErrorBundleBaseText(base);
+        setErrorBundleChapterCursor(0);
+      }
+
+      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      const desired = Math.max(2, Math.min(12, Number(errorBundleCount)));
+      const collected = [];
+
+      if (base && chapters.length > 0) {
+        let remaining = desired;
+        let chapterIndex = errorBundleChapterCursor;
+
+        while (remaining > 0 && chapterIndex < chapters.length) {
+          const chapter = chapters[chapterIndex];
+          const batchSize = Math.min(remaining, 5); // Request up to 5 exercises per chapter
+          const resp = await generateErrorBundles(topic, batchSize, { ...languageContext, baseText: base, chapter });
+          if (resp?.items) {
+            collected.push(...resp.items);
+            remaining -= resp.items.length;
+          }
+          chapterIndex++;
+        }
+        // Update cursor to the next unused chapter
+        setErrorBundleChapterCursor(chapterIndex);
+      }
+
+      const items = collected.length > 0 ? collected : [];
       // Add creation timestamp to each exercise
-      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
+      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, error_bundles: timestampedItems, error_bundles_shared_context: data.shared_context || '' });
+      mergeLesson({ topic, error_bundles: timestampedItems, error_bundles_shared_context: '' });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate error bundles'); }
     finally { setLoadingErrorBundlesOnly(false); }
   };
@@ -1036,6 +1079,10 @@ const AIPracticeApp = () => {
     setShowContext({});
     setLesson(null);
     setOrchestratorValues({});
+    setReadingBaseText(null);
+    setReadingChapterCursor(0);
+    setErrorBundleBaseText(null);
+    setErrorBundleChapterCursor(0);
   };
 
   const score = getScore();
