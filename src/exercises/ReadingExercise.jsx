@@ -593,6 +593,7 @@ Return STRICT JSON only per schema.`;
             difficulty: { type: 'string' },
             base_text_info: {
               type: 'object',
+              additionalProperties: false,
               properties: {
                 base_text_id: { type: 'string' },
                 chapter_number: { type: 'number' },
