@@ -634,9 +634,41 @@ const AIPracticeApp = () => {
     setLoadingFibOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateFIB(topic, Number(exerciseCount), languageContext);
+      // Ensure we have a base text and chapter
+      let base = readingBaseText;
+      if (!base) {
+        base = await fetchBaseText({
+          topic,
+          language: languageContext?.language || 'es',
+          level: languageContext?.level || 'B1',
+          challengeMode: !!languageContext?.challengeMode
+        });
+        if (base) setReadingBaseText(base);
+        setReadingChapterCursor(0);
+      }
+      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      const desired = Math.max(1, Math.min(20, Number(exerciseCount)));
+      const collected = [];
+      if (base && chapters.length > 0) {
+        let remaining = desired;
+        let chapterIndex = readingChapterCursor;
+        
+        while (remaining > 0 && chapterIndex < chapters.length) {
+          const chapter = chapters[chapterIndex];
+          const batchSize = Math.min(remaining, 10); // Request up to 10 exercises per chapter
+          const resp = await generateFIB(topic, batchSize, { ...languageContext, baseText: base, chapter });
+          if (resp?.items) {
+            collected.push(...resp.items);
+            remaining -= resp.items.length;
+          }
+          chapterIndex++;
+        }
+        // Update cursor to the next unused chapter
+        setReadingChapterCursor(chapterIndex);
+      }
+      const items = collected.length > 0 ? collected : [];
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, fill_in_blanks: data.items || [] });
+      mergeLesson({ topic, fill_in_blanks: items });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate FIB'); }
     finally { setLoadingFibOnly(false); }
   };
