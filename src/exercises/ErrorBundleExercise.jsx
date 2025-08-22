@@ -286,10 +286,19 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
 
   // Add base text metadata to the result when base text is provided
   if (result.items && result.items.length > 0 && baseText && chapter) {
+    // Calculate the chapter number properly since chapter?.number might not exist
+    let chapterNumber = chapter?.number;
+    if (!chapterNumber && baseText?.chapters) {
+      const chapterIndex = baseText.chapters.findIndex(ch => ch.title === chapter.title);
+      if (chapterIndex !== -1) {
+        chapterNumber = chapterIndex + 1; // 1-based chapter numbering
+      }
+    }
+
     result.items.forEach(item => {
       item.base_text_info = {
         base_text_id: baseText.id,
-        chapter_number: chapter?.number,
+        chapter_number: chapterNumber,
         chapter_title: chapter.title
       };
     });

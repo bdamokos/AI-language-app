@@ -7,7 +7,7 @@ export const schemaVersions = {
   cloze_mixed: 99, // Bumping version to force cache ejection before deprecation (merged under unified_cloze)
   unified_cloze: 2, // Unified cloze format for shared caching between traditional and mixed - updated distractor explanations structure
   writing_prompts: 1,
-  guided_dialogues: 1,
+  guided_dialogues: 2,
   reading: 3,
   error_bundle: 2,
   // UI/tutorial versioning for onboarding tour

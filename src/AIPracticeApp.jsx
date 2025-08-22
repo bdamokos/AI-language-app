@@ -782,7 +782,90 @@ const AIPracticeApp = () => {
     setLoadingDialogueOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateGuidedDialogues(topic, Number(dialogueCount), languageContext);
+      // Find inspiration context from previously used chapters
+      let inspirationContext = null;
+
+      if (lesson) {
+        // Find exercises that use base texts (reading, cloze, cloze_mixed)
+        const baseTextExercises = ['reading_comprehension', 'cloze_passages', 'cloze_with_mixed_options'];
+        const usedChapterInfos = [];
+
+        // Collect metadata about used chapters
+        for (const exerciseType of baseTextExercises) {
+          if (Array.isArray(lesson[exerciseType])) {
+            for (const item of lesson[exerciseType]) {
+              if (item.base_text_info) {
+                usedChapterInfos.push({
+                  base_text_id: item.base_text_info.base_text_id,
+                  chapter_number: item.base_text_info.chapter_number,
+                  chapter_title: item.base_text_info.chapter_title,
+                  exercise_type: exerciseType
+                });
+              }
+            }
+          }
+        }
+
+        // If we have used chapters, try to get their content and pick one for inspiration
+        if (usedChapterInfos.length > 0) {
+          // Pick a random chapter to inspire from
+          const selectedChapter = usedChapterInfos[Math.floor(Math.random() * usedChapterInfos.length)];
+
+          try {
+            // Try to fetch the base text content from cache
+            console.log('Attempting to fetch base text content for ID:', selectedChapter.base_text_id);
+            const baseTextResponse = await fetch(`/api/base-text-content/${selectedChapter.base_text_id}`);
+            console.log('Base text response status:', baseTextResponse.status);
+
+            if (baseTextResponse.ok) {
+              const baseText = await baseTextResponse.json();
+              const content = baseText?.content || baseText; // record wrapper has { key, meta, content }
+              console.log('Successfully fetched base text:', content?.title);
+
+              // Find the correct chapter by title since chapter_number might be undefined
+              let chapter = null;
+              let chapterIndex = -1;
+
+              if (content?.chapters) {
+                if (selectedChapter.chapter_number && selectedChapter.chapter_number > 0) {
+                  // If we have a valid chapter number, use it
+                  chapterIndex = selectedChapter.chapter_number - 1;
+                  chapter = content.chapters[chapterIndex];
+                } else {
+                  // Otherwise, find by title
+                  chapterIndex = content.chapters.findIndex(ch => ch.title === selectedChapter.chapter_title);
+                  if (chapterIndex !== -1) {
+                    chapter = content.chapters[chapterIndex];
+                  }
+                }
+              }
+
+              if (chapter && chapter.passage) {
+                const actualChapterNumber = chapterIndex + 1; // 1-based chapter numbering
+                inspirationContext = {
+                  base_text_id: selectedChapter.base_text_id,
+                  chapter_number: actualChapterNumber,
+                  chapter_title: chapter.title || selectedChapter.chapter_title,
+                  chapter_passage: chapter.passage,
+                  exercise_type: selectedChapter.exercise_type
+                };
+              }
+            } else {
+              const errorText = await baseTextResponse.text();
+              console.warn('Base text fetch failed:', baseTextResponse.status, errorText);
+              // Fall back to metadata-only context if content fetch fails
+              inspirationContext = selectedChapter;
+            }
+          } catch (error) {
+            console.warn('Could not fetch base text content for inspiration:', error);
+            // Fall back to metadata-only context if content fetch fails
+            inspirationContext = selectedChapter;
+          }
+        }
+      }
+
+      console.log('Final inspirationContext being passed to generateGuidedDialogues:', inspirationContext);
+      const data = await generateGuidedDialogues(topic, Number(dialogueCount), languageContext, inspirationContext);
       // Add creation timestamp to each exercise
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());

@@ -367,11 +367,12 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
   const provider = runtimeConfig.provider;
   const startedAt = Date.now();
   const logPrefix = `[LLM ${provider}]`;
-  const preview = String(user || '').slice(0, 160).replace(/\s+/g, ' ');
+  const systemPreview = String(system || '').replace(/\s+/g, ' ');
+  const userPreview = String(user || '').replace(/\s+/g, ' ');
   console.log(`${logPrefix} model=${
     provider === 'openrouter' ? runtimeConfig.openrouter.model :
     runtimeConfig.ollama.model
-  } maxTokens=${maxTokens} promptPreview="${preview}..." structured=${jsonSchema ? 'yes' : 'no'}`);
+  } maxTokens=${maxTokens} systemPreview="${systemPreview}" userPreview="${userPreview}" structured=${jsonSchema ? 'yes' : 'no'}`);
   if (provider === 'openrouter') {
     assertEnv(runtimeConfig.openrouter.apiKey, 'Missing OPENROUTER_API_KEY');
     const buildOpenRouterPayload = (maxTokensValue) => {
@@ -496,11 +497,13 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
     }
     const data = await resp.json();
     const responseTime = Date.now() - startedAt;
-    
-    // Log token usage and attempt to get cost info
+
+    // Log token usage, response data, and attempt to get cost info
     const usage = data.usage || {};
     const generationId = data.id;
-    console.log(`${logPrefix} ok in ${responseTime}ms | tokens: ${usage.prompt_tokens || 0}→${usage.completion_tokens || 0} (${usage.total_tokens || 0} total)${generationId ? ` | id: ${generationId}` : ''}`);
+    console.log(
+      `${logPrefix} ok in ${responseTime}ms | tokens: ${usage.prompt_tokens || 0}→${usage.completion_tokens || 0} (${usage.total_tokens || 0} total)${generationId ? ` | id: ${generationId}` : ''}\nresponse data: ${JSON.stringify(data)}`
+    );
     
     // Fetch detailed cost information asynchronously (non-blocking)
     if (generationId) {
@@ -965,6 +968,41 @@ app.post('/api/generate', async (req, res) => {
 });
 
 // Base text selection/generation endpoint
+app.get('/api/base-text-content/:baseTextId', async (req, res) => {
+  try {
+    const { baseTextId } = req.params;
+    if (!baseTextId) return res.status(400).json({ error: 'Base text ID required' });
+
+    if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
+
+    // Resolve the cache key from the index using the human-friendly baseTextId
+    const idx = await loadBaseTextsIndex(cacheLayout);
+    let cacheKeyForId = null;
+    for (const [key, entry] of Object.entries(idx.items || {})) {
+      const meta = entry?.meta || {};
+      // Match against meta.baseTextId which is stored in the index
+      if (String(meta.baseTextId || '').trim() === String(baseTextId).trim()) {
+        cacheKeyForId = key;
+        break;
+      }
+    }
+
+    if (!cacheKeyForId) {
+      return res.status(404).json({ error: 'Base text not found' });
+    }
+
+    // Load the base text record via the resolved cache key
+    const record = await getBaseText(cacheLayout, cacheKeyForId);
+    if (!record) return res.status(404).json({ error: 'Base text not found' });
+
+    // Return the content only for client consumption
+    res.json(record.content || record);
+  } catch (error) {
+    console.error('Error fetching base text content:', error);
+    res.status(500).json({ error: 'Failed to fetch base text content' });
+  }
+});
+
 app.post('/api/base-text', async (req, res) => {
   try {
     if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
@@ -1907,6 +1945,7 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 app.listen(PORT, () => {
+
   console.log(`Server listening on http://localhost:${PORT} (provider=${runtimeConfig.provider})`);
   console.log(`[RUNWARE] Startup - API key loaded: ${!!runtimeConfig.runware.apiKey}, enabled: ${runtimeConfig.runware.enabled}`);
   console.log(`[RUNWARE] Environment - API key: ${!!process.env.RUNWARE_API_KEY}, enabled: ${process.env.RUNWARE_ENABLED}`);
