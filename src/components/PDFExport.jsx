@@ -593,29 +593,35 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     return elements;
   };
 
-  // Helper function to render blanks as underscores for handwriting
-  const renderBlanks = (text) => {
+  // Helper to build a blank string proportional to expected answer length
+  const buildBlank = (expected = '', factor = 1.7) => {
+    const len = Math.max(8, Math.round(String(expected || '').length * factor));
+    return Array(len).fill('_').join('');
+  };
+
+  // Helper function to render FIB blanks proportional to expected answers
+  const renderBlanks = (text, answers = []) => {
     if (!text) return null;
 
     const parts = text.split('_____');
     const elements = [];
 
-    parts.forEach((part, index) => {
-      if (part) {
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i]) {
         elements.push(
-          <Text key={`text-${index}`} style={styles.inlineText}>
-            {part}
+          <Text key={`text-${i}`} style={styles.inlineText}>
+            {parts[i]}
           </Text>
         );
       }
-      if (index < parts.length - 1) {
+      if (i < parts.length - 1) {
+        const expected = Array.isArray(answers) && answers.length > 0 ? (answers[i] || answers[0] || '') : '';
+        const underscores = buildBlank(expected);
         elements.push(
-          <Text key={`blank-${index}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> 
-            ____________
-          </Text>
+          <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> {underscores}</Text>
         );
       }
-    });
+    }
 
     return (
       <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
@@ -729,9 +735,10 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         );
       }
 
-      // Add blank with optional footnote
+      // Add blank with dynamic length based on expected answer and optional footnote
       if (i < parts.length - 1) {
-        const blank = blanks.find(b => b.index === i) || { hint: '' };
+        const blank = blanks.find(b => b.index === i) || { hint: '', answer: '' };
+        const underscores = buildBlank(blank.answer || '');
         let footnoteNumber = null;
         
         // Add footnote if there's a hint
@@ -745,7 +752,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         
         elements.push(
           <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> 
-            ____________
+            {underscores}
             {footnoteNumber && (
               <Text style={[styles.inlineText, { fontSize: 9 }]}>[{footnoteNumber}]</Text>
             )}
@@ -1265,7 +1272,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           </Link>
                         </Text>
                         <View style={{ flex: 1 }}>
-                          {renderBlanks(item.sentence)}
+                          {renderBlanks(item.sentence, item.answers || [])}
                         </View>
                       </View>
                       {item.context && <Text style={styles.context}>Context: {item.context}</Text>}
