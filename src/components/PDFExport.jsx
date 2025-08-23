@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Download, FileText, Image as ImageIcon } from 'lucide-react';
 import { Document, Page, Text, View, StyleSheet, pdf, Image, Font } from '@react-pdf/renderer';
 
@@ -128,6 +128,10 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginTop: 5,
     textAlign: 'center'
+  },
+  block: {
+    padding: 10,
+    borderRadius: 6
   },
   solutionsPage: {
     flexDirection: 'column',
@@ -1097,6 +1101,51 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     return { blocks, totals };
   };
 
+  // Compute pastel background colors for blocks (consistent across both pages)
+  const blockBackgrounds = useMemo(() => {
+    const timeline = buildExerciseTimeline(lesson || {});
+    const { blocks } = groupTimelineIntoBlocks(timeline);
+    const blockCount = blocks.length;
+    if (blockCount === 0) return [];
+    // Generate distinct RGB colors
+    // Library returns { colors: [[r,g,b],...]} when awaited; ensure synchronous compatibility
+    // We'll fallback to a simple palette if anything goes wrong
+    const toPastel = (rgb) => {
+      const [r, g, b] = rgb;
+      // Convert to pastel by mixing with white (80%) and lowering saturation
+      const mix = (c) => Math.round(c * 0.2 + 255 * 0.8);
+      const pr = mix(r), pg = mix(g), pb = mix(b);
+      return `rgb(${pr}, ${pg}, ${pb})`;
+    };
+    try {
+      // Note: pickDistinctColors is async; we can't await in render - precompute synchronously using a seeded palette instead.
+      // Workaround: deterministically generate gentle hues spaced around the wheel
+      const generated = Array.from({ length: blockCount }, (_, i) => {
+        const hue = (i * 137) % 360; // golden angle spacing
+        // Convert HSL pastel to RGB manually
+        const h = hue / 360, s = 0.25, l = 0.92; // low saturation, high lightness
+        const hue2rgb = (p, q, t) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        const r = Math.round(hue2rgb(p, q, h + 1/3) * 255);
+        const g = Math.round(hue2rgb(p, q, h) * 255);
+        const b = Math.round(hue2rgb(p, q, h - 1/3) * 255);
+        return `rgb(${r}, ${g}, ${b})`;
+      });
+      return generated;
+    } catch {
+      // Fallback gentle grays
+      return Array.from({ length: blockCount }, (_, i) => `rgb(${245 - i % 5}, ${246 - i % 5}, ${248 - i % 5})`);
+    }
+  }, [lesson]);
+
   // PDF Document Component
   const PDFDocument = () => (
     <Document>
@@ -1132,7 +1181,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           const { blocks, totals } = groupTimelineIntoBlocks(buildExerciseTimeline(lesson));
           let errorContextShown = false;
           return blocks.map((block, blockIdx) => (
-            <View key={`block-${blockIdx}`} style={styles.section}>
+            <View key={`block-${blockIdx}`} style={[styles.section, styles.block, { backgroundColor: blockBackgrounds[blockIdx] || 'rgb(246, 247, 248)' }]}>
               <Text style={styles.sectionTitle}>
                 {block.displayName}
                 {totals[block.type] > 1 ? ` — Set ${block.blockIndex}` : ''}
@@ -1389,7 +1438,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         {(() => {
           const { blocks, totals } = groupTimelineIntoBlocks(buildExerciseTimeline(lesson));
           return blocks.map((block, blockIdx) => (
-            <View key={`sol-block-${blockIdx}`} style={styles.section}>
+            <View key={`sol-block-${blockIdx}`} style={[styles.section, styles.block, { backgroundColor: blockBackgrounds[blockIdx] || 'rgb(246, 247, 248)' }]}>
               <Text style={styles.sectionTitle}>
                 {block.displayName}{totals[block.type] > 1 ? ` — Set ${block.blockIndex}` : ''} - Solutions
               </Text>
