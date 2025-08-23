@@ -1199,9 +1199,17 @@ app.post('/api/base-text', async (req, res) => {
       // Prefer base texts that haven't been used for a reading at this topic/difficulty
       const unusedPreferred = suitableCandidates.filter(c => !usedReadingBaseTextIds.has(c.content?.id));
       const pickFrom = unusedPreferred.length > 0 ? unusedPreferred : suitableCandidates;
-      // Sort by priority (highest first)
-      pickFrom.sort((a, b) => b.priority - a.priority);
-      return res.json(pickFrom[0].content);
+      // Randomize selection with weighting by priority so we don't always reuse the same text
+      const weights = pickFrom.map(c => Math.max(1, Number(c.priority || 1)));
+      const total = weights.reduce((a, b) => a + b, 0) || pickFrom.length;
+      let r = Math.random() * total;
+      let chosenIdx = 0;
+      for (let i = 0; i < pickFrom.length; i++) {
+        r -= (weights[i] || 1);
+        if (r <= 0) { chosenIdx = i; break; }
+        if (i === pickFrom.length - 1) chosenIdx = i;
+      }
+      return res.json(pickFrom[chosenIdx].content);
     }
 
     // Otherwise, generate a new one via /api/generate with schemaName base_text
