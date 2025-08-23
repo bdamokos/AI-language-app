@@ -121,9 +121,7 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   image: {
-    maxWidth: 300,
-    maxHeight: 200,
-    objectFit: 'contain'
+    width: 220
   },
   imageCaption: {
     fontSize: 10,
@@ -1058,6 +1056,47 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     return null;
   };
 
+  // Build unified exercise timeline (same logic as Orchestrator)
+  const buildExerciseTimeline = (lessonBundle) => {
+    if (!lessonBundle) return [];
+    const mapping = [
+      ['fib', 'fill_in_blanks', 'Fill in the Blanks'],
+      ['mcq', 'multiple_choice', 'Multiple Choice'],
+      ['cloze', 'cloze_passages', 'Cloze Passages'],
+      ['clozeMix', 'cloze_with_mixed_options', 'Cloze (Mixed Options)'],
+      ['dialogue', 'guided_dialogues', 'Guided Dialogues'],
+      ['writing', 'writing_prompts', 'Writing Prompts'],
+      ['reading', 'reading_comprehension', 'Reading Comprehension'],
+      ['error', 'error_bundles', 'Error Bundles']
+    ];
+    const timeline = [];
+    mapping.forEach(([type, key, displayName]) => {
+      const arr = Array.isArray(lessonBundle?.[key]) ? lessonBundle[key] : [];
+      arr.forEach((item, idx) => {
+        timeline.push({ type, lessonKey: key, displayName, item, idx, createdAt: item?.createdAt || 0 });
+      });
+    });
+    return timeline.sort((a, b) => (a.createdAt !== b.createdAt ? a.createdAt - b.createdAt : a.idx - b.idx));
+  };
+
+  // Group consecutive items of the same type into blocks to mirror on-screen flow
+  const groupTimelineIntoBlocks = (timeline) => {
+    const blocks = [];
+    const typeCounts = {};
+    let current = null;
+    timeline.forEach((ex) => {
+      if (!current || current.type !== ex.type) {
+        typeCounts[ex.type] = (typeCounts[ex.type] || 0) + 1;
+        current = { type: ex.type, displayName: ex.displayName, blockIndex: typeCounts[ex.type], items: [] };
+        blocks.push(current);
+      }
+      current.items.push(ex);
+    });
+    // Totals per type (for deciding whether to show Set 1/2 labels)
+    const totals = blocks.reduce((acc, b) => { acc[b.type] = (acc[b.type] || 0) + 1; return acc; }, {});
+    return { blocks, totals };
+  };
+
   // PDF Document Component
   const PDFDocument = () => (
     <Document>
@@ -1088,636 +1127,511 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           </View>
         )}
 
-        {/* Fill in the Blanks Section */}
-        {Array.isArray(lesson.fill_in_blanks) && lesson.fill_in_blanks.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Fill in the Blanks</Text>
-            {lesson.fill_in_blanks.map((item, idx) => (
-              <View key={`fib-${idx}`} style={{ marginBottom: 12 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
-                  <Text style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
-                    {String.fromCharCode(97 + idx)}.
-                  </Text>
-                  <View style={{ flex: 1 }}>
-                    {renderBlanks(item.sentence)}
-                  </View>
-                </View>
-                {item.context && (
-                  <Text style={styles.context}>Context: {item.context}</Text>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Multiple Choice Section */}
-        {Array.isArray(lesson.multiple_choice) && lesson.multiple_choice.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Multiple Choice Questions</Text>
-            {lesson.multiple_choice.map((item, idx) => (
-              <View key={`mcq-${idx}`} style={{ marginBottom: 12 }}>
-                <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
-                  {String.fromCharCode(97 + idx)}. {item.question}
-                </Text>
-                
-                {item.options && Array.isArray(item.options) && (
-                  <View style={styles.options}>
-                    {item.options.map((option, optIdx) => (
-                      <Text key={`option-${optIdx}`} style={styles.optionItem}>
-                        {String.fromCharCode(65 + optIdx)}. {option.text}
-                      </Text>
-                    ))}
-                  </View>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Cloze Passages Section */}
-        {Array.isArray(lesson.cloze_passages) && lesson.cloze_passages.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Cloze Passages</Text>
-            {lesson.cloze_passages.map((item, idx) => {
-              const { elements, footnotes } = renderClozeWithFootnotes(item) || { elements: [], footnotes: [] };
-              
-              return (
-                <View key={`cloze-${idx}`} style={{ marginBottom: 20 }}>
-                  <Text style={styles.exerciseTitle}>
-                    Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
-                  </Text>
-                  
-                  {item.studentInstructions && (
-                    <Text style={styles.instructions}>{item.studentInstructions}</Text>
-                  )}
-                  
-                  <View style={{ flexDirection: 'row', gap: 15 }}>
-                    <View style={{ flex: 1 }}>
-                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
-                        {elements}
-                      </View>
-                      
-                      {/* Render footnotes */}
-                      {renderFootnotes(footnotes)}
-                    </View>
-                    
-                    {/* Render generated image if available */}
-                    {getImageByKey(`cloze:${idx}`) && (
-                      <View style={{ width: 150 }}>
-                        {renderImage(getImageByKey(`cloze:${idx}`), 'AI-generated illustration')}
-                      </View>
-                    )}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Cloze Mixed Options Section */}
-        {Array.isArray(lesson.cloze_with_mixed_options) && lesson.cloze_with_mixed_options.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Cloze with Mixed Options</Text>
-            <Text style={[styles.text, { fontSize: 10, fontStyle: 'italic', marginBottom: 12, color: '#6b7280' }]}>
-              Underline the correct option for each blank.
-            </Text>
-            {lesson.cloze_with_mixed_options.map((item, idx) => {
-              const { elements, footnotes } = renderClozeMixedWithOptions(item) || { elements: [], footnotes: [] };
-              
-              return (
-                <View key={`clozeMix-${idx}`} style={{ marginBottom: 20 }}>
-                  <Text style={styles.exerciseTitle}>
-                    Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
-                  </Text>
-                  
-                  {item.studentInstructions && (
-                    <Text style={styles.instructions}>{item.studentInstructions}</Text>
-                  )}
-                  
-                  <View style={{ flexDirection: 'row', gap: 15 }}>
-                    <View style={{ flex: 1 }}>
-                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
-                        {elements}
-                      </View>
-                      
-                      {/* Render footnotes */}
-                      {renderFootnotes(footnotes)}
-                    </View>
-                    
-                    {/* Render generated image if available */}
-                    {getImageByKey(`clozeMix:${idx}`) && (
-                      <View style={{ width: 150 }}>
-                        {renderImage(getImageByKey(`clozeMix:${idx}`), 'AI-generated illustration')}
-                      </View>
-                    )}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Reading Comprehension Section */}
-        {Array.isArray(lesson.reading_comprehension) && lesson.reading_comprehension.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Reading Comprehension</Text>
-            {lesson.reading_comprehension.map((item, idx) => (
-              <View key={`reading-${idx}`} style={{ marginBottom: 20 }}>
-                <Text style={styles.exerciseTitle}>
-                  Passage {idx + 1}{item.title ? `: ${item.title}` : ''}
-                </Text>
-                {item.passage && (
-                  <Text style={styles.passage}>{item.passage}</Text>
-                )}
-                {/* Image if available */}
-                {getImageByKey(`reading:${idx}`) && (
-                  <View style={{ width: 200, alignSelf: 'center' }}>
-                    {renderImage(getImageByKey(`reading:${idx}`), 'AI-generated illustration')}
-                  </View>
-                )}
-                {/* Glossary table */}
-                {Array.isArray(item.glossary) && item.glossary.length > 0 && (
-                  <View style={{ marginTop: 8, border: '1 solid #d1d5db' }}>
-                    {/* Header */}
-                    <View style={{ flexDirection: 'row', backgroundColor: '#f3f4f6', borderBottom: '1 solid #d1d5db' }}>
-                      {['Term','POS','Definition / Translation','Example'].map((h, i) => (
-                        <View key={i} style={{ flex: 1, padding: 6, borderRight: i < 3 ? '1 solid #d1d5db' : 'none' }}>
-                          <Text style={[styles.text, { fontWeight: 'bold', fontSize: 11 }]}>{h}</Text>
+        {/* Render exercises in creation order (unified timeline) */}
+        {(() => {
+          const { blocks, totals } = groupTimelineIntoBlocks(buildExerciseTimeline(lesson));
+          let errorContextShown = false;
+          return blocks.map((block, blockIdx) => (
+            <View key={`block-${blockIdx}`} style={styles.section}>
+              <Text style={styles.sectionTitle}>
+                {block.displayName}
+                {totals[block.type] > 1 ? ` — Set ${block.blockIndex}` : ''}
+              </Text>
+              {block.items.map((ex, i) => {
+                const { type, item, idx } = ex;
+                if (type === 'fib') {
+                  return (
+                    <View key={`fib-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
+                        <Text style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
+                          {String.fromCharCode(97 + i)}.
+                        </Text>
+                        <View style={{ flex: 1 }}>
+                          {renderBlanks(item.sentence)}
                         </View>
-                      ))}
-                    </View>
-                    {/* Rows */}
-                    {item.glossary.map((g, gi) => (
-                      <View key={gi} style={{ flexDirection: 'row', borderBottom: gi < item.glossary.length - 1 ? '1 solid #e5e7eb' : 'none' }}>
-                        <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10, fontWeight: 'bold' }]}>{g.term}</Text></View>
-                        <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10 }]}>{g.pos}</Text></View>
-                        <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10 }]}>{g.definition}{g.translation ? ` — ${g.translation}` : ''}</Text></View>
-                        <View style={{ flex: 1, padding: 6 }}><Text style={[styles.text, { fontSize: 10 }]}>{g.example}</Text></View>
                       </View>
-                    ))}
-                  </View>
-                )}
-                {/* True/False */}
-                {Array.isArray(item.true_false) && item.true_false.length > 0 && (
-                  <View style={{ marginTop: 8 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>True / False</Text>
-                    {item.true_false.map((t, ti) => (
-                      <Text key={`tf-${ti}`} style={styles.text}>
-                        {String.fromCharCode(97 + ti)}. {t.statement}
+                      {item.context && <Text style={styles.context}>Context: {item.context}</Text>}
+                    </View>
+                  );
+                }
+                if (type === 'mcq') {
+                  return (
+                    <View key={`mcq-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
+                      <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
+                        {String.fromCharCode(97 + i)}. {item.question}
                       </Text>
-                    ))}
-                  </View>
-                )}
-                {/* Comprehension Questions */}
-                {Array.isArray(item.comprehension_questions) && item.comprehension_questions.length > 0 && (
-                  <View style={{ marginTop: 8 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Comprehension Questions</Text>
-                    {item.comprehension_questions.map((q, qi) => (
-                      <View key={`qa-${qi}`} style={{ marginBottom: 4 }}>
-                        <Text style={styles.text}>{qi + 1}. {q.question}</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-                {/* Productive Prompts */}
-                {Array.isArray(item.productive_prompts) && item.productive_prompts.length > 0 && (
-                  <View style={{ marginTop: 8 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Productive Prompts</Text>
-                    {item.productive_prompts.map((p, pi) => (
-                      <View key={`pp-${pi}`} style={{ marginBottom: 4 }}>
-                        <Text style={styles.text}>{pi + 1}. {(p && p.prompt) ? p.prompt : p}</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-                {/* Opinion Questions */}
-                {Array.isArray(item.opinion_questions) && item.opinion_questions.length > 0 && (
-                  <View style={{ marginTop: 8 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Opinion Questions</Text>
-                    {item.opinion_questions.map((q, qi) => (
-                      <View key={`op-${qi}`} style={{ marginBottom: 4 }}>
-                        <Text style={styles.text}>{qi + 1}. {(q && q.question) ? q.question : q}</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                        <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Guided Dialogues Section */}
-        {Array.isArray(lesson.guided_dialogues) && lesson.guided_dialogues.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Guided Dialogues</Text>
-            {lesson.guided_dialogues.map((item, idx) => {
-              const speakers = Array.from(new Set((item.turns || []).map(t => t.speaker).filter(Boolean)));
-              const hiddenSpeaker = item.hide_speaker || item.suggested_hide_speaker || (speakers.length > 1 ? speakers[1] : (speakers[0] || ''));
-              return (
-                <View key={`dialogue-${idx}`} style={{ marginBottom: 16 }}>
-                  <Text style={styles.exerciseTitle}>Dialogue {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
-                  {item.studentInstructions && (
-                    <Text style={styles.instructions}>{item.studentInstructions}</Text>
-                  )}
-                  <View style={{ gap: 4 }}>
-                    {(item.turns || []).map((turn, ti) => {
-                      const isHidden = hiddenSpeaker && turn.speaker === hiddenSpeaker;
-                      return (
-                        <View key={`dlg-${idx}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
-                          <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
-                          {isHidden ? (
-                            <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________</Text>
-                          ) : (
-                            <Text style={styles.inlineText}>{turn.text}</Text>
-                          )}
+                      {item.options && Array.isArray(item.options) && (
+                        <View style={styles.options}>
+                          {item.options.map((option, optIdx) => (
+                            <Text key={`option-${optIdx}`} style={styles.optionItem}>
+                              {String.fromCharCode(65 + optIdx)}. {option.text}
+                            </Text>
+                          ))}
                         </View>
-                      );
-                    })}
-                  </View>
-                  {Array.isArray(item.hints) && item.hints.length > 0 && (
-                    <View style={styles.hints}>
-                      <Text style={[styles.text, { fontSize: 10, marginBottom: 2 }]}>Hint:</Text>
-                      <Text style={styles.hintItem}>{item.hints[0]}</Text>
+                      )}
                     </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Writing Prompts Section */}
-        {Array.isArray(lesson.writing_prompts) && lesson.writing_prompts.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Writing Prompts</Text>
-            {lesson.writing_prompts.map((item, idx) => (
-              <View key={`writing-${idx}`} style={{ marginBottom: 16 }}>
-                <Text style={styles.exerciseTitle}>Set {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
-                {item.studentInstructions && (
-                  <Text style={styles.instructions}>{item.studentInstructions}</Text>
-                )}
-                <View>
-                  {(item.prompts || []).map((p, pi) => (
-                    <View key={`wp-${idx}-${pi}`} style={{ marginBottom: 8 }}>
-                      <Text style={styles.text}>{pi + 1}. {p.question}</Text>
-                      {/* Provide writing lines */}
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                  );
+                }
+                if (type === 'cloze') {
+                  const { elements, footnotes } = renderClozeWithFootnotes(item) || { elements: [], footnotes: [] };
+                  return (
+                    <View key={`cloze-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
+                      {item.title && (
+                        <Text style={styles.exerciseTitle}>Exercise {i + 1}: {item.title}</Text>
+                      )}
+                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      <View style={{ flexDirection: 'row', gap: 15 }}>
+                        <View style={{ flex: 1 }}>
+                          <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{elements}</View>
+                          {renderFootnotes(footnotes)}
+                        </View>
+                        {getImageByKey(`cloze:${idx}`) && (
+                          <View style={{ width: 150 }}>
+                            {renderImage(getImageByKey(`cloze:${idx}`), 'AI-generated illustration')}
+                          </View>
+                        )}
+                      </View>
                     </View>
-                  ))}
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Error Bundles Section */}
-        {Array.isArray(lesson.error_bundles) && lesson.error_bundles.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Error Bundles</Text>
-            <Text style={[styles.text, { fontSize: 10, fontStyle: 'italic', marginBottom: 12, color: '#6b7280' }]}>
-              Underline the correct options or correct the sentence.
-            </Text>
-            {typeof lesson.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context && (
-              <Text style={styles.context}>Context: {lesson.error_bundles_shared_context}</Text>
-            )}
-            {lesson.error_bundles.map((item, idx) => {
-              const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
-              const correctIndex = sentences.findIndex(s => s && s.correct);
-              const total = lesson.error_bundles.length;
-              const fixCount = Math.floor(total * 0.4);
-              const isFix = idx >= total - fixCount;
-              const wrongIndices = sentences.map((s, i) => (s && s.correct ? null : i)).filter(i => i !== null);
-              const incorrectIndex = wrongIndices.length > 0 ? wrongIndices[idx % wrongIndices.length] : 0;
-              const incorrectSentence = sentences[incorrectIndex] || {};
-              return (
-                <View key={`err-${idx}`} style={{ marginBottom: 12 }}>
-                  <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}> {String.fromCharCode(97 + idx)}.</Text>
-                  {!isFix ? (
-                    <View style={{ marginLeft: 12 }}>
-                      {sentences.map((s, si) => (
-                        <Text key={`err-opt-${idx}-${si}`} style={styles.text}>☐ {s?.text}</Text>
-                      ))}
+                  );
+                }
+                if (type === 'clozeMix') {
+                  const { elements, footnotes } = renderClozeMixedWithOptions(item) || { elements: [], footnotes: [] };
+                  return (
+                    <View key={`clozeMix-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
+                      {item.title && (
+                        <Text style={styles.exerciseTitle}>Exercise {i + 1}: {item.title}</Text>
+                      )}
+                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      <View style={{ flexDirection: 'row', gap: 15 }}>
+                        <View style={{ flex: 1 }}>
+                          <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{elements}</View>
+                          {renderFootnotes(footnotes)}
+                        </View>
+                        {getImageByKey(`clozeMix:${idx}`) && (
+                          <View style={{ width: 150 }}>
+                            {renderImage(getImageByKey(`clozeMix:${idx}`), 'AI-generated illustration')}
+                          </View>
+                        )}
+                      </View>
                     </View>
-                  ) : (
-                    <View style={{ marginLeft: 12 }}>
-                      <Text style={styles.text}>Incorrect: {incorrectSentence.text}</Text>
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                  );
+                }
+                if (type === 'reading') {
+                  return (
+                    <View key={`reading-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
+                      <Text style={styles.exerciseTitle}>Passage {i + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                      {item.passage && <Text style={styles.passage}>{item.passage}</Text>}
+                      {getImageByKey(`reading:${idx}`) && (
+                        <View style={{ alignSelf: 'center' }}>
+                          {renderImage(getImageByKey(`reading:${idx}`), 'AI-generated illustration')}
+                        </View>
+                      )}
+                      {Array.isArray(item.glossary) && item.glossary.length > 0 && (
+                        <View style={{ marginTop: 8, border: '1 solid #d1d5db' }}>
+                          <View style={{ flexDirection: 'row', backgroundColor: '#f3f4f6', borderBottom: '1 solid #d1d5db' }}>
+                            {['Term','POS','Definition / Translation','Example'].map((h, j) => (
+                              <View key={j} style={{ flex: 1, padding: 6, borderRight: j < 3 ? '1 solid #d1d5db' : 'none' }}>
+                                <Text style={[styles.text, { fontWeight: 'bold', fontSize: 11 }]}>{h}</Text>
+                              </View>
+                            ))}
+                          </View>
+                          {item.glossary.map((g, gi) => (
+                            <View key={gi} style={{ flexDirection: 'row', borderBottom: gi < item.glossary.length - 1 ? '1 solid #e5e7eb' : 'none' }}>
+                              <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10, fontWeight: 'bold' }]}>{g.term}</Text></View>
+                              <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10 }]}>{g.pos}</Text></View>
+                              <View style={{ flex: 1, padding: 6, borderRight: '1 solid #e5e7eb' }}><Text style={[styles.text, { fontSize: 10 }]}>{g.definition}{g.translation ? ` — ${g.translation}` : ''}</Text></View>
+                              <View style={{ flex: 1, padding: 6 }}><Text style={[styles.text, { fontSize: 10 }]}>{g.example}</Text></View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.true_false) && item.true_false.length > 0 && (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>True / False</Text>
+                          {item.true_false.map((t, ti) => (
+                            <Text key={`tf-${ti}`} style={styles.text}>
+                              {String.fromCharCode(97 + ti)}. {t.statement}
+                            </Text>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.comprehension_questions) && item.comprehension_questions.length > 0 && (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>Comprehension Questions</Text>
+                          {item.comprehension_questions.map((q, qi) => (
+                            <View key={`qa-${qi}`} style={{ marginBottom: 4 }}>
+                              <Text style={styles.text}>{qi + 1}. {q.question}</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.productive_prompts) && item.productive_prompts.length > 0 && (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>Productive Prompts</Text>
+                          {item.productive_prompts.map((p, pi) => (
+                            <View key={`pp-${pi}`} style={{ marginBottom: 4 }}>
+                              <Text style={styles.text}>{pi + 1}. {(p && p.prompt) ? p.prompt : p}</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.opinion_questions) && item.opinion_questions.length > 0 && (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>Opinion Questions</Text>
+                          {item.opinion_questions.map((q, qi) => (
+                            <View key={`op-${qi}`} style={{ marginBottom: 4 }}>
+                              <Text style={styles.text}>{qi + 1}. {(q && q.question) ? q.question : q}</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                              <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
                     </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        )}
+                  );
+                }
+                if (type === 'dialogue') {
+                  const speakers = Array.from(new Set((item.turns || []).map(t => t.speaker).filter(Boolean)));
+                  const hiddenSpeaker = item.hide_speaker || item.suggested_hide_speaker || (speakers.length > 1 ? speakers[1] : (speakers[0] || ''));
+                  return (
+                    <View key={`dialogue-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
+                      <Text style={styles.exerciseTitle}>Dialogue {i + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      <View style={{ gap: 4 }}>
+                        {(item.turns || []).map((turn, ti) => {
+                          const isHidden = hiddenSpeaker && turn.speaker === hiddenSpeaker;
+                          return (
+                            <View key={`dlg-${blockIdx}-${i}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
+                              <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
+                              {isHidden ? (
+                                <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________</Text>
+                              ) : (
+                                <Text style={styles.inlineText}>{turn.text}</Text>
+                              )}
+                            </View>
+                          );
+                        })}
+                      </View>
+                      {Array.isArray(item.hints) && item.hints.length > 0 && (
+                        <View style={styles.hints}>
+                          <Text style={[styles.text, { fontSize: 10, marginBottom: 2 }]}>Hint:</Text>
+                          <Text style={styles.hintItem}>{item.hints[0]}</Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
+                if (type === 'writing') {
+                  return (
+                    <View key={`writing-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
+                      <Text style={styles.exerciseTitle}>Set {i + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      <View>
+                        {(item.prompts || []).map((p, pi) => (
+                          <View key={`wp-${blockIdx}-${i}-${pi}`} style={{ marginBottom: 8 }}>
+                            <Text style={styles.text}>{pi + 1}. {p.question}</Text>
+                            <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                            <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                            <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  );
+                }
+                if (type === 'error') {
+                  const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
+                  const total = Array.isArray(lesson?.error_bundles) ? lesson.error_bundles.length : 0;
+                  const fixCount = Math.floor(total * 0.4);
+                  const isFix = idx >= total - fixCount;
+                  const wrongIndices = sentences.map((s, j) => (s && s.correct ? null : j)).filter(j => j !== null);
+                  const incorrectIndex = wrongIndices.length > 0 ? wrongIndices[idx % wrongIndices.length] : 0;
+                  const incorrectSentence = sentences[incorrectIndex] || {};
+                  return (
+                    <View key={`err-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
+                      <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>{String.fromCharCode(97 + i)}.</Text>
+                      {!errorContextShown && typeof lesson.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context ? (
+                        (() => { errorContextShown = true; return (<Text style={styles.context}>Context: {lesson.error_bundles_shared_context}</Text>); })()
+                      ) : null}
+                      {!isFix ? (
+                        <View style={{ marginLeft: 12 }}>
+                          {sentences.map((s, si) => (
+                            <Text key={`err-opt-${idx}-${si}`} style={styles.text}>{String.fromCharCode(65 + si)}. {s?.text}</Text>
+                          ))}
+                        </View>
+                      ) : (
+                        <View style={{ marginLeft: 12 }}>
+                          <Text style={styles.text}>Incorrect: {incorrectSentence.text}</Text>
+                          <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                          <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
+                return null;
+              })}
+            </View>
+          ));
+        })()}
       </Page>
 
       {/* Solutions Page */}
       <Page size="A4" style={styles.solutionsPage}>
         <Text style={styles.solutionsTitle}>Solutions and Answers</Text>
 
-        {/* Fill in the Blanks Solutions */}
-        {Array.isArray(lesson.fill_in_blanks) && lesson.fill_in_blanks.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Fill in the Blanks - Solutions</Text>
-            {lesson.fill_in_blanks.map((item, idx) => (
-              <View key={`fib-sol-${idx}`} style={{ marginBottom: 15 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
-                  <Text style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
-                    {String.fromCharCode(97 + idx)}.
-                  </Text>
-                  <View style={{ flex: 1 }}>
-                    {renderFIBSolution(item)}
-                  </View>
-                </View>
-                {item.context && (
-                  <Text style={[styles.context, { marginLeft: 16 }]}>Context: {item.context}</Text>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Multiple Choice Solutions */}
-        {Array.isArray(lesson.multiple_choice) && lesson.multiple_choice.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Multiple Choice - Solutions</Text>
-            {lesson.multiple_choice.map((item, idx) => (
-              <View key={`mcq-sol-${idx}`} style={{ marginBottom: 15 }}>
-                <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
-                  {String.fromCharCode(97 + idx)}. {item.question}
-                </Text>
-                {item.options && Array.isArray(item.options) && (
-                  <View style={{ marginLeft: 16 }}>
-                    {item.options.map((option, optIdx) => {
-                      const label = `${String.fromCharCode(65 + optIdx)}. ${option.text}`;
-                      if (option.correct) {
-                        return (
-                          <View key={`correct-${optIdx}`}>
-                            <Text style={[styles.answer, { marginBottom: 4 }]}> 
-                              Correct Answer: {label}
-                            </Text>
-                            {option.rationale && (
-                              <Text style={styles.rationale}>Rationale: {option.rationale}</Text>
-                            )}
-                          </View>
-                        );
-                      }
-                      // Print incorrect option rationales if provided
-                      if (option.rationale) {
-                        return (
-                          <View key={`incorrect-${optIdx}`}>
-                            <Text style={[styles.text, { marginBottom: 2 }]}>Incorrect: {label}</Text>
-                            <Text style={[styles.rationale, { marginLeft: 2 }]}>Why incorrect: {option.rationale}</Text>
-                          </View>
-                        );
-                      }
-                      return null;
-                    })}
-                  </View>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Cloze Passages Solutions */}
-        {Array.isArray(lesson.cloze_passages) && lesson.cloze_passages.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Cloze Passages - Solutions</Text>
-            {lesson.cloze_passages.map((item, idx) => {
-              const { elements, footnotes } = renderClozeSolution(item) || { elements: [], footnotes: [] };
-              
-              return (
-                <View key={`cloze-sol-${idx}`} style={{ marginBottom: 20 }}>
-                  <Text style={styles.exerciseTitle}>
-                    Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
-                  </Text>
-                  
-                  <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
-                    {elements}
-                  </View>
-                  
-                  {/* Render rationale footnotes */}
-                  {renderFootnotes(footnotes, "Rationales:")}
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Cloze Mixed Options Solutions */}
-        {Array.isArray(lesson.cloze_with_mixed_options) && lesson.cloze_with_mixed_options.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Cloze with Mixed Options - Solutions</Text>
-            <Text style={[styles.text, { fontSize: 10, fontStyle: 'italic', marginBottom: 12, color: '#6b7280' }]}>
-              Correct answers are highlighted in green. Incorrect options are struck through.
-            </Text>
-            {lesson.cloze_with_mixed_options.map((item, idx) => {
-              const { elements, footnotes } = renderClozeMixedSolution(item) || { elements: [], footnotes: [] };
-              
-              return (
-                <View key={`clozeMix-sol-${idx}`} style={{ marginBottom: 20 }}>
-                  <Text style={styles.exerciseTitle}>
-                    Exercise {idx + 1}{item.title ? `: ${item.title}` : ''}
-                  </Text>
-                  
-                  <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
-                    {elements}
-                  </View>
-                  
-                  {/* Render rationale footnotes */}
-                  {renderFootnotes(footnotes, "Rationales:")}
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Reading Comprehension Solutions */}
-        {Array.isArray(lesson.reading_comprehension) && lesson.reading_comprehension.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Reading Comprehension - Solutions</Text>
-            {lesson.reading_comprehension.map((item, idx) => (
-              <View key={`reading-sol-${idx}`} style={{ marginBottom: 16 }}>
-                <Text style={styles.exerciseTitle}>Passage {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
-                {/* True/False answers */}
-                {Array.isArray(item.true_false) && item.true_false.length > 0 && (
-                  <View style={{ marginTop: 4 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>True / False Answers</Text>
-                    {item.true_false.map((t, ti) => (
-                      <Text key={`tf-sol-${ti}`} style={styles.answer}>
-                        {String.fromCharCode(97 + ti)}. {t.answer ? 'True' : 'False'} — {t.statement}
-                      </Text>
-                    ))}
-                  </View>
-                )}
-                {/* Model answers for comprehension */}
-                {Array.isArray(item.comprehension_questions) && item.comprehension_questions.length > 0 && (
-                  <View style={{ marginTop: 6 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Model Answers</Text>
-                    {item.comprehension_questions.map((q, qi) => (
-                      <View key={`qa-sol-${qi}`} style={{ marginBottom: 4 }}>
-                        <Text style={styles.text}>{qi + 1}. {q.question}</Text>
-                        <Text style={styles.answer}>Answer: {q.model_answer}</Text>
+        {/* Render solutions in the same creation order */}
+        {(() => {
+          const { blocks, totals } = groupTimelineIntoBlocks(buildExerciseTimeline(lesson));
+          return blocks.map((block, blockIdx) => (
+            <View key={`sol-block-${blockIdx}`} style={styles.section}>
+              <Text style={styles.sectionTitle}>
+                {block.displayName}{totals[block.type] > 1 ? ` — Set ${block.blockIndex}` : ''} - Solutions
+              </Text>
+              {block.items.map((ex, i) => {
+                const { type, item, idx } = ex;
+                if (type === 'fib') {
+                  return (
+                    <View key={`fib-sol-${blockIdx}-${i}`} style={{ marginBottom: 15 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
+                        <Text style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
+                          {String.fromCharCode(97 + i)}.
+                        </Text>
+                        <View style={{ flex: 1 }}>
+                          {renderFIBSolution(item)}
+                        </View>
                       </View>
-                    ))}
-                  </View>
-                )}
-                {/* Model answers for productive prompts */}
-                {Array.isArray(item.productive_prompts) && item.productive_prompts.length > 0 && (
-                  <View style={{ marginTop: 6 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Productive Prompts - Model Answers</Text>
-                    {item.productive_prompts.map((p, pi) => (
-                      <View key={`pp-sol-${pi}`} style={{ marginBottom: 4 }}>
-                        <Text style={styles.text}>{pi + 1}. {(p && p.prompt) ? p.prompt : String(p)}</Text>
-                        {p && p.model_answer && (
-                          <Text style={styles.answer}>Answer: {p.model_answer}</Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                )}
-                {/* Opinion model answers */}
-                {Array.isArray(item.opinion_questions) && item.opinion_questions.length > 0 && (
-                  <View style={{ marginTop: 6 }}>
-                    <Text style={[styles.text, { fontWeight: 'bold' }]}>Opinion Questions - Model Answers</Text>
-                    {item.opinion_questions.map((q, qi) => (
-                      <View key={`op-sol-${qi}`} style={{ marginBottom: 4 }}>
-                        <Text style={styles.text}>{qi + 1}. {(q && q.question) ? q.question : q}</Text>
-                        {q && q.model_answers && (
-                          <View style={{ marginLeft: 12 }}>
-                            {q.model_answers.agree && (
-                              <Text style={styles.answer}>Agree: {q.model_answers.agree}</Text>
-                            )}
-                            {q.model_answers.disagree && (
-                              <Text style={styles.answer}>Disagree: {q.model_answers.disagree}</Text>
-                            )}
-                            {q.model_answers.neutral && (
-                              <Text style={styles.answer}>Neutral: {q.model_answers.neutral}</Text>
-                            )}
-                          </View>
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Guided Dialogues Solutions */}
-        {Array.isArray(lesson.guided_dialogues) && lesson.guided_dialogues.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Guided Dialogues - Suggested Answers</Text>
-            {lesson.guided_dialogues.map((item, idx) => (
-              <View key={`dialogue-sol-${idx}`} style={{ marginBottom: 16 }}>
-                <Text style={styles.exerciseTitle}>Dialogue {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
-                <View style={{ gap: 4 }}>
-                  {(item.turns || []).map((turn, ti) => (
-                    <View key={`dlg-sol-${idx}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
-                      <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
-                      <Text style={styles.inlineText}>{turn.text}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Writing Prompts Solutions */}
-        {Array.isArray(lesson.writing_prompts) && lesson.writing_prompts.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Writing Prompts - Example Answers</Text>
-            {lesson.writing_prompts.map((item, idx) => (
-              <View key={`writing-sol-${idx}`} style={{ marginBottom: 16 }}>
-                <Text style={styles.exerciseTitle}>Set {idx + 1}{item.title ? `: ${item.title}` : ''}</Text>
-                {(item.prompts || []).map((p, pi) => (
-                  <View key={`wp-sol-${idx}-${pi}`} style={{ marginBottom: 8 }}>
-                    <Text style={styles.text}>{pi + 1}. {p.question}</Text>
-                    {Array.isArray(item.example_answers) && item.example_answers[pi] && (
-                      <Text style={[styles.answer, { fontWeight: 'normal' }]}>
-                        Example: {item.example_answers[pi]}
-                      </Text>
-                    )}
-                  </View>
-                ))}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Error Bundles Solutions */}
-        {Array.isArray(lesson.error_bundles) && lesson.error_bundles.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Error Bundles - Solutions</Text>
-            {lesson.error_bundles.map((item, idx) => {
-              const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
-              const correctIndex = sentences.findIndex(s => s && s.correct);
-              const correctSentence = correctIndex >= 0 ? sentences[correctIndex] : null;
-              const total = lesson.error_bundles.length;
-              const fixCount = Math.floor(total * 0.4);
-              const isFix = idx >= total - fixCount;
-              const wrongIndices = sentences.map((s, i) => (s && s.correct ? null : i)).filter(i => i !== null);
-              const incorrectIndex = wrongIndices.length > 0 ? wrongIndices[idx % wrongIndices.length] : 0;
-              const incorrectSentence = sentences[incorrectIndex] || {};
-              return (
-                <View key={`err-sol-${idx}`} style={{ marginBottom: 12 }}>
-                  <Text style={styles.exerciseTitle}>{String.fromCharCode(97 + idx)}.</Text>
-                  {!isFix ? (
-                    <View style={{ marginLeft: 12 }}>
-                      {sentences.map((s, si) => {
-                        const isCorrect = !!s?.correct;
-                        if (isCorrect) {
-                          return (
-                            <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 6 }}>
-                              <Text style={styles.text}>
-                                <Text style={[styles.inlineText, { color: '#059669', fontWeight: 'bold' }]}>{s.text}</Text>
-                                <Text style={styles.inlineText}> — correct</Text>
-                              </Text>
-                              {s.rationale && (
-                                <Text style={styles.rationale}>Reason: {s.rationale}</Text>
-                              )}
-                            </View>
-                          );
-                        }
-                        // Incorrect: show sentence with diff highlight (inline helper) then reason + fix
-                        return (
-                          <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 8 }}>
-                            {renderInlineIncorrectWithDiff(s?.text || '', s?.fix || '')}
-                            {s?.rationale && (
-                              <Text style={styles.rationale}>Reason: {s.rationale}</Text>
-                            )}
-                            {s?.fix && renderFixWithDiff(s?.text || '', s.fix)}
-                          </View>
-                        );
-                      })}
-                    </View>
-                  ) : (
-                    <View style={{ marginLeft: 12 }}>
-                      {renderIncorrectWithDiff(incorrectSentence.text, incorrectSentence.fix || '')}
-                      {incorrectSentence?.fix && renderFixWithDiff(incorrectSentence.text, incorrectSentence.fix)}
-                      {incorrectSentence?.rationale && (
-                        <Text style={styles.rationale}>Rationale: {incorrectSentence.rationale}</Text>
+                      {item.context && (
+                        <Text style={[styles.context, { marginLeft: 16 }]}>Context: {item.context}</Text>
                       )}
                     </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        )}
+                  );
+                }
+                if (type === 'mcq') {
+                  return (
+                    <View key={`mcq-sol-${blockIdx}-${i}`} style={{ marginBottom: 15 }}>
+                      <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
+                        {String.fromCharCode(97 + i)}. {item.question}
+                      </Text>
+                      {item.options && Array.isArray(item.options) && (
+                        <View style={{ marginLeft: 16 }}>
+                          {item.options.map((option, optIdx) => {
+                            const label = `${String.fromCharCode(65 + optIdx)}. ${option.text}`;
+                            if (option.correct) {
+                              return (
+                                <View key={`correct-${optIdx}`}>
+                                  <Text style={[styles.answer, { marginBottom: 4 }]}> 
+                                    Correct Answer: {label}
+                                  </Text>
+                                  {option.rationale && (
+                                    <Text style={styles.rationale}>Rationale: {option.rationale}</Text>
+                                  )}
+                                </View>
+                              );
+                            }
+                            if (option.rationale) {
+                              return (
+                                <View key={`incorrect-${optIdx}`}>
+                                  <Text style={[styles.text, { marginBottom: 2 }]}>Incorrect: {label}</Text>
+                                  <Text style={[styles.rationale, { marginLeft: 2 }]}>Why incorrect: {option.rationale}</Text>
+                                </View>
+                              );
+                            }
+                            return null;
+                          })}
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
+                if (type === 'cloze') {
+                  const { elements, footnotes } = renderClozeSolution(item) || { elements: [], footnotes: [] };
+                  return (
+                    <View key={`cloze-sol-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
+                      <Text style={styles.exerciseTitle}>
+                        Exercise {i + 1}{item.title ? `: ${item.title}` : ''}
+                      </Text>
+                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
+                        {elements}
+                      </View>
+                      {renderFootnotes(footnotes, "Rationales:")}
+                    </View>
+                  );
+                }
+                if (type === 'clozeMix') {
+                  const { elements, footnotes } = renderClozeMixedSolution(item) || { elements: [], footnotes: [] };
+                  return (
+                    <View key={`clozeMix-sol-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
+                      <Text style={styles.exerciseTitle}>
+                        Exercise {i + 1}{item.title ? `: ${item.title}` : ''}
+                      </Text>
+                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
+                        {elements}
+                      </View>
+                      {renderFootnotes(footnotes, "Rationales:")}
+                    </View>
+                  );
+                }
+                if (type === 'reading') {
+                  return (
+                    <View key={`reading-sol-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
+                      <Text style={styles.exerciseTitle}>Passage {i + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                      {Array.isArray(item.true_false) && item.true_false.length > 0 && (
+                        <View style={{ marginTop: 4 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>True / False Answers</Text>
+                          {item.true_false.map((t, ti) => (
+                            <Text key={`tf-sol-${ti}`} style={styles.answer}>
+                              {String.fromCharCode(97 + ti)}. {t.answer ? 'True' : 'False'} — {t.statement}
+                            </Text>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.comprehension_questions) && item.comprehension_questions.length > 0 && (
+                        <View style={{ marginTop: 6 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>Model Answers</Text>
+                          {item.comprehension_questions.map((q, qi) => (
+                            <View key={`qa-sol-${qi}`} style={{ marginBottom: 4 }}>
+                              <Text style={styles.text}>{qi + 1}. {q.question}</Text>
+                              <Text style={styles.answer}>Answer: {q.model_answer}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.productive_prompts) && item.productive_prompts.length > 0 && (
+                        <View style={{ marginTop: 6 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>Productive Prompts - Model Answers</Text>
+                          {item.productive_prompts.map((p, pi) => (
+                            <View key={`pp-sol-${pi}`} style={{ marginBottom: 4 }}>
+                              <Text style={styles.text}>{pi + 1}. {(p && p.prompt) ? p.prompt : String(p)}</Text>
+                              {p && p.model_answer && (
+                                <Text style={styles.answer}>Answer: {p.model_answer}</Text>
+                              )}
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                      {Array.isArray(item.opinion_questions) && item.opinion_questions.length > 0 && (
+                        <View style={{ marginTop: 6 }}>
+                          <Text style={[styles.text, { fontWeight: 'bold' }]}>Opinion Questions - Model Answers</Text>
+                          {item.opinion_questions.map((q, qi) => (
+                            <View key={`op-sol-${qi}`} style={{ marginBottom: 4 }}>
+                              <Text style={styles.text}>{qi + 1}. {(q && q.question) ? q.question : q}</Text>
+                              {q && q.model_answers && (
+                                <View style={{ marginLeft: 12 }}>
+                                  {q.model_answers.agree && (
+                                    <Text style={styles.answer}>Agree: {q.model_answers.agree}</Text>
+                                  )}
+                                  {q.model_answers.disagree && (
+                                    <Text style={styles.answer}>Disagree: {q.model_answers.disagree}</Text>
+                                  )}
+                                  {q.model_answers.neutral && (
+                                    <Text style={styles.answer}>Neutral: {q.model_answers.neutral}</Text>
+                                  )}
+                                </View>
+                              )}
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
+                if (type === 'dialogue') {
+                  return (
+                    <View key={`dialogue-sol-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
+                      <Text style={styles.exerciseTitle}>Dialogue {i + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                      <View style={{ gap: 4 }}>
+                        {(item.turns || []).map((turn, ti) => (
+                          <View key={`dlg-sol-${idx}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
+                            <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
+                            <Text style={styles.inlineText}>{turn.text}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  );
+                }
+                if (type === 'writing') {
+                  return (
+                    <View key={`writing-sol-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
+                      <Text style={styles.exerciseTitle}>Set {i + 1}{item.title ? `: ${item.title}` : ''}</Text>
+                      {(item.prompts || []).map((p, pi) => (
+                        <View key={`wp-sol-${idx}-${pi}`} style={{ marginBottom: 8 }}>
+                          <Text style={styles.text}>{pi + 1}. {p.question}</Text>
+                          {Array.isArray(item.example_answers) && item.example_answers[pi] && (
+                            <Text style={[styles.answer, { fontWeight: 'normal' }]}>Example: {item.example_answers[pi]}</Text>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  );
+                }
+                if (type === 'error') {
+                  const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
+                  const total = Array.isArray(lesson?.error_bundles) ? lesson.error_bundles.length : 0;
+                  const fixCount = Math.floor(total * 0.4);
+                  const isFix = idx >= total - fixCount;
+                  const wrongIndices = sentences.map((s, j) => (s && s.correct ? null : j)).filter(j => j !== null);
+                  const incorrectIndex = wrongIndices.length > 0 ? wrongIndices[idx % wrongIndices.length] : 0;
+                  const incorrectSentence = sentences[incorrectIndex] || {};
+                  return (
+                    <View key={`err-sol-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
+                      <Text style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>{String.fromCharCode(97 + i)}.</Text>
+                      {!isFix ? (
+                        <View style={{ marginLeft: 12 }}>
+                          {sentences.map((s, si) => {
+                            const isCorrect = !!s?.correct;
+                            if (isCorrect) {
+                              return (
+                                <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 6 }}>
+                                  <Text style={styles.text}>
+                                    <Text style={[styles.inlineText, { fontWeight: 'bold' }]}>{String.fromCharCode(65 + si)}.</Text>
+                                    <Text style={[styles.inlineText, { color: '#059669', fontWeight: 'bold' }]}> {s.text}</Text>
+                                    <Text style={styles.inlineText}> — correct</Text>
+                                  </Text>
+                                  {s.rationale && (
+                                    <Text style={styles.rationale}>Reason: {s.rationale}</Text>
+                                  )}
+                                </View>
+                              );
+                            }
+                            return (
+                              <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 8 }}>
+                                <Text style={styles.text}>
+                                  <Text style={[styles.inlineText, { fontWeight: 'bold' }]}>{String.fromCharCode(65 + si)}.</Text>
+                                  <Text> </Text>
+                                  {renderInlineIncorrectWithDiff(s?.text || '', s?.fix || '')}
+                                </Text>
+                                {s?.rationale && (
+                                  <Text style={styles.rationale}>Reason: {s.rationale}</Text>
+                                )}
+                                {s?.fix && renderFixWithDiff(s?.text || '', s.fix)}
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <View style={{ marginLeft: 12 }}>
+                          {renderIncorrectWithDiff(incorrectSentence.text, incorrectSentence.fix || '')}
+                          {incorrectSentence?.fix && renderFixWithDiff(incorrectSentence.text, incorrectSentence.fix)}
+                          {incorrectSentence?.rationale && (
+                            <Text style={styles.rationale}>Rationale: {incorrectSentence.rationale}</Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
+                return null;
+              })}
+            </View>
+          ));
+        })()}
       </Page>
     </Document>
   );
