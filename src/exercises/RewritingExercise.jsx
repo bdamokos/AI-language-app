@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Check } from 'lucide-react';
 import { normalizeText } from './utils.js';
 
@@ -19,6 +19,7 @@ import { normalizeText } from './utils.js';
  * value: string (user's rewritten sentence)
  */
 export default function RewritingExercise({ item, value, onChange, checked, strictAccents = true, idPrefix, onFocusKey, showInstruction = true }) {
+  const [showHint, setShowHint] = useState(false);
   const userVal = typeof value === 'string' ? value : '';
   const expected = String(item?.answer || '');
   const isCorrect = checked && expected && normalizeText(userVal, strictAccents) === normalizeText(expected, strictAccents);
@@ -60,11 +61,24 @@ export default function RewritingExercise({ item, value, onChange, checked, stri
 
       {(() => {
         const firstHint = (Array.isArray(item?.hints) && item.hints.length > 0) ? item.hints[0] : (item?.hint || null);
-        return (!checked && firstHint) ? (
-          <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-            Hint: {firstHint}
+        if (!firstHint || checked) return null;
+        return (
+          <div className="mt-1">
+            <button
+              type="button"
+              onClick={() => setShowHint(prev => !prev)}
+              className="text-xs text-blue-600 hover:text-blue-800 underline"
+              title="Show hint"
+            >
+              💡 Hint
+            </button>
+            {showHint && (
+              <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                {firstHint}
+              </div>
+            )}
           </div>
-        ) : null;
+        );
       })()}
 
       {item?.context && (
