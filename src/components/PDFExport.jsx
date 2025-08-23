@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { diffChars, diffWordsWithSpace } from 'diff';
 import { Download, FileText, Image as ImageIcon } from 'lucide-react';
 import { Document, Page, Text, View, StyleSheet, pdf, Image, Font, Link } from '@react-pdf/renderer';
 import { PDFDocument } from 'pdf-lib';
@@ -854,6 +855,56 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     );
   };
 
+  // Render diffs using jsdiff word-level and refined char-level for replacements
+  const renderDiffInline = (originalText, rewrittenText, side) => {
+    const parts = diffWordsWithSpace(String(originalText || ''), String(rewrittenText || ''));
+    const nodes = [];
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!part.added && !part.removed) {
+        if (part.value) nodes.push(<Text key={`eq-${i}`} style={styles.inlineText}>{part.value}</Text>);
+        continue;
+      }
+      // If we see a removed followed by an added, treat as replacement and refine per char
+      if (part.removed && i + 1 < parts.length && parts[i + 1].added) {
+        const removedVal = part.value || '';
+        const addedVal = parts[i + 1].value || '';
+        const charDiff = diffChars(removedVal, addedVal);
+        charDiff.forEach((c, j) => {
+          const val = c.value || '';
+          if (!c.added && !c.removed) {
+            if (val) nodes.push(<Text key={`rep-eq-${i}-${j}`} style={styles.inlineText}>{val}</Text>);
+          } else if (c.removed && side === 'original') {
+            nodes.push(<Text key={`rep-rem-${i}-${j}`} style={[styles.inlineText, { color: '#b91c1c', textDecoration: 'line-through' }]}>{val}</Text>);
+          } else if (c.added && side === 'rewritten') {
+            nodes.push(<Text key={`rep-add-${i}-${j}`} style={[styles.inlineText, { color: '#059669', textDecoration: 'underline', fontWeight: 'bold' }]}>{val}</Text>);
+          }
+        });
+        i++; // consume the next added part
+        continue;
+      }
+      // Pure removal or addition segments
+      if (part.removed && side === 'original') {
+        nodes.push(<Text key={`rem-${i}`} style={[styles.inlineText, { color: '#b91c1c', textDecoration: 'line-through' }]}>{part.value}</Text>);
+      } else if (part.added && side === 'rewritten') {
+        nodes.push(<Text key={`add-${i}`} style={[styles.inlineText, { color: '#059669', textDecoration: 'underline', fontWeight: 'bold' }]}>{part.value}</Text>);
+      }
+    }
+    return nodes;
+  };
+
+  const renderOriginalWithDiff = (originalText, rewrittenText) => (
+    <Text style={styles.text}>
+      Original: {renderDiffInline(originalText, rewrittenText, 'original')}
+    </Text>
+  );
+
+  const renderRewrittenWithDiff = (originalText, rewrittenText) => (
+    <Text style={styles.text}>
+      Rewritten: {renderDiffInline(originalText, rewrittenText, 'rewritten')}
+    </Text>
+  );
+
   // Helper function to render FIB solutions with answers in green bold
   const renderFIBSolution = (item) => {
     if (!item?.sentence) return null;
@@ -1080,7 +1131,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       ['dialogue', 'guided_dialogues', 'Guided Dialogues'],
       ['writing', 'writing_prompts', 'Writing Prompts'],
       ['reading', 'reading_comprehension', 'Reading Comprehension'],
-      ['error', 'error_bundles', 'Error Bundles']
+      ['error', 'error_bundles', 'Error Bundles'],
+      ['rewrite', 'rewriting', 'Sentence Rewriting']
     ];
     const timeline = [];
     mapping.forEach(([type, key, displayName]) => {
@@ -1428,6 +1480,32 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                     </View>
                   );
                 }
+                if (type === 'rewrite') {
+                  return (
+                    <View key={`rewrite-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
+                      <Text id={`exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }] }>
+                        {String.fromCharCode(97 + i)}. <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text></Link>
+                      </Text>
+                      {item.instruction && (
+                        <Text style={styles.instructions}>{item.instruction}</Text>
+                      )}
+                      {item.original && (
+                        <Text style={styles.text}>Original: {item.original}</Text>
+                      )}
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      {item.context && (
+                        <Text style={styles.context}>Context: {item.context}</Text>
+                      )}
+                      {item.hint && (
+                        <View style={styles.hints}>
+                          <Text style={[styles.text, { fontSize: 10, marginBottom: 2 }]}>Hint:</Text>
+                          <Text style={styles.hintItem}>{item.hint}</Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
                 if (type === 'error') {
                   const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
                   const total = Array.isArray(lesson?.error_bundles) ? lesson.error_bundles.length : 0;
@@ -1680,6 +1758,20 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                     </View>
                   );
                 }
+                if (type === 'rewrite') {
+                  return (
+                    <View key={`rewrite-sol-${blockIdx}-${i}`} style={{ marginBottom: 15 }}>
+                      <Text id={`solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }] }>
+                        {String.fromCharCode(97 + i)}. <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text></Link>
+                      </Text>
+                      {renderOriginalWithDiff(item.original || '', item.answer || '')}
+                      {renderRewrittenWithDiff(item.original || '', item.answer || '')}
+                      {item.rationale && (
+                        <Text style={styles.rationale}>Why: {item.rationale}</Text>
+                      )}
+                    </View>
+                  );
+                }
                 if (type === 'error') {
                   const sentences = Array.isArray(item?.sentences) ? item.sentences : [];
                   const total = Array.isArray(lesson?.error_bundles) ? lesson.error_bundles.length : 0;
@@ -1717,21 +1809,24 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                               <View key={`err-sol-sent-${idx}-${si}`} style={{ marginBottom: 8 }}>
                                 <Text style={styles.text}>
                                   <Text style={[styles.inlineText, { fontWeight: 'bold' }]}>{String.fromCharCode(65 + si)}.</Text>
-                                  <Text> </Text>
-                                  {renderInlineIncorrectWithDiff(s?.text || '', s?.fix || '')}
                                 </Text>
+                                <Text style={styles.text}>Original: {renderDiffInline(s?.text || '', s?.fix || '', 'original')}</Text>
+                                {s?.fix && (
+                                  <Text style={styles.text}>Fix: {renderDiffInline(s?.text || '', s.fix, 'rewritten')}</Text>
+                                )}
                                 {s?.rationale && (
                                   <Text style={styles.rationale}>Reason: {s.rationale}</Text>
                                 )}
-                                {s?.fix && renderFixWithDiff(s?.text || '', s.fix)}
                               </View>
                             );
                           })}
                         </View>
                       ) : (
                         <View style={{ marginLeft: 12 }}>
-                          {renderIncorrectWithDiff(incorrectSentence.text, incorrectSentence.fix || '')}
-                          {incorrectSentence?.fix && renderFixWithDiff(incorrectSentence.text, incorrectSentence.fix)}
+                          <Text style={styles.text}>Original: {renderDiffInline(incorrectSentence.text || '', incorrectSentence.fix || '', 'original')}</Text>
+                          {incorrectSentence?.fix && (
+                            <Text style={styles.text}>Fix: {renderDiffInline(incorrectSentence.text || '', incorrectSentence.fix, 'rewritten')}</Text>
+                          )}
                           {incorrectSentence?.rationale && (
                             <Text style={styles.rationale}>Rationale: {incorrectSentence.rationale}</Text>
                           )}

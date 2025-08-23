@@ -13,7 +13,7 @@ export const EXERCISE_CATEGORIES = {
   SEQUENTIAL: ['reading', 'cloze', 'cloze_mixed'],
   
   // Isolated: Need separate chapters from sequential, can share base text
-  ISOLATED: ['mcq', 'fib', 'error_bundles'],
+  ISOLATED: ['mcq', 'fib', 'error_bundles', 'rewriting'],
   
   // Independent: Don't use base texts (generate own content)
   INDEPENDENT: ['guided_dialogues', 'writing_prompts', 'explanation']

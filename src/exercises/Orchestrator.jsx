@@ -11,6 +11,7 @@ import ExplanationComponent, { generateExplanation } from './ExplanationComponen
 import { normalizeText } from './utils.js';
 import ErrorBundleExercise, { scoreErrorBundle, generateErrorBundles } from './ErrorBundleExercise.jsx';
 import { BaseTextChapterTracker, EXERCISE_CATEGORIES, createChapterContext } from './baseTextOrchestrator.js';
+import RewritingExercise, { scoreRewriting, generateRewriting } from './RewritingExercise.jsx';
 
 /**
  * Lesson Orchestrator: renders a collection of exercise items with standardized API.
@@ -36,7 +37,8 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
       ['dialogue', 'guided_dialogues', 'Guided Dialogues'],
       ['writing', 'writing_prompts', 'Writing Prompts'],
       ['reading', 'reading_comprehension', 'Reading Comprehension'],
-      ['error', 'error_bundles', 'Error Bundles']
+      ['error', 'error_bundles', 'Error Bundles'],
+      ['rewrite', 'rewriting', 'Sentence Rewriting']
     ];
 
     exerciseTypes.forEach(([typeKey, lessonKey, displayName]) => {
@@ -113,6 +115,23 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
           return <WritingPromptExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
         case 'reading':
           return <ReadingExercise item={item} value={val || {}} onChange={setVal} checked={checked} idPrefix={keyPrefix} onFocusKey={onFocusKey} />;
+        case 'rewrite': {
+          // Collapse duplicate instructions for consecutive rewriting items
+          const prev = exerciseTimeline[currentIndex - 1];
+          const showInstruction = !(prev && prev.type === 'rewrite' && (prev.item?.instruction || '').trim() === (item?.instruction || '').trim());
+          return (
+            <RewritingExercise
+              item={item}
+              value={typeof values?.[keyPrefix] === 'string' ? values[keyPrefix] : ''}
+              onChange={(v) => onChange(keyPrefix, v)}
+              checked={checked}
+              strictAccents={strictAccents}
+              idPrefix={keyPrefix}
+              onFocusKey={onFocusKey}
+              showInstruction={showInstruction}
+            />
+          );
+        }
         case 'error':
           // For error bundles, determine mode based on position within error bundles
           const errorItems = lesson?.error_bundles || [];
@@ -232,6 +251,12 @@ export function scoreLesson(lesson, values, strictAccents = true) {
       add(scoreReading(item, values?.[key] || {}));
     });
   }
+  if (Array.isArray(lesson?.rewriting)) {
+    lesson.rewriting.forEach((item, idx) => {
+      const key = `lesson:rewrite:${idx}`;
+      add(scoreRewriting(item, values?.[key] || '', eq));
+    });
+  }
   if (Array.isArray(lesson?.error_bundles)) {
     const total = lesson.error_bundles.length;
     const fixCount = Math.floor(total * 0.4);
@@ -263,7 +288,8 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     guided_dialogues: Math.max(0, Math.min(10, Number(counts?.guided_dialogues ?? 0))),
     writing_prompts: Math.max(0, Math.min(10, Number(counts?.writing_prompts ?? 0))),
     error_bundles: Math.max(0, Math.min(12, Number(counts?.error_bundles ?? 0))),
-    reading_comprehension: Math.max(0, Math.min(10, Number(counts?.reading_comprehension ?? 0)))
+    reading_comprehension: Math.max(0, Math.min(10, Number(counts?.reading_comprehension ?? 0))),
+    rewriting: Math.max(0, Math.min(20, Number(counts?.rewriting ?? 0)))
   };
 
   // Initialize base text orchestration
@@ -295,6 +321,7 @@ export async function generateLesson(topic, counts = {}, languageContext = { lan
     writing_prompts: results.writingData.items || [],
     reading_comprehension: results.readingData.items || [],
     error_bundles: results.errorBundleData.items || [],
+    rewriting: results.rewritingData.items || [],
     error_bundles_shared_context: results.errorBundleData.shared_context || ''
   };
 }
@@ -378,14 +405,15 @@ async function generateOrchestredExercises(topic, safeCounts, languageContext, c
   const isolatedPromises = [
     generateIsolatedExercise('fill_in_blanks', safeCounts.fill_in_blanks, topic, languageContext, chapterTracker),
     generateIsolatedExercise('multiple_choice', safeCounts.multiple_choice, topic, languageContext, chapterTracker),
-    generateIsolatedExercise('error_bundles', safeCounts.error_bundles, topic, languageContext, chapterTracker)
+    generateIsolatedExercise('error_bundles', safeCounts.error_bundles, topic, languageContext, chapterTracker),
+    generateIsolatedExercise('rewriting', safeCounts.rewriting, topic, languageContext, chapterTracker)
   ];
 
   // Wait for all exercises to complete
   const [
     [explanation, dialogueData, writingData],
     [readingData, clozeData, clozeMixData],
-    [fibData, mcqData, errorBundleData]
+    [fibData, mcqData, errorBundleData, rewritingData]
   ] = await Promise.all([
     Promise.all(independentPromises),
     Promise.all(sequentialPromises),
@@ -401,7 +429,8 @@ async function generateOrchestredExercises(topic, safeCounts, languageContext, c
     clozeMixData,
     fibData,
     mcqData,
-    errorBundleData
+    errorBundleData,
+    rewritingData
   };
 }
 
@@ -488,6 +517,8 @@ async function generateExerciseWithContext(exerciseType, count, topic, languageC
       return generateMCQ(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
     case 'error_bundles':
       return generateErrorBundles(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
+    case 'rewriting':
+      return generateRewriting(topic, count, { ...languageContext, baseText: context?.baseText, chapter: context?.chapter });
     default:
       return { items: [] };
   }

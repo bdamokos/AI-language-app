@@ -695,6 +695,7 @@ app.post('/api/generate', async (req, res) => {
       if (schemaName === 'fib_list') return 'fib';
       if (schemaName === 'mcq_list') return 'mcq';
       if (schemaName === 'writing_prompts_list') return 'writing_prompts';
+      if (schemaName === 'rewriting_list') return 'rewriting';
       if (/^cloze_single_/.test(String(schemaName))) return 'cloze';
       if (/^cloze_mixed_single_/.test(String(schemaName))) return 'cloze_mixed';
       if (schemaName === 'unified_cloze') return 'unified_cloze';
@@ -780,7 +781,7 @@ app.post('/api/generate', async (req, res) => {
       const seenList = seenCookieMatch ? decodeURIComponent(seenCookieMatch[1]).split(',').filter(Boolean) : [];
       const seenSet = new Set(seenList);
 
-      const useGrouped = type === 'fib' || type === 'mcq' || type === 'error_bundle';
+      const useGrouped = type === 'fib' || type === 'mcq' || type === 'error_bundle' || type === 'rewriting';
 
       // Special-case: For reading requests tied to a specific base text, if an item for this
       // base text already exists for the same topic/language/level/challenge combo, return it
@@ -898,6 +899,7 @@ app.post('/api/generate', async (req, res) => {
             case 'mcq': return Number(process.env.CACHE_PER_TYPE_FACTOR_MCQ || 5);
             case 'reading': return Number(process.env.CACHE_PER_TYPE_FACTOR_READING || 2);
             case 'error_bundle': return Number(process.env.CACHE_PER_TYPE_FACTOR_ERROR_BUNDLE || 5);
+            case 'rewriting': return Number(process.env.CACHE_PER_TYPE_FACTOR_REWRITING || 8);
             default: return 1;
           }
         })();

@@ -11,6 +11,7 @@ import { generateExplanation } from './exercises/ExplanationComponent.jsx';
 import { generateGuidedDialogues } from './exercises/GuidedDialogueExercise.jsx';
 import { generateWritingPrompts } from './exercises/WritingPromptExercise.jsx';
 import { generateReading } from './exercises/ReadingExercise.jsx';
+import { generateRewriting } from './exercises/RewritingExercise.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
 import { generateErrorBundles } from './exercises/ErrorBundleExercise.jsx';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
@@ -53,6 +54,7 @@ const AIPracticeApp = () => {
   const [dialogueCount, setDialogueCount] = useState(1);
   const [writingCount, setWritingCount] = useState(1);
   const [readingCount, setReadingCount] = useState(1);
+  const [rewritingCount, setRewritingCount] = useState(5);
   const [errorBundleCount, setErrorBundleCount] = useState(4);
   const { fetchBaseText } = useBaseText();
   const [readingBaseText, setReadingBaseText] = useState(null);
@@ -512,6 +514,15 @@ const AIPracticeApp = () => {
 
         <div className="flex gap-2">
           <button
+            onClick={generateRewritingOnly}
+            disabled={loadingRewritingOnly || !topic.trim()}
+            className="flex-1 bg-cyan-600 text-white py-2 px-4 rounded hover:bg-cyan-700 text-sm"
+          >{loadingRewritingOnly ? 'Generating...' : `Add Rewriting (${rewritingCount})`}</button>
+          <input type="number" min={1} max={20} value={rewritingCount} onChange={e => setRewritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+        </div>
+
+        <div className="flex gap-2">
+          <button
             onClick={generateErrorBundlesOnly}
             disabled={loadingErrorBundlesOnly || !topic.trim()}
             className="flex-1 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 text-sm"
@@ -623,12 +634,13 @@ const AIPracticeApp = () => {
     writing_prompts: lesson?.writing_prompts || [],
     reading_comprehension: lesson?.reading_comprehension || [],
     error_bundles: lesson?.error_bundles || [],
+    rewriting: lesson?.rewriting || [],
     error_bundles_shared_context: lesson?.error_bundles_shared_context || ''
   });
 
   const mergeLesson = (partial) => {
     // If we are adding any new exercises, reset checked state so they render unsubmitted
-    const addsExercises = ['fill_in_blanks', 'multiple_choice', 'cloze_passages', 'cloze_with_mixed_options', 'guided_dialogues', 'writing_prompts', 'reading_comprehension', 'error_bundles']
+    const addsExercises = ['fill_in_blanks', 'multiple_choice', 'cloze_passages', 'cloze_with_mixed_options', 'guided_dialogues', 'writing_prompts', 'reading_comprehension', 'error_bundles', 'rewriting']
       .some(k => Array.isArray(partial?.[k]) && partial[k].length > 0);
 
     setLesson(prev => {
@@ -1023,6 +1035,7 @@ const AIPracticeApp = () => {
 
   const [orchestratorValues, setOrchestratorValues] = useState({});
   const [loadingErrorBundlesOnly, setLoadingErrorBundlesOnly] = useState(false);
+  const [loadingRewritingOnly, setLoadingRewritingOnly] = useState(false);
   const generateErrorBundlesOnly = async () => {
     if (!topic.trim()) return;
     setLoadingErrorBundlesOnly(true);
@@ -1070,6 +1083,66 @@ const AIPracticeApp = () => {
       mergeLesson({ topic, error_bundles: timestampedItems, error_bundles_shared_context: '' });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate error bundles'); }
     finally { setLoadingErrorBundlesOnly(false); }
+  };
+
+  const generateRewritingOnly = async () => {
+    if (!topic.trim()) return;
+    setLoadingRewritingOnly(true);
+    setErrorMsg('');
+    try {
+      // Ensure we have a base text and chapter; reuse readingBaseText orchestration for isolated exercises
+      let base = readingBaseText;
+      if (!base) {
+        base = await fetchBaseText({
+          topic,
+          language: languageContext?.language || 'es',
+          level: languageContext?.level || 'B1',
+          challengeMode: !!languageContext?.challengeMode
+        });
+        if (base) setReadingBaseText(base);
+        setReadingChapterCursor(0);
+        readingCursorRef.current = 0;
+      }
+      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      const desired = Math.max(1, Math.min(20, Number(rewritingCount)));
+      const collected = [];
+      if (base && chapters.length > 0) {
+        let remaining = desired;
+        while (remaining > 0) {
+          let nextIndex = reserveNextReadingChapter(chapters.length);
+          if (nextIndex < 0) {
+            const excludeIds = [base.id].filter(Boolean);
+            const newBase = await fetchBaseText({
+              topic,
+              language: languageContext?.language || 'es',
+              level: languageContext?.level || 'B1',
+              challengeMode: !!languageContext?.challengeMode,
+              excludeIds
+            });
+            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
+            base = newBase;
+            setReadingBaseText(newBase);
+            setReadingChapterCursor(0);
+            readingCursorRef.current = 0;
+            chapters = newBase.chapters;
+            nextIndex = reserveNextReadingChapter(chapters.length);
+            if (nextIndex < 0) break;
+          }
+          const chapter = chapters[nextIndex];
+          const batchSize = Math.min(remaining, 10);
+          const resp = await generateRewriting(topic, batchSize, { ...languageContext, baseText: base, chapter });
+          if (resp?.items) {
+            collected.push(...resp.items);
+            remaining -= resp.items.length;
+          }
+        }
+      }
+      const items = collected.length > 0 ? collected : [];
+      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
+      if (!lesson) setLesson(ensureLessonSkeleton());
+      mergeLesson({ topic, rewriting: timestampedItems });
+    } catch (e) { console.error(e); setErrorMsg('Failed to generate rewriting'); }
+    finally { setLoadingRewritingOnly(false); }
   };
 
   const checkAnswers = () => {
