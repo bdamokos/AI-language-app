@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight, Globe, GraduationCap } from 'lucide-react';
 import Joyride, { STATUS } from 'react-joyride';
 import { schemaVersions } from '../shared/schemaVersions.js';
@@ -59,6 +59,27 @@ const AIPracticeApp = () => {
   const [readingChapterCursor, setReadingChapterCursor] = useState(0);
   const [errorBundleBaseText, setErrorBundleBaseText] = useState(null);
   const [errorBundleChapterCursor, setErrorBundleChapterCursor] = useState(0);
+
+  // Reservation cursors to avoid parallel overlap
+  const readingCursorRef = useRef(0);
+  const errorBundleCursorRef = useRef(0);
+
+  // Helpers to reserve chapters BEFORE starting generation
+  const reserveNextReadingChapter = (chaptersLen) => {
+    const current = readingCursorRef.current;
+    if (current >= chaptersLen) return -1;
+    readingCursorRef.current = current + 1;
+    setReadingChapterCursor(readingCursorRef.current);
+    return current;
+  };
+
+  const reserveNextErrorBundleChapter = (chaptersLen) => {
+    const current = errorBundleCursorRef.current;
+    if (current >= chaptersLen) return -1;
+    errorBundleCursorRef.current = current + 1;
+    setErrorBundleChapterCursor(errorBundleCursorRef.current);
+    return current;
+  };
 
   // Onboarding / tour state
   const [isPreTourRunning, setIsPreTourRunning] = useState(false);
@@ -250,6 +271,9 @@ const AIPracticeApp = () => {
     setReadingChapterCursor(0);
     setErrorBundleBaseText(null);
     setErrorBundleChapterCursor(0);
+    // Reset reservation cursors
+    readingCursorRef.current = 0;
+    errorBundleCursorRef.current = 0;
   };
 
   const insertAccent = (accent) => {
@@ -655,26 +679,24 @@ const AIPracticeApp = () => {
         });
         if (base) setReadingBaseText(base);
         setReadingChapterCursor(0);
+        readingCursorRef.current = 0;
       }
       const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
       const desired = Math.max(1, Math.min(20, Number(exerciseCount)));
       const collected = [];
       if (base && chapters.length > 0) {
         let remaining = desired;
-        let chapterIndex = readingChapterCursor;
-
-        while (remaining > 0 && chapterIndex < chapters.length) {
-          const chapter = chapters[chapterIndex];
+        while (remaining > 0) {
+          const nextIndex = reserveNextReadingChapter(chapters.length);
+          if (nextIndex < 0) break;
+          const chapter = chapters[nextIndex];
           const batchSize = Math.min(remaining, 10); // Request up to 10 exercises per chapter
           const resp = await generateFIB(topic, batchSize, { ...languageContext, baseText: base, chapter });
           if (resp?.items) {
             collected.push(...resp.items);
             remaining -= resp.items.length;
           }
-          chapterIndex++;
         }
-        // Update cursor to the next unused chapter
-        setReadingChapterCursor(chapterIndex);
       }
       const items = collected.length > 0 ? collected : [];
       // Add creation timestamp to each exercise
@@ -715,19 +737,19 @@ const AIPracticeApp = () => {
         });
         if (base) setReadingBaseText(base);
         setReadingChapterCursor(0);
+        readingCursorRef.current = 0;
       }
       const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
       const desired = Math.max(1, Math.min(10, Number(clozeCount)));
       const collected = [];
       if (base && chapters.length > 0) {
         for (let i = 0; i < desired; i++) {
-          const index = Math.min(readingChapterCursor + i, chapters.length - 1);
+          const index = reserveNextReadingChapter(chapters.length);
+          if (index < 0) break;
           const chapter = chapters[index];
           const resp = await generateCloze(topic, { ...languageContext, baseText: base, chapter });
           if (resp?.items?.[0]) collected.push(resp.items[0]);
         }
-        // Advance cursor
-        setReadingChapterCursor((prev) => Math.min(prev + desired, chapters.length - 1));
       }
       const items = collected.length > 0 ? collected : [];
       // Add creation timestamp to each exercise
@@ -754,19 +776,19 @@ const AIPracticeApp = () => {
         });
         if (base) setReadingBaseText(base);
         setReadingChapterCursor(0);
+        readingCursorRef.current = 0;
       }
       const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
       const desired = Math.max(1, Math.min(10, Number(clozeMixCount)));
       const collected = [];
       if (base && chapters.length > 0) {
         for (let i = 0; i < desired; i++) {
-          const index = Math.min(readingChapterCursor + i, chapters.length - 1);
+          const index = reserveNextReadingChapter(chapters.length);
+          if (index < 0) break;
           const chapter = chapters[index];
           const resp = await generateClozeMixed(topic, { ...languageContext, baseText: base, chapter });
           if (resp?.items?.[0]) collected.push(resp.items[0]);
         }
-        // Advance cursor
-        setReadingChapterCursor((prev) => Math.min(prev + desired, chapters.length - 1));
       }
       const items = collected.length > 0 ? collected : [];
       // Add creation timestamp to each exercise
@@ -916,14 +938,15 @@ const AIPracticeApp = () => {
           });
           if (base) setReadingBaseText(base);
           setReadingChapterCursor(0);
+          readingCursorRef.current = 0;
         }
         const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
         if (base && chapters.length > 0) {
-          const index = Math.min(readingChapterCursor, chapters.length - 1);
-          const chapter = chapters[index];
-          data = await generateReading(topic, Number(readingCount), { ...languageContext, baseText: base, chapter });
-          // Advance cursor for next click
-          setReadingChapterCursor((prev) => Math.min(prev + 1, chapters.length - 1));
+          const index = reserveNextReadingChapter(chapters.length);
+          if (index >= 0) {
+            const chapter = chapters[index];
+            data = await generateReading(topic, Number(readingCount), { ...languageContext, baseText: base, chapter });
+          }
         }
       } catch {
         // Fallback to non-base-text generation
@@ -966,6 +989,7 @@ const AIPracticeApp = () => {
         // If it throws an error, we let it bubble up
         setErrorBundleBaseText(base);
         setErrorBundleChapterCursor(0);
+        errorBundleCursorRef.current = 0;
       }
 
       const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
@@ -974,20 +998,17 @@ const AIPracticeApp = () => {
 
       if (base && chapters.length > 0) {
         let remaining = desired;
-        let chapterIndex = errorBundleChapterCursor;
-
-        while (remaining > 0 && chapterIndex < chapters.length) {
-          const chapter = chapters[chapterIndex];
+        while (remaining > 0) {
+          const nextIndex = reserveNextErrorBundleChapter(chapters.length);
+          if (nextIndex < 0) break;
+          const chapter = chapters[nextIndex];
           const batchSize = Math.min(remaining, 5); // Request up to 5 exercises per chapter
           const resp = await generateErrorBundles(topic, batchSize, { ...languageContext, baseText: base, chapter });
           if (resp?.items) {
             collected.push(...resp.items);
             remaining -= resp.items.length;
           }
-          chapterIndex++;
         }
-        // Update cursor to the next unused chapter
-        setErrorBundleChapterCursor(chapterIndex);
       }
 
       const items = collected.length > 0 ? collected : [];
@@ -1174,6 +1195,9 @@ const AIPracticeApp = () => {
     setReadingChapterCursor(0);
     setErrorBundleBaseText(null);
     setErrorBundleChapterCursor(0);
+    // Reset reservation cursors
+    readingCursorRef.current = 0;
+    errorBundleCursorRef.current = 0;
   };
 
   const score = getScore();
