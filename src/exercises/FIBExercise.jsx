@@ -157,6 +157,7 @@ Requirements:
         level, 
         challengeMode, 
         topic,
+        count: Number(count) || 1,
         baseTextId: baseText?.id,
         chapterNumber: chapter?.number,
         chapterTitle: chapter?.title

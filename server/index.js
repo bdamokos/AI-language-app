@@ -757,8 +757,11 @@ app.post('/api/generate', async (req, res) => {
     if (cacheLayout && type && type !== 'explanation' && type !== 'unknown') {
       const poolKey = `${type}:${languageName}:${level}:${challengeMode}:${currentModel}:${schemaVersion}:${promptSha12}`;
       const bucketKey = makeBucketKey({ type, language: languageName, level, challengeMode, grammarTopic });
-      // Parse desired count if present (supports prompt text and JSON payloads)
+      // Parse desired count if present (supports prompt text, JSON payloads, and metadata)
       let desiredCount = 1;
+      if (metadata && typeof metadata.count === 'number' && Number.isFinite(metadata.count)) {
+        desiredCount = Math.max(1, Math.min(50, Math.floor(metadata.count)));
+      }
       const countMatch = user.match(/Create exactly\s+(\d+)\b/i);
       if (countMatch) desiredCount = Math.max(1, Math.min(50, Number(countMatch[1])));
       try {
@@ -823,8 +826,8 @@ app.post('/api/generate', async (req, res) => {
       // Build a cross-model family key so we include other-model pools too
       const family = { type, language: languageName, level, challengeMode, schemaVersion, promptSha12 };
       const { items: cachedItems, shas: cachedShas } = useGrouped
-        ? await selectUnseenCrossModelGrouped(cacheLayout, family, seenSet, desiredCount, currentModel)
-        : await selectUnseenCrossModel(cacheLayout, family, seenSet, desiredCount, currentModel);
+        ? await selectUnseenCrossModelGrouped(cacheLayout, family, seenSet, desiredCount, currentModel, grammarTopic)
+        : await selectUnseenCrossModel(cacheLayout, family, seenSet, desiredCount, currentModel, grammarTopic);
       // Build initial results from cache
       let resultPairs = cachedItems.map((r, idx) => {
         const it = { ...r.content };

@@ -463,9 +463,18 @@ function collectPoolFamilyShas(idx, family) {
   return deduped;
 }
 
-export async function selectUnseenCrossModel(layout, family, seenSet, count, currentModel) {
+export async function selectUnseenCrossModel(layout, family, seenSet, count, currentModel, grammarTopic = null) {
   const idx = await loadExercisesIndex(layout);
-  const candidates = collectPoolFamilyShas(idx, family);
+  const allCandidates = collectPoolFamilyShas(idx, family);
+  // Filter by grammarTopic if provided to ensure topic-appropriate items are returned
+  const normalizedTopic = typeof grammarTopic === 'string' && grammarTopic.trim() ? grammarTopic.trim().toLowerCase() : null;
+  const candidates = normalizedTopic
+    ? allCandidates.filter(sha => {
+        const it = idx.items[sha];
+        const metaTopic = String(it?.meta?.grammarTopic || '').trim().toLowerCase();
+        return metaTopic === normalizedTopic;
+      })
+    : allCandidates;
   const chosen = pickUnseenWeighted(candidates, seenSet, idx, count, currentModel);
   const items = [];
   for (const sha of chosen) {
@@ -475,9 +484,17 @@ export async function selectUnseenCrossModel(layout, family, seenSet, count, cur
   return { items, shas: chosen };
 }
 
-export async function selectUnseenCrossModelGrouped(layout, family, seenSet, count, currentModel) {
+export async function selectUnseenCrossModelGrouped(layout, family, seenSet, count, currentModel, grammarTopic = null) {
   const idx = await loadExercisesIndex(layout);
-  const candidates = collectPoolFamilyShas(idx, family);
+  const allCandidates = collectPoolFamilyShas(idx, family);
+  const normalizedTopic = typeof grammarTopic === 'string' && grammarTopic.trim() ? grammarTopic.trim().toLowerCase() : null;
+  const candidates = normalizedTopic
+    ? allCandidates.filter(sha => {
+        const it = idx.items[sha];
+        const metaTopic = String(it?.meta?.grammarTopic || '').trim().toLowerCase();
+        return metaTopic === normalizedTopic;
+      })
+    : allCandidates;
   const candidateSet = new Set(candidates);
   const groups = [];
   const seenPrefix = (sha) => seenSet.has(String(sha).slice(0, 12));

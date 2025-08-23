@@ -668,7 +668,7 @@ const AIPracticeApp = () => {
     setLoadingFibOnly(true);
     setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter
+      // Ensure we have a base text and chapter; if exhausted, fetch a new base text
       let base = readingBaseText;
       if (!base) {
         base = await fetchBaseText({
@@ -681,14 +681,32 @@ const AIPracticeApp = () => {
         setReadingChapterCursor(0);
         readingCursorRef.current = 0;
       }
-      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
       const desired = Math.max(1, Math.min(20, Number(exerciseCount)));
       const collected = [];
       if (base && chapters.length > 0) {
         let remaining = desired;
         while (remaining > 0) {
-          const nextIndex = reserveNextReadingChapter(chapters.length);
-          if (nextIndex < 0) break;
+          let nextIndex = reserveNextReadingChapter(chapters.length);
+          if (nextIndex < 0) {
+            // Exhausted chapters for current base text; fetch a new one and reset cursor
+            const excludeIds = [base.id].filter(Boolean);
+            const newBase = await fetchBaseText({
+              topic,
+              language: languageContext?.language || 'es',
+              level: languageContext?.level || 'B1',
+              challengeMode: !!languageContext?.challengeMode,
+              excludeIds
+            });
+            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
+            base = newBase;
+            setReadingBaseText(newBase);
+            setReadingChapterCursor(0);
+            readingCursorRef.current = 0;
+            chapters = newBase.chapters;
+            nextIndex = reserveNextReadingChapter(chapters.length);
+            if (nextIndex < 0) break;
+          }
           const chapter = chapters[nextIndex];
           const batchSize = Math.min(remaining, 10); // Request up to 10 exercises per chapter
           const resp = await generateFIB(topic, batchSize, { ...languageContext, baseText: base, chapter });
@@ -726,7 +744,7 @@ const AIPracticeApp = () => {
     setLoadingClozeOnly(true);
     setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter
+      // Ensure we have a base text and chapter; if exhausted, fetch a new base text
       let base = readingBaseText;
       if (!base) {
         base = await fetchBaseText({
@@ -739,13 +757,30 @@ const AIPracticeApp = () => {
         setReadingChapterCursor(0);
         readingCursorRef.current = 0;
       }
-      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
       const desired = Math.max(1, Math.min(10, Number(clozeCount)));
       const collected = [];
       if (base && chapters.length > 0) {
         for (let i = 0; i < desired; i++) {
-          const index = reserveNextReadingChapter(chapters.length);
-          if (index < 0) break;
+          let index = reserveNextReadingChapter(chapters.length);
+          if (index < 0) {
+            const excludeIds = [base.id].filter(Boolean);
+            const newBase = await fetchBaseText({
+              topic,
+              language: languageContext?.language || 'es',
+              level: languageContext?.level || 'B1',
+              challengeMode: !!languageContext?.challengeMode,
+              excludeIds
+            });
+            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
+            base = newBase;
+            setReadingBaseText(newBase);
+            setReadingChapterCursor(0);
+            readingCursorRef.current = 0;
+            chapters = newBase.chapters;
+            index = reserveNextReadingChapter(chapters.length);
+            if (index < 0) break;
+          }
           const chapter = chapters[index];
           const resp = await generateCloze(topic, { ...languageContext, baseText: base, chapter });
           if (resp?.items?.[0]) collected.push(resp.items[0]);
@@ -765,7 +800,7 @@ const AIPracticeApp = () => {
     setLoadingClozeMixOnly(true);
     setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter
+      // Ensure we have a base text and chapter; if exhausted, fetch a new base text
       let base = readingBaseText;
       if (!base) {
         base = await fetchBaseText({
@@ -778,13 +813,30 @@ const AIPracticeApp = () => {
         setReadingChapterCursor(0);
         readingCursorRef.current = 0;
       }
-      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
+      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
       const desired = Math.max(1, Math.min(10, Number(clozeMixCount)));
       const collected = [];
       if (base && chapters.length > 0) {
         for (let i = 0; i < desired; i++) {
-          const index = reserveNextReadingChapter(chapters.length);
-          if (index < 0) break;
+          let index = reserveNextReadingChapter(chapters.length);
+          if (index < 0) {
+            const excludeIds = [base.id].filter(Boolean);
+            const newBase = await fetchBaseText({
+              topic,
+              language: languageContext?.language || 'es',
+              level: languageContext?.level || 'B1',
+              challengeMode: !!languageContext?.challengeMode,
+              excludeIds
+            });
+            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
+            base = newBase;
+            setReadingBaseText(newBase);
+            setReadingChapterCursor(0);
+            readingCursorRef.current = 0;
+            chapters = newBase.chapters;
+            index = reserveNextReadingChapter(chapters.length);
+            if (index < 0) break;
+          }
           const chapter = chapters[index];
           const resp = await generateClozeMixed(topic, { ...languageContext, baseText: base, chapter });
           if (resp?.items?.[0]) collected.push(resp.items[0]);

@@ -1773,35 +1773,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Render with @react-pdf/renderer
       const blob = await pdf(<PDFDocument />).toBlob();
 
-      // @react-pdf/renderer should handle # links natively, but try basic post-processing for enhanced compatibility
-      let finalBlob = blob;
-      try {
-        console.log('[PDF] Attempting to enhance PDF with pdf-lib for better cross-references...');
-        const arrayBuffer = await blob.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(arrayBuffer);
-        
-        // Basic validation - ensure PDF loaded correctly
-        const pages = pdfDoc.getPages();
-        if (pages.length < 2) {
-          console.warn('[PDF] Expected multi-page PDF, got', pages.length, 'pages');
-        }
-        
-        // Try to save with enhanced settings
-        const processed = await pdfDoc.save({ 
-          useObjectStreams: false,
-          addDefaultPage: false
-        });
-        
-        finalBlob = new Blob([processed], { type: 'application/pdf' });
-        console.log('[PDF] PDF post-processing successful');
-        
-      } catch (ppErr) {
-        console.warn('[PDF] PDF post-processing failed, using original PDF:', ppErr.message);
-        finalBlob = blob; // Fallback to original
-      }
-
       // Download the final PDF
-      const url = URL.createObjectURL(finalBlob);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = `language-practice-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.pdf`;
