@@ -184,8 +184,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
   const [preparedImages, setPreparedImages] = useState({});
   
   // Use simple ASCII arrows that work reliably in PDFs
-  const DOWN_ARROW = ' ↓';
-  const UP_ARROW = ' {UP_ARROW}';
+  const DOWN_ARROW = '[jump to solution]';
+  const UP_ARROW = '[jump to exercise]';
 
   // Collect all generated images from the global store and lesson data
   useEffect(() => {
@@ -881,8 +881,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
             fontWeight: 'bold', 
             color: '#059669'
           }]}> 
-            {answer}
-          </Text>
+            {answer}</Text>
         );
       }
     }
@@ -1209,8 +1208,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                     <View key={`fib-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
                         <Text id={`exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
-                          <Link src={`#solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', color: '#2563eb', textDecoration: 'none' }]}>
-                            {String.fromCharCode(97 + i)}.{DOWN_ARROW}
+                          
+                            {String.fromCharCode(97 + i)}. <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                           </Link>
                         </Text>
                         <View style={{ flex: 1 }}>
@@ -1225,8 +1224,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`mcq-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
                       <Text id={`exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', color: '#2563eb', textDecoration: 'none' }]}>
-                          {String.fromCharCode(97 + i)}.{DOWN_ARROW}
+                        
+                          {String.fromCharCode(97 + i)}. <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link> {item.question}
                       </Text>
                       {item.options && Array.isArray(item.options) && (
@@ -1246,8 +1245,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`cloze-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
                       <Text id={`exercise-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Exercise {i + 1}{DOWN_ARROW}
+                        
+                          Exercise {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
@@ -1270,8 +1269,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`clozeMix-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
                       <Text id={`exercise-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Exercise {i + 1}{DOWN_ARROW}
+                        
+                          Exercise {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
@@ -1293,8 +1292,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`reading-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
                       <Text id={`exercise-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Passage {i + 1}{DOWN_ARROW}
+                        
+                          Passage {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.passage && <Text style={styles.passage}>{item.passage}</Text>}
@@ -1378,8 +1377,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`dialogue-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
                       <Text id={`exercise-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Dialogue {i + 1}{DOWN_ARROW}
+                        
+                          Dialogue {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
@@ -1411,8 +1410,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`writing-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
                       <Text id={`exercise-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Set {i + 1}{DOWN_ARROW}
+                        
+                          Set {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
@@ -1440,8 +1439,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`err-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
                       <Text id={`exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
-                        <Link src={`#solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', color: '#2563eb', textDecoration: 'none' }]}>
-                          {String.fromCharCode(97 + i)}.{DOWN_ARROW}
+                        
+                          {String.fromCharCode(97 + i)}. <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>
                       </Text>
                       {!errorContextShown && typeof lesson.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context ? (
@@ -1490,8 +1489,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                     <View key={`fib-sol-${blockIdx}-${i}`} style={{ marginBottom: 15 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 4 }}>
                         <Text id={`solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginRight: 4 }]}>
-                          <Link src={`#exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', color: '#2563eb', textDecoration: 'none' }]}>
-                            {String.fromCharCode(97 + i)}.{UP_ARROW}
+                          
+                            {String.fromCharCode(97 + i)}. <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                           </Link>
                         </Text>
                         <View style={{ flex: 1 }}>
@@ -1508,8 +1507,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`mcq-sol-${blockIdx}-${i}`} style={{ marginBottom: 15 }}>
                       <Text id={`solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', color: '#2563eb', textDecoration: 'none' }]}>
-                          {String.fromCharCode(97 + i)}.{UP_ARROW}
+                        
+                          {String.fromCharCode(97 + i)}. <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link> {item.question}
                       </Text>
                       {item.options && Array.isArray(item.options) && (
@@ -1548,8 +1547,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`cloze-sol-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
                       <Text id={`solution-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Exercise {i + 1}{UP_ARROW}
+                        
+                          Exercise {i + 1} <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
@@ -1564,8 +1563,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`clozeMix-sol-${blockIdx}-${i}`} style={{ marginBottom: 20 }}>
                       <Text id={`solution-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Exercise {i + 1}{UP_ARROW}
+                        
+                          Exercise {i + 1} <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>
@@ -1579,8 +1578,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`reading-sol-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
                       <Text id={`solution-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Passage {i + 1}{UP_ARROW}
+                        
+                          Passage {i + 1} <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {Array.isArray(item.true_false) && item.true_false.length > 0 && (
@@ -1647,8 +1646,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`dialogue-sol-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
                       <Text id={`solution-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Dialogue {i + 1}{UP_ARROW}
+                        
+                          Dialogue {i + 1} <Link src={`#exercise-${anchorId}`} ><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       <View style={{ gap: 4 }}>
@@ -1666,8 +1665,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`writing-sol-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
                       <Text id={`solution-${anchorId}`} style={styles.exerciseTitle}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.exerciseTitle, { color: '#2563eb', textDecoration: 'none' }]}>
-                          Set {i + 1}{UP_ARROW}
+                        
+                          Set {i + 1} <Link src={`#exercise-${anchorId}`}> <Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {(item.prompts || []).map((p, pi) => (
@@ -1692,8 +1691,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   return (
                     <View key={`err-sol-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
                       <Text id={`solution-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}>
-                        <Link src={`#exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', color: '#2563eb', textDecoration: 'none' }]}>
-                          {String.fromCharCode(97 + i)}.{UP_ARROW}
+                        
+                          {String.fromCharCode(97 + i)}. <Link src={`#exercise-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{UP_ARROW}</Text>
                         </Link>
                       </Text>
                       {!isFix ? (
