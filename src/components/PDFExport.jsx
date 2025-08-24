@@ -123,7 +123,8 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   image: {
-    width: 220
+    width: 220,
+    height: 220
   },
   imageCaption: {
     fontSize: 10,
@@ -1503,12 +1504,12 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                       {item.original && (
                         <Text style={styles.text}>Original: {item.original}</Text>
                       )}
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> {buildBlank(item.answer || '', 1.5)}
                         {hintNumber && (
                           <Text style={[styles.inlineText, { fontSize: 9 }]}>[{hintNumber}]</Text>
                         )}
                       </Text>
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> {buildBlank(item.answer || '', 1.5)}</Text>
                       {item.context && (
                         <Text style={styles.context}>Context: {item.context}</Text>
                       )}
