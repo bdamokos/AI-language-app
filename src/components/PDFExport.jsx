@@ -1428,8 +1428,10 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   );
                 }
                 if (type === 'dialogue') {
-                  const speakers = Array.from(new Set((item.turns || []).map(t => t.speaker).filter(Boolean)));
+                  const turns = Array.isArray(item.turns) ? item.turns : [];
+                  const speakers = Array.from(new Set(turns.map(t => t && t.speaker).filter(Boolean)));
                   const hiddenSpeaker = item.hide_speaker || item.suggested_hide_speaker || (speakers.length > 1 ? speakers[1] : (speakers[0] || ''));
+                  const firstHiddenIdx = turns.findIndex(t => t && t.speaker === hiddenSpeaker);
                   return (
                     <View key={`dialogue-${blockIdx}-${i}`} style={{ marginBottom: 16 }}>
                       <Text id={`exercise-${anchorId}`} style={styles.exerciseTitle}>
@@ -1437,17 +1439,21 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           Dialogue {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
+                      {item.conversationContext && (
+                        <Text style={styles.context}>Conversation Context: {item.conversationContext}</Text>
+                      )}
                       {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
                       <View style={{ gap: 4 }}>
-                        {(item.turns || []).map((turn, ti) => {
-                          const isHidden = hiddenSpeaker && turn.speaker === hiddenSpeaker;
+                        {turns.map((turn, ti) => {
+                          const isHiddenTurn = hiddenSpeaker && turn.speaker === hiddenSpeaker;
+                          const shouldShowTurn = !isHiddenTurn || (firstHiddenIdx !== -1 && ti === firstHiddenIdx);
                           return (
                             <View key={`dlg-${blockIdx}-${i}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
                               <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
-                              {isHidden ? (
-                                <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________</Text>
-                              ) : (
+                              {shouldShowTurn ? (
                                 <Text style={styles.inlineText}>{turn.text}</Text>
+                              ) : (
+                                <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> {buildBlank(turn.text || '', 1.5)}</Text>
                               )}
                             </View>
                           );
