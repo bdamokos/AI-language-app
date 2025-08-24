@@ -594,7 +594,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
   };
 
   // Helper to build a blank string proportional to expected answer length
-  const buildBlank = (expected = '', factor = 1.7) => {
+  const buildBlank = (expected = '', factor = 2.7) => {
     const len = Math.max(8, Math.round(String(expected || '').length * factor));
     return Array(len).fill('_').join('');
   };
@@ -1309,17 +1309,13 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
-                      <View style={{ flexDirection: 'row', gap: 15 }}>
-                        <View style={{ flex: 1 }}>
-                          <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{elements}</View>
-                          {renderFootnotes(footnotes)}
+                      <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{elements}</View>
+                      {renderFootnotes(footnotes)}
+                      {getImageByKey(`cloze:${idx}`) && (
+                        <View style={{ alignItems: 'center', marginTop: 8 }}>
+                          {renderImage(getImageByKey(`cloze:${idx}`), 'AI-generated illustration')}
                         </View>
-                        {getImageByKey(`cloze:${idx}`) && (
-                          <View style={{ width: 150 }}>
-                            {renderImage(getImageByKey(`cloze:${idx}`), 'AI-generated illustration')}
-                          </View>
-                        )}
-                      </View>
+                      )}
                     </View>
                   );
                 }
