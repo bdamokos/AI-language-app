@@ -1254,7 +1254,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           const { blocks, totals } = groupTimelineIntoBlocks(buildExerciseTimeline(lesson));
           let errorContextShown = false;
           return blocks.map((block, blockIdx) => (
-            <View key={`block-${blockIdx}`} style={[styles.section, styles.block, { backgroundColor: blockBackgrounds[blockIdx] || 'rgb(246, 247, 248)' }]}>
+            <View key={`block-${blockIdx}`} style={[styles.section, styles.block, { backgroundColor: blockBackgrounds[blockIdx] || 'rgb(246, 247, 248)' }]}> 
               <Text style={styles.sectionTitle}>
                 {block.displayName}
                 {totals[block.type] > 1 ? ` — Set ${block.blockIndex}` : ''}
@@ -1484,9 +1484,17 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   );
                 }
                 if (type === 'rewrite') {
+                  // Aggregate hint footnotes at the block level
+                  block._rewriteFootnotes = block._rewriteFootnotes || [];
+                  block._rewriteFootnoteCounter = block._rewriteFootnoteCounter || 1;
+                  let hintNumber = null;
+                  if (item.hint) {
+                    hintNumber = block._rewriteFootnoteCounter++;
+                    block._rewriteFootnotes.push({ number: hintNumber, text: item.hint });
+                  }
                   return (
                     <View key={`rewrite-${blockIdx}-${i}`} style={{ marginBottom: 12 }}>
-                      <Text id={`exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }] }>
+                      <Text id={`exercise-${anchorId}`} style={[styles.text, { fontWeight: 'bold', marginBottom: 4 }]}> 
                         {String.fromCharCode(97 + i)}. <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text></Link>
                       </Text>
                       {item.instruction && (
@@ -1495,16 +1503,14 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                       {item.original && (
                         <Text style={styles.text}>Original: {item.original}</Text>
                       )}
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
+                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________
+                        {hintNumber && (
+                          <Text style={[styles.inlineText, { fontSize: 9 }]}>[{hintNumber}]</Text>
+                        )}
+                      </Text>
                       <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> ____________________________________</Text>
                       {item.context && (
                         <Text style={styles.context}>Context: {item.context}</Text>
-                      )}
-                      {item.hint && (
-                        <View style={styles.hints}>
-                          <Text style={[styles.text, { fontSize: 10, marginBottom: 2 }]}>Hint:</Text>
-                          <Text style={styles.hintItem}>{item.hint}</Text>
-                        </View>
                       )}
                     </View>
                   );
@@ -1545,6 +1551,10 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                 }
                 return null;
               })}
+              {/* Render aggregated footnotes for rewriting at end of set */}
+              {block._rewriteFootnotes && block._rewriteFootnotes.length > 0 && (
+                renderFootnotes(block._rewriteFootnotes, 'Hints:')
+              )}
             </View>
           ));
         })()}
