@@ -1025,6 +1025,206 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
+// Streaming explanation generation (SSE)
+// Produces Server-Sent Events with JSON payloads:
+// { type: 'prefill', explanation } when served from cache
+// { type: 'delta', text } for incremental markdown chunks
+// { type: 'final', explanation } at completion
+app.post('/api/explanations/stream', async (req, res) => {
+  try {
+    const { topic, language = 'es', level = 'B1', challengeMode = false } = req.body || {};
+    const languageName = String(language || 'es');
+    const lvl = String(level || 'B1');
+    const ch = !!challengeMode;
+
+    const system = `You are a language pedagogy expert. Provide a concise, insightful explanation of a ${languageName} grammar concept with examples. Target CEFR level: ${lvl}${ch ? ' (slightly challenging)' : ''}. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.\n Explanations should be in the target language, with the target level of difficulty. If necessary, depending on the user's level, you may include translations in English.`;
+    const user = `Explain the grammar concept: ${String(topic || '').trim()}.
+
+Target Language: ${languageName}
+Target Level: ${lvl}${ch ? ' (slightly challenging)' : ''}
+
+Keep it 200-600 words and ensure vocabulary and grammar complexity matches ${lvl} level${ch ? ' with separate advanced explanations for more eager learners' : ''}.
+Output as markdown. Start with a top-level heading (#) for the title, then the explanation.`;
+
+    // Build persistent cache key consistent with /api/generate
+    let explanationPersistentKey = null;
+    const schemaVersion = schemaVersions.explanation || 1;
+    const currentModel = runtimeConfig.provider === 'openrouter' ? runtimeConfig.openrouter.model : runtimeConfig.ollama.model;
+    const promptSha = sha256Hex(`${system}\n${user}\nexplanation\n${languageName}:${lvl}:${ch}`);
+    const promptSha12 = promptSha.slice(0, 12);
+    explanationPersistentKey = `exp:${languageName}:${lvl}:${ch}:${String(topic || '').trim() || 'unknown'}:${currentModel}:${schemaVersion}:${promptSha12}`;
+
+    // SSE headers
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive'
+    });
+    res.flushHeaders?.();
+    const sse = (obj) => {
+      try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
+    };
+    const keepAlive = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 15000);
+
+    // If cached, prefill and end
+    if (cacheLayout && explanationPersistentKey) {
+      try {
+        const rec = await getExplanation(cacheLayout, explanationPersistentKey);
+        if (rec && rec.content) {
+          sse({ type: 'prefill', explanation: { ...rec.content, _cacheKey: explanationPersistentKey } });
+          clearInterval(keepAlive);
+          return res.end();
+        }
+      } catch {}
+    }
+
+    // Helper to parse title from accumulated markdown
+    const extractTitle = (md, fallback) => {
+      const lines = String(md || '').split(/\r?\n/);
+      for (const ln of lines) {
+        const m = ln.match(/^\s*#{1,3}\s+(.+)$/);
+        if (m) return m[1].trim();
+      }
+      // Also handle possible "Title: ..." patterns
+      const t = String(md || '').match(/\bTitle\s*:\s*([^\n]+)/i);
+      return (t ? t[1].trim() : null) || String(fallback || '').trim() || 'Explanation';
+    };
+
+    // Streaming per provider
+    const provider = runtimeConfig.provider;
+    let aborted = false;
+    req.on('close', () => { aborted = true; });
+    let content = '';
+    let title = `Generating “${String(topic || '').trim()}”...`;
+
+    if (provider === 'openrouter') {
+      assertEnv(runtimeConfig.openrouter.apiKey, 'Missing OPENROUTER_API_KEY');
+      const payload = {
+        model: runtimeConfig.openrouter.model,
+        messages: [
+          system ? { role: 'system', content: system } : null,
+          { role: 'user', content: user }
+        ].filter(Boolean),
+        max_tokens: runtimeConfig.maxTokens,
+        stream: true,
+        reasoning: /^openai\/gpt-/i.test(String(runtimeConfig.openrouter.model)) ? { effort: 'low' } : { exclude: true, effort: 'low', enabled: false }
+      };
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'authorization': `Bearer ${runtimeConfig.openrouter.apiKey}`,
+          'http-referer': runtimeConfig.openrouter.appUrl || 'http://localhost:5173',
+          'x-title': 'Language AI App'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok || !resp.body) {
+        clearInterval(keepAlive);
+        return res.end();
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n');
+        buffer = parts.pop() || '';
+        for (const line of parts) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith(':')) continue;
+          if (trimmed === 'data: [DONE]') continue;
+          if (!trimmed.startsWith('data:')) continue;
+          const jsonStr = trimmed.slice(5).trim();
+          try {
+            const evt = JSON.parse(jsonStr);
+            const choice = evt.choices?.[0] || {};
+            const delta = choice.delta?.content || choice.message?.content || '';
+            if (delta) {
+              content += delta;
+              // Try to extract title early
+              title = extractTitle(content, title);
+              sse({ type: 'delta', text: delta, title });
+            }
+          } catch {}
+        }
+      }
+    } else if (provider === 'ollama') {
+      const normalizedHost = validateAndNormalizeOllamaHost(runtimeConfig.ollama.host) || 'http://127.0.0.1:11434';
+      const resp = await fetch(`${normalizedHost}/api/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: runtimeConfig.ollama.model,
+          messages: [
+            system ? { role: 'system', content: system } : null,
+            { role: 'user', content: user }
+          ].filter(Boolean),
+          stream: true
+        })
+      });
+      if (!resp.ok || !resp.body) {
+        clearInterval(keepAlive);
+        return res.end();
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
+          if (!line.trim()) continue;
+          try {
+            const evt = JSON.parse(line);
+            const delta = evt?.message?.content || evt?.response || '';
+            if (delta) {
+              content += delta;
+              title = extractTitle(content, title);
+              sse({ type: 'delta', text: delta, title });
+            }
+          } catch {}
+        }
+      }
+    } else {
+      // Unsupported provider for streaming; end gracefully
+      clearInterval(keepAlive);
+      return res.end();
+    }
+
+    // Finalize explanation object
+    const finalTitle = extractTitle(content, topic);
+    // Remove the title heading line from content if present
+    let finalContent = String(content || '');
+    finalContent = finalContent.replace(/^\s*#{1,3}\s+.+\r?\n?/, '');
+    const explanation = { title: finalTitle, content_markdown: finalContent };
+
+    // Persist to cache
+    if (cacheLayout && explanationPersistentKey) {
+      try {
+        const meta = { language: languageName, level: lvl, challengeMode: ch, grammarConcept: String(topic || '').trim(), model: currentModel, schemaVersion, promptSha, promptSha12 };
+        const cap = Number(process.env.CACHE_EXPLANATIONS_MAX || 1000);
+        await setExplanation(cacheLayout, explanationPersistentKey, meta, explanation, cap);
+      } catch {}
+    }
+    sse({ type: 'final', explanation: explanationPersistentKey ? { ...explanation, _cacheKey: explanationPersistentKey } : explanation });
+    clearInterval(keepAlive);
+    return res.end();
+  } catch (err) {
+    try {
+      res.set({ 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err?.message || 'Failed to stream explanation' })}\n\n`);
+      res.end();
+    } catch {}
+  }
+});
+
 // Base text selection/generation endpoint
 app.get('/api/base-text-content/:baseTextId', async (req, res) => {
   try {
@@ -2171,5 +2371,4 @@ app.listen(PORT, () => {
   console.log(`[FALAI] Startup - API key loaded: ${!!runtimeConfig.falai.apiKey}, enabled: ${runtimeConfig.falai.enabled}`);
   console.log(`[FALAI] Environment - API key: ${!!process.env.FALAI_API_KEY}, enabled: ${process.env.FALAI_ENABLED}`);
 });
-
 

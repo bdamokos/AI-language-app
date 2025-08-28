@@ -166,3 +166,57 @@ Keep it 200-600 words and ensure vocabulary and grammar complexity matches ${lev
 
   return response.json();
 }
+
+/**
+ * Stream explanation using SSE for quicker feedback
+ * @param {string} topic
+ * @param {{language:string, level:string, challengeMode:boolean}} languageContext
+ * @param {(partial: { type: 'prefill'|'delta'|'final'|'error', explanation?: any, text?: string, title?: string, error?: string }) => void} onUpdate
+ * @returns {Promise<{title:string, content_markdown:string, _cacheKey?:string}>}
+ */
+export async function generateExplanationStream(topic, languageContext = { language: 'es', level: 'B1', challengeMode: false }, onUpdate = () => {}) {
+  const body = {
+    topic: typeof topic === 'string' ? topic : (topic?.topic || topic?.text || ''),
+    language: languageContext?.language || 'es',
+    level: languageContext?.level || 'B1',
+    challengeMode: !!languageContext?.challengeMode
+  };
+  const resp = await fetch('/api/explanations/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  // If server fell back to JSON (non-stream), just return it
+  const ctype = resp.headers.get('content-type') || '';
+  if (!ctype.includes('text/event-stream')) {
+    if (!resp.ok) throw new Error(`Failed to stream explanation: ${resp.status}`);
+    const json = await resp.json().catch(() => null);
+    if (json && json.title && json.content_markdown) return json;
+    throw new Error('Unexpected response');
+  }
+  const reader = resp.body?.getReader();
+  if (!reader) throw new Error('Streaming not supported');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let final = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() || '';
+    for (const chunk of chunks) {
+      const line = chunk.split('\n').find(l => l.startsWith('data:')) || '';
+      if (!line) continue;
+      try {
+        const payload = JSON.parse(line.slice(5).trim());
+        onUpdate(payload);
+        if (payload.type === 'final' && payload.explanation) {
+          final = payload.explanation;
+        }
+      } catch {}
+    }
+  }
+  if (!final) throw new Error('Stream ended without final explanation');
+  return final;
+}

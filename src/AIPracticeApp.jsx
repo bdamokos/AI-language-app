@@ -7,7 +7,7 @@ import { scoreFIB, generateFIB } from './exercises/FIBExercise.jsx';
 import { scoreMCQ, generateMCQ } from './exercises/MCQExercise.jsx';
 import { scoreCloze, generateCloze } from './exercises/ClozeExercise.jsx';
 import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExercise.jsx';
-import { generateExplanation } from './exercises/ExplanationComponent.jsx';
+import { generateExplanation, generateExplanationStream } from './exercises/ExplanationComponent.jsx';
 import { generateGuidedDialogues } from './exercises/GuidedDialogueExercise.jsx';
 import { generateWritingPrompts } from './exercises/WritingPromptExercise.jsx';
 import { generateReading } from './exercises/ReadingExercise.jsx';
@@ -234,24 +234,29 @@ const AIPracticeApp = () => {
     if (context.topic) {
       setLoadingLesson(true);
       setErrorMsg('');
-      setLesson(null);
+      // Seed skeleton with placeholder explanation so UI shows streaming immediately
+      setLesson({
+        version: '1.1',
+        language: context.language,
+        topic: context.topic,
+        pedagogy: { approach: 'orchestrated-base-text', strategy_notes: '' },
+        explanation: { title: `Generating “${context.topic}”...`, content_markdown: '' },
+        fill_in_blanks: [], multiple_choice: [], cloze_passages: [], cloze_with_mixed_options: [],
+        guided_dialogues: [], writing_prompts: [], reading_comprehension: [], error_bundles: [], rewriting: [],
+        error_bundles_shared_context: ''
+      });
+      setOrchestratorValues({});
+      setLoadingLesson(false);
       try {
-        const data = await generateLesson(context.topic, {
-          fill_in_blanks: 0,
-          multiple_choice: 0,
-          cloze_passages: 0,
-          cloze_with_mixed_options: 0,
-          guided_dialogues: 0,
-          writing_prompts: 0,
-          error_bundles: 0
-        }, context);
-        setLesson(data);
-        setOrchestratorValues({});
+        const final = await generateExplanationStream(context.topic, context, (evt) => {
+          if (evt?.type === 'delta' || evt?.type === 'prefill') {
+            setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${context.topic}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
+          }
+        });
+        setLesson(prev => prev ? ({ ...prev, explanation: final }) : prev);
       } catch (error) {
-        console.error('Error generating lesson:', error);
-        setErrorMsg(error.message || 'Error generating lesson. Please try again.');
-      } finally {
-        setLoadingLesson(false);
+        console.error('Error generating explanation:', error);
+        setErrorMsg(error.message || 'Error generating explanation. Please try again.');
       }
     }
   };
@@ -599,23 +604,30 @@ const AIPracticeApp = () => {
     setSubmitted(false);
     setLesson(null);
     try {
-      // Only generate explanation initially - exercises generated on-demand
-      const data = await generateLesson(topicToUse, {
-        fill_in_blanks: 0,
-        multiple_choice: 0,
-        cloze_passages: 0,
-        cloze_with_mixed_options: 0,
-        guided_dialogues: 0,
-        writing_prompts: 0,
-        error_bundles: 0
-      }, languageContext);
+      // Stream only the explanation initially; other content is generated on-demand
       setTopic(topicToUse);
-      setLesson(data);
+      setLesson({
+        version: '1.1',
+        language: languageContext?.language || 'es',
+        topic: topicToUse,
+        pedagogy: { approach: 'orchestrated-base-text', strategy_notes: '' },
+        explanation: { title: `Generating “${topicToUse}”...`, content_markdown: '' },
+        fill_in_blanks: [], multiple_choice: [], cloze_passages: [], cloze_with_mixed_options: [],
+        guided_dialogues: [], writing_prompts: [], reading_comprehension: [], error_bundles: [], rewriting: [],
+        error_bundles_shared_context: ''
+      });
       setOrchestratorValues({});
+      // Hide the spinner now that lesson shell is visible
+      setLoadingLesson(false);
+      const final = await generateExplanationStream(topicToUse, languageContext, (evt) => {
+        if (evt?.type === 'delta' || evt?.type === 'prefill') {
+          setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${topicToUse}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
+        }
+      });
+      setLesson(prev => prev ? ({ ...prev, explanation: final }) : prev);
     } catch (error) {
-      console.error('Error generating lesson:', error);
+      console.error('Error generating lesson (explanation):', error);
       setErrorMsg(error.message || 'Error generating lesson. Please try again.');
-    } finally {
       setLoadingLesson(false);
     }
   };
@@ -668,9 +680,15 @@ const AIPracticeApp = () => {
     setLoadingExplOnly(true);
     setErrorMsg('');
     try {
-      const explanation = await generateExplanation(topic, languageContext);
+      // Start streaming into lesson shell
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, explanation });
+      mergeLesson({ topic, explanation: { title: `Generating “${topic}”...`, content_markdown: '' } });
+      const final = await generateExplanationStream(topic, languageContext, (evt) => {
+        if (evt?.type === 'delta' || evt?.type === 'prefill') {
+          setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${topic}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
+        }
+      });
+      mergeLesson({ topic, explanation: final });
     } catch (e) { console.error(e); setErrorMsg('Failed to generate explanation'); }
     finally { setLoadingExplOnly(false); }
   };
@@ -1696,5 +1714,4 @@ const AIPracticeApp = () => {
 };
 
 export default AIPracticeApp;
-
 
