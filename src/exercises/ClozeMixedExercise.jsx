@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { normalizeText, splitByBlanks, sanitizeClozeItem } from './utils.js';
-import { generateUnifiedCloze, convertToClozeMixed, filterBlanksByDifficulty } from './ClozeUnified.jsx';
+import { generateUnifiedCloze, generateUnifiedClozeStepwise, convertToClozeMixed, filterBlanksByDifficulty } from './ClozeUnified.jsx';
 
 /**
  * Cloze with mixed options per blank (dropdowns)
@@ -167,7 +167,14 @@ export async function generateClozeMixed(topic, languageContext = { language: 'e
   console.log('Using unified cloze generation for ClozeMixed (cached as unified_cloze)');
   
   // Generate unified cloze using unified schema
-  const unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
+  // Prefer stepwise generation with prompt caching; fallback to single-shot unified
+  let unifiedResult;
+  try {
+    unifiedResult = await generateUnifiedClozeStepwise(topic, languageContext);
+  } catch (e) {
+    console.warn('[CLOZE-MIXED] Stepwise generation failed, falling back:', e?.message);
+    unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
+  }
   const unifiedItem = unifiedResult.items[0];
   
   // Apply difficulty filtering based on challenge mode and level
@@ -185,5 +192,4 @@ export async function generateClozeMixed(topic, languageContext = { language: 'e
 }
 
 // Deprecated traditional generation functions removed - using unified approach exclusively
-
 

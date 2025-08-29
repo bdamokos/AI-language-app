@@ -411,8 +411,28 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
       };
     };
 
+    // Simple global rate limiter for OpenRouter free models (20 RPM across the server)
+    const FREE_MODEL_WINDOW_MS = 60 * 1000;
+    const FREE_MODEL_MAX = 20;
+    const freeModelTimestamps = (globalThis.__OPENROUTER_FREE_TS__ = globalThis.__OPENROUTER_FREE_TS__ || []);
+    async function enforceFreeModelRate(modelId) {
+      if (!/:free$/i.test(String(modelId || ''))) return; // only for free variants
+      const now = Date.now();
+      // Remove timestamps outside the window
+      while (freeModelTimestamps.length && now - freeModelTimestamps[0] > FREE_MODEL_WINDOW_MS) {
+        freeModelTimestamps.shift();
+      }
+      if (freeModelTimestamps.length >= FREE_MODEL_MAX) {
+        const waitMs = FREE_MODEL_WINDOW_MS - (now - freeModelTimestamps[0]);
+        await new Promise(res => setTimeout(res, Math.max(0, waitMs)));
+      }
+      freeModelTimestamps.push(Date.now());
+    }
+
     const doOpenRouterRequest = async (maxTokensValue) => {
       const payload = buildOpenRouterPayload(maxTokensValue);
+      // Enforce 20 RPM for free variants
+      try { await enforceFreeModelRate(payload.model); } catch {}
       let resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -2368,6 +2388,44 @@ app.get('/api/debug/:id', (req, res) => {
 app.get('/api/debug', (req, res) => {
   const list = debugOrder.slice().reverse().map(id => debugLogs.get(id));
   res.json({ count: list.length, items: list });
+});
+
+// Persist a fully assembled exercise from the client (used by stepwise pipelines)
+app.post('/api/persist-exercise', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const type = String(body.type || 'unified_cloze');
+    const items = Array.isArray(body.items) ? body.items : [];
+    const languageName = String(body.metadata?.language || 'unknown');
+    const level = String(body.metadata?.level || 'unknown');
+    const challengeMode = !!body.metadata?.challengeMode;
+    const grammarTopic = String(body.metadata?.topic || 'unknown');
+
+    if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
+    if (items.length === 0) return res.status(400).json({ error: 'No items to persist' });
+
+    const currentModel = runtimeConfig.provider === 'openrouter' ? runtimeConfig.openrouter.model : runtimeConfig.ollama.model;
+    const schemaVersion = schemaVersions[type] || 1;
+    const poolKey = `persist:${type}:${languageName}:${level}:${challengeMode ? '1' : '0'}:${currentModel}:${schemaVersion}:${grammarTopic}`;
+    const bucketKey = makeBucketKey({ type, language: languageName, level, challengeMode, grammarTopic });
+
+    const baseTextId = items[0]?.base_text_id || null;
+    const baseTextChapter = items[0]?.chapter_number ?? undefined;
+
+    const { addedShas, groupId } = await addExercisesToPool(
+      cacheLayout,
+      { type, poolKey, bucketKey, language: languageName, level, challengeMode, grammarTopic, model: currentModel, schemaVersion, baseTextId, baseTextChapter },
+      items,
+      Number(process.env.CACHE_EXERCISES_MAX || 1000)
+    );
+
+    const withIds = items.map((it, i) => ({ ...it, exerciseSha: addedShas[i] }));
+    try { await incrementExerciseHits(cacheLayout, type, languageName, level, challengeMode, grammarTopic, withIds.length); } catch {}
+    res.json({ items: withIds, groupId });
+  } catch (e) {
+    console.error('[PERSIST-EXERCISE]', e);
+    res.status(500).json({ error: 'Failed to persist exercise', details: e?.message || String(e) });
+  }
 });
 
 // Simple in-memory rate limiter for file system access

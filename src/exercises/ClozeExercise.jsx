@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem } from './utils.js';
 import useImageGeneration from '../hooks/useImageGeneration.js';
-import { generateUnifiedCloze, convertToTraditionalCloze, filterBlanksByDifficulty } from './ClozeUnified.jsx';
+import { generateUnifiedCloze, generateUnifiedClozeStepwise, convertToTraditionalCloze, filterBlanksByDifficulty } from './ClozeUnified.jsx';
 
 /**
  * Cloze passage with free-text blanks
@@ -405,7 +405,14 @@ export async function generateCloze(topic, languageContext = { language: 'es', l
   console.log('Using unified cloze generation (cached as unified_cloze)');
   
   // Generate unified cloze using unified schema
-  const unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
+  // Prefer stepwise generation with prompt caching; fallback to single-shot unified
+  let unifiedResult;
+  try {
+    unifiedResult = await generateUnifiedClozeStepwise(topic, languageContext);
+  } catch (e) {
+    console.warn('[CLOZE] Stepwise generation failed, falling back:', e?.message);
+    unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
+  }
   const unifiedItem = unifiedResult.items[0];
   
   // Apply difficulty filtering based on challenge mode and level
@@ -423,5 +430,4 @@ export async function generateCloze(topic, languageContext = { language: 'es', l
 }
 
 // Deprecated traditional generation functions removed - using unified approach exclusively
-
 
