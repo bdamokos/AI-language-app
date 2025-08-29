@@ -117,7 +117,15 @@ export async function generateExplanation(topic, languageContext = { language: '
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
   
-  const system = `You are a language pedagogy expert. Provide a concise, insightful explanation of a ${languageName} grammar concept with examples. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}. Where relevant, add a section on common mistakes and how to avoid them. Additionally, where relevant, include a section on cultural context, regional differences, usage tips, etymology and other relevant information.\n Explanations should be in the target language, with the target level of difficulty. If necessary, depending on the user's level, you may include translations in English.`;
+  const system = `You are a language pedagogy expert. Provide a concise, insightful explanation of a grammar concept with examples.
+
+Requirements:
+- Write in the target language and match the target level
+- Where relevant, add sections on common mistakes (and fixes), cultural context, regional differences, usage tips, and etymology
+- Return clean markdown: start with a top-level heading (#) for the title, then the explanation
+- Keep length roughly 200–600 words
+- If necessary for clarity, include brief English translations in parentheses
+- Return ONLY content; do not echo instructions`;
 
   const normalizeTopic = (input) => {
     if (typeof input === 'string') return input.trim();
@@ -127,12 +135,10 @@ export async function generateExplanation(topic, languageContext = { language: '
   };
   const safeTopic = normalizeTopic(topic);
 
-  const user = `Explain the grammar concept: ${safeTopic}. 
-
+  const user = `Task: Explain the grammar concept.
+Concept: ${safeTopic}
 Target Language: ${languageName}
-Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
-
-Keep it 200-600 words and ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with separate advanced explanations for more eager learners' : ''}.`;
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
 
   const schema = {
     type: 'object', additionalProperties: false,

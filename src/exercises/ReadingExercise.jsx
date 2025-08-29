@@ -450,24 +450,31 @@ async function generateSingleReading(topic, passageNumber = null, languageContex
   const maxNewWords = challengeMode ? 8 : 5;
   const passageContext = passageNumber ? ` (Set ${passageNumber})` : '';
 
-  const system = `Generate ${languageName} reading comprehension passages with supporting materials. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging; allow more complex syntax and subordinate clauses)' : ''}.`;
+  const system = `You are a language pedagogy assistant that generates reading comprehension passages with supporting materials.
+
+Requirements:
+- Title: ≤ 60 characters
+- Use natural, real-world language
+- Provide an image_prompt (short, descriptive, no text overlays)
+- Glossary: 3–8 terms (term, part of speech, definition, optional translation, example sentence in target language)
+- True/False: 3–5 statements answerable directly from the passage
+- Comprehension questions: 2–4 with concise model answers
+- Productive prompts: 1–2 with short model answers
+- Opinion questions: exactly 3 with model answers for agree/disagree/neutral
+- Keep content age-appropriate and culturally relevant
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
   const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
   const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
 
-  const user = `Create exactly 1 reading comprehension set${passageContext} in ${languageName} about: ${topic}.
+  const user = `Task: Create exactly 1 reading comprehension set${passageContext}.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging; allow more complex syntax and subordinate clauses)' : ''}
+Topic: ${topic}
+Passage length target: ${lengthTarget}
+Max new vocabulary terms: ${maxNewWords}
 
-Requirements:
-- Title: \u2264 60 characters.
-- Choose real world sentences, not synthetic ones.
 ${topicLine}
-- Passage length: ${lengthTarget}. Ensure it naturally uses the target grammar/topic: ${topic}.
-- Include an image_prompt: short, descriptive, no text overlays.
-- New vocabulary: up to ${maxNewWords} terms in a glossary with part of speech, definition, optional translation, and an example sentence in ${languageName}.
-- True/False: 3–5 statements, each answerable directly from the passage.
-- Comprehension questions: 2–4 short-answer questions with concise model answers.
-- Productive prompts: 1–2 open-ended prompts to encourage writing/speaking. For each, also provide a short model answer.
-- Opinion questions: exactly 3 short personal questions that invite the learner to reflect on the text. For each, also provide up to three model answers, one aagreeing, one disagreeing, and one neutral.
 
 Return STRICT JSON only per schema.`;
 
@@ -574,27 +581,29 @@ async function generateReadingFromBaseText(topic, count = 1, languageContext) {
     throw new Error('No base text chapter provided for reading comprehension');
   }
 
-  const system = `You are creating reading comprehension exercises using an existing text passage. Extract meaningful T/F statements, comprehension questions, and supporting materials directly from the given passage. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging analysis)' : ''}.`;
+  const system = `You are creating reading comprehension exercises based on a provided text passage.
 
-  const user = `Create reading comprehension exercises based on the following passage from "${baseText?.title || 'Unknown'}":
+Requirements:
+- Create an appropriate title (≤ 60 characters) reflecting the chapter content
+- Generate an image_prompt that captures the scene/mood of the specific chapter
+- Identify 4–6 key vocabulary terms from the passage (POS, definition, translation, example)
+- Extract 4–5 TRUE/FALSE statements verifiable directly from the text
+- Create 3–4 comprehension questions with concise model answers
+- Provide 1–2 productive prompts with short model answers
+- Create exactly 3 opinion questions with agree/disagree/neutral model answers
+- Use ONLY the provided passage; do not invent facts
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
+
+  const user = `Task: Create exactly 1 reading comprehension set based on a provided passage.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging analysis)' : ''}
+Topic: ${topic}
+
+Source: ${baseText?.title || 'Unknown'}
 
 **Chapter: ${chapter.title}**
 **Passage:**
 ${chapter.passage}
-
-**Grammar Focus:** ${topic}
-
-Requirements:
-- Use the EXACT passage provided above - do not modify the text
-- Create an appropriate title (≤ 60 characters) that reflects the chapter content
-- Generate an image_prompt that captures the scene/mood of this specific chapter
-- Identify 4-6 key vocabulary terms from the passage for the glossary (with POS, definition, translation, example)
-- Extract 4-5 TRUE/FALSE statements that can be verified directly from the passage text
-- Create 3-4 comprehension questions about the content, with model answers
-- Generate 1-2 productive prompts that connect to the chapter themes, with model answers
-- Create exactly 3 opinion questions that invite reflection on the chapter content, with agree/disagree/neutral model answers
-
-**Important:** All questions and vocabulary must be based on what's actually in the passage. Don't invent facts not present in the text.
 
 Return STRICT JSON only per schema.`;
 
@@ -717,5 +726,4 @@ Return STRICT JSON only per schema.`;
 
   return result;
 }
-
 

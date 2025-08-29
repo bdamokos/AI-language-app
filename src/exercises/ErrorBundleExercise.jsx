@@ -197,14 +197,16 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
   const baseText = languageContext.baseText;
   const chapter = languageContext.chapter;
 
-  let baseTextInstructions = '';
-  if (baseText && chapter) {
-    baseTextInstructions = `\n\nBASE TEXT CONTEXT:\n- Use this chapter content as the primary source material: "${chapter.title || 'Chapter'}"\n- Extract vocabulary, grammar structures, and sentence patterns directly from the base text\n- Create error bundles that test understanding of the specific content in this chapter\n- Ensure all sentences relate to the themes and structures found in the provided text\n- When creating incorrect sentences, use patterns that appear in the base text but introduce the specified errors`;
-  }
+  const system = `You are a language pedagogy generator. Produce compact, CEFR-appropriate error bundles.
+Each item contains FOUR sentences about the given topic with EXACTLY ONE correct.
+For each incorrect sentence, include a minimal corrected version ("fix") and a short rationale.
 
-  const system = `You are a language pedagogy generator. Produce compact, CEFR-appropriate error bundles.\nEach item contains FOUR sentences about the given topic with EXACTLY ONE correct.\nFor each incorrect sentence, include a minimal corrected version ("fix") and a short rationale.\nReturn STRICT JSON only, matching the schema. Do not echo any inputs. No extra text outside JSON.\nAvoid sensitive content. Keep sentences natural and classroom-safe.${baseTextInstructions}`;
-
-  const developer = `Constraints:\n- Target level: ${level}. Challenge=${challenge}.\n- Topic focus: ${topic}. Errors MUST reflect this topic only.\n${baseText && chapter ? `- Use the provided base text chapter as the source material for all sentences and errors.\n- Extract sentence patterns, vocabulary, and structures from the chapter content.` : ''}\n- Sentence length per level: A1 4–8, A2 6–12, B1 10–16, B2 12–20, C1 14–24, C2 16–30. If challenge=true, use the higher bound.\n- Each item: exactly 4 sentences, exactly 1 correct; three incorrect each with ONE clear, topic-aligned error.\n- Provide concise rationales (≤120 chars) and MINIMAL fixes (change only what’s necessary).\n- Optionally include a shared_context (≤80 chars) to make items cohere and reduce repetition.\n- Output ONLY the JSON fields defined by the schema below (no language/level/topic/challenge in the output).`;
+Constraints:
+- Sentence length per CEFR level: A1 4–8, A2 6–12, B1 10–16, B2 12–20, C1 14–24, C2 16–30; when difficulty is higher, use the upper bound
+- Each item: exactly 4 sentences, exactly 1 correct; three incorrect each with ONE clear, topic-aligned error
+- Provide concise rationales (≤120 chars) and MINIMAL fixes (change only what’s necessary)
+- Optionally include a shared_context (≤80 chars) to make items cohere and reduce repetition
+- Return STRICT JSON only, matching the schema (no extra text)`;
 
   const userPayload = {
     language: String(languageName || ''),
@@ -261,8 +263,17 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      system: `${system}\n\n${developer}`,
-      user: JSON.stringify(userPayload),
+      system,
+      user: JSON.stringify({
+        ...userPayload,
+        constraints: {
+          topic_must_match: true,
+          use_base_text: !!(baseText && chapter),
+          base_text_title: baseText?.title || undefined,
+          base_text_chapter_title: chapter?.title || undefined,
+          notes: 'Use natural sentences; keep age-appropriate and classroom-safe.'
+        }
+      }),
       jsonSchema: schema,
       schemaName: 'error_bundle_list',
       metadata: {
@@ -306,5 +317,4 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
 
   return result;
 }
-
 

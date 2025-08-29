@@ -118,28 +118,23 @@ export async function generateRewriting(topic, count = 5, languageContext) {
     throw new Error('No base text chapter provided for Rewriting generation');
   }
 
-  const system = `You are a language pedagogy expert.You are creating sentence rewriting exercises using an existing passage. Each item should ask the student to rewrite a sentence according to the target grammar focus. Keep difficulty appropriate for ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+  const system = `You are a language pedagogy expert creating sentence rewriting exercises based on a given passage.
 
-  const user = `Create exactly ${count} ${languageName} sentence rewriting exercises based on the chapter below from "${baseText?.title || 'Unknown'}".
+Requirements:
+- Each item asks the learner to rewrite a sentence according to a specific grammar focus
+- Keep answers concise and grammatical; avoid ambiguous prompts
+- Provide a short hint and a concise rationale for the correct rewrite
+- Use natural sentences aligned with the passage context
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
-Chapter: ${chapter.title}
-Passage:
-${chapter.passage}
-
+  const user = `Task: Create exactly ${count} sentence rewriting exercises.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 Grammar Focus: ${topic}
+Source: ${baseText?.title || 'Unknown'} — Chapter: ${chapter.title}
 
-For each exercise, provide:
-- original: a short sentence from the passage (or minimally adapted to fit the focus)
-- instruction: a clear rewriting instruction (e.g., "Rewrite in the past tense", "Replace the object with a pronoun")
-- answer: the correctly rewritten sentence
-- hint: brief guidance that does not give away the answer
-- rationale: why the rewriting is correct
-
-Constraints:
-- Use real sentences aligned with the passage context
-- Keep answers concise and grammatical
-- Do not include multiple valid answers for the same item
-- Avoid ambiguous prompts where multiple rewrites are defensible`;
+Passage:
+${chapter.passage}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
@@ -198,5 +193,4 @@ Constraints:
   }
   return result;
 }
-
 

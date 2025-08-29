@@ -82,19 +82,27 @@ export async function generateMCQ(topic, count = 5, languageContext = { language
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
   
-  const system = `Generate ${languageName} multiple-choice questions with 4 options, one correct, with rationales. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+  const system = `You are a language pedagogy assistant that generates multiple-choice questions in the target language.
+
+Requirements:
+- Each item has exactly 4 options with exactly one correct answer
+- Provide a short rationale for each option (why correct/incorrect)
+- Use natural, real-world sentences (avoid synthetic phrasing)
+- Keep content age-appropriate and culturally relevant
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
   const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
   const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
 
-  const user = `Create exactly ${count} ${languageName} MCQs about: ${topic}. 
-
+  const user = `Task: Create exactly ${count} multiple-choice questions.
+Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+Topic: ${topic}
 
-Choose real world sentences, not synthetic ones.
-${topicLine}
-
-Include plausible distractors and ensure vocabulary and grammar complexity matches ${level} level${challengeMode ? ' with some challenging elements' : ''}.`;
+Notes:
+- Include plausible distractors
+- Ensure vocabulary and grammar complexity matches the target level
+${topicLine}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
@@ -142,5 +150,4 @@ Include plausible distractors and ensure vocabulary and grammar complexity match
 
   return response.json();
 }
-
 

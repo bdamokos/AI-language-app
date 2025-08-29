@@ -8,7 +8,7 @@
 
 import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
-// Stepwise generation schemas (lightweight, schemaName uses 'explanation' to leverage persistent caching)
+// Stepwise generation schemas (lightweight; do NOT persist steps to disk)
 const STEP1_REWRITE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -60,7 +60,8 @@ async function llmGenerate({ system, user, jsonSchema, metadata }) {
   const resp = await fetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system, user, jsonSchema, schemaName: 'explanation', metadata })
+    // Use a non-persistent schemaName so steps stay in-memory only on the server
+    body: JSON.stringify({ system, user, jsonSchema, schemaName: 'cloze_step', metadata })
   });
   if (!resp.ok) throw new Error(`LLM call failed: ${resp.status}`);
   return await resp.json();
@@ -408,13 +409,17 @@ Your task:
 4. For each blank, provide the solution, helpful hints, plausible distractors, and detailed explanations
 5. Ensure the resulting passage flows naturally and makes sense as a complete story
 6. Prioritize pedagogical value over exact text preservation
+`;
 
-Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
+  const user = `Task: Create a comprehensive cloze exercise based on a provided passage.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+Target Grammar: ${topic}
+Source: ${baseText?.title || 'Unknown'}
 
-  const user = `Create a comprehensive cloze exercise based on this passage from "${baseText?.title || 'Unknown'}":
+Create the exercise based on this passage:
 
 **Chapter: ${chapter.title}**
-**Target Grammar:** ${topic}
 
 **Original Passage:**
 ${chapter.passage}

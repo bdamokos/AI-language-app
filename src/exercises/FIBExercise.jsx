@@ -96,32 +96,29 @@ export async function generateFIB(topic, count = 5, languageContext) {
     throw new Error('No base text chapter provided for FIB generation');
   }
   
-  const system = `You are creating fill-in-the-blank exercises using an existing text passage. Extract meaningful sentences from the passage and create blanks that test the target grammar topic. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
-
-  const user = `Create exactly ${count} ${languageName} language fill-in-the-blank exercises based on the following passage from "${baseText?.title || 'Unknown'}":
-
-**Chapter: ${chapter.title}**
-**Passage:**
-${chapter.passage}
-
-**Grammar Focus:** ${topic}
+  const system = `You are creating fill-in-the-blank exercises using an existing text passage.
 
 Requirements:
-- Extract ${count} sentences from the passage that can be used to test "${topic}"
-- If the passage doesn't contain enough suitable examples, adapt existing sentences to include the target grammar
-- Each exercise should use a different sentence from the passage or an adapted version
-- Use exactly _____ (5 underscores) for each blank
-- Put basic hint in parentheses after the blank
-- Provide up to 3 progressive hints in the "hints" array:
-  - First hint: general guidance to help user think
-  - Second hint: more specific clue
-  - Third hint: very specific (e.g., "starts with 'vi...'")
-- If exercise is simple, you can provide fewer hints or make the third hint show first letters
-- "context" field is optional - include interesting cultural notes related to the story context
+- Extract meaningful sentences from the given passage (or minimally adapt when needed)
+- Create blanks that test the target grammar topic using exactly 5 underscores (_____)
+- Provide a basic hint after each blank in parentheses
+- Also provide up to 3 progressive hints in a "hints" array (general → specific → very specific)
+- Optional: include a brief "context" note when helpful
 - Make exercises progressively harder
-- Target CEFR level: ${level}${challengeMode ? ' with some challenging elements' : ''}
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
-**Important:** Extract as many relevant exercises as possible from this single passage. Each exercise should test the grammar topic while maintaining story coherence. Aim to use ${count} different sentences or sentence variations from the passage.`;
+  const user = `Task: Create exactly ${count} fill-in-the-blank exercises.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+Grammar Focus: ${topic}
+Source: ${baseText?.title || 'Unknown'} — Chapter: ${chapter.title}
+
+Passage:
+${chapter.passage}
+
+Important:
+- Aim to use ${count} different sentences or minimal variations from the passage
+- Maintain story coherence and keep difficulty appropriate for the target level`;
 
   const schema = {
     type: 'object', additionalProperties: false,
@@ -184,5 +181,4 @@ Requirements:
 
   return result;
 }
-
 

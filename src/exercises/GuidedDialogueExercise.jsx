@@ -133,7 +133,17 @@ export async function generateGuidedDialogues(topic, count = 2, languageContext 
 
   if (inspirationContext) {
     // Generate dialogues inspired by provided context
-    system = `Generate ${languageName} guided dialogues inspired by a previously used text passage. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+    system = `You are a language pedagogy assistant that generates guided dialogues in the target language.
+
+Requirements:
+- Two consistent speakers across the whole dialogue (e.g., "A" and "B" or names); 6–12 turns total
+- Provide a conversationContext string (overall situation/setting)
+- Provide detailed studentInstructions that include the context
+- For EACH turn, provide an individual hint (not generic)
+- Provide suggested_hide_speaker indicating which speaker to hide
+- Use natural, real-world sentences (avoid synthetic phrasing)
+- Keep content age-appropriate and culturally relevant
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
     const chapterInfo = inspirationContext.chapter_passage
       ? `**Chapter Content:**
@@ -145,7 +155,9 @@ ${inspirationContext.chapter_passage}
     console.log('Generated chapterInfo for LLM prompt:', chapterInfo);
     console.log('Has chapter passage:', !!inspirationContext.chapter_passage);
 
-    user = `Create exactly ${count} dialogues in ${languageName} inspired by the following chapter that was previously used in the lesson:
+    user = `Task: Create exactly ${count} guided dialogues inspired by a previously used chapter.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
 ${chapterInfo}
 **Previously Used For:** ${inspirationContext.exercise_type.replace('_', ' ')}
@@ -183,26 +195,28 @@ An example of a dialogue with hints if the topic was "indirect object pronouns",
     baseTextContext = inspirationContext;
   } else {
     // Fall back to original logic with topic roulette
-    system = `Generate ${languageName} guided dialogues. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+    system = `You are a language pedagogy assistant that generates guided dialogues in the target language.
+
+Requirements:
+- Two consistent speakers across the whole dialogue (e.g., "A" and "B" or names); 6–12 turns total
+- Provide a conversationContext string (overall situation/setting)
+- Provide detailed studentInstructions that include the context
+- For EACH turn, provide an individual hint (not generic)
+- Provide suggested_hide_speaker indicating which speaker to hide
+- Use natural, real-world sentences (avoid synthetic phrasing)
+- Keep content age-appropriate and culturally relevant
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
     const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
     const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
 
-    user = `Create exactly ${count} dialogues in ${languageName} about: ${topic}.
+    user = `Task: Create exactly ${count} guided dialogues about: ${topic}.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 
-Requirements:
-- Two consistent speakers across the whole dialogue (e.g., "A" and "B" or names); 6-12 turns total
-- Do NOT include blanks; produce the full conversation text for every turn
-- Provide a conversationContext string that explains the overall situation/setting of the dialogue
-- Provide detailed studentInstructions that include the conversation context so students understand what's happening
-- For EACH turn in the dialogue, provide an individual hint that helps reconstruct that specific turn (not general hints)
-- Provide suggested_hide_speaker indicating which speaker's lines would be best to hide pedagogically
-- Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}
-- Choose real world sentences, not synthetic ones.
 ${topicLine}
-- Keep content age-appropriate and culturally relevant
 
-Example: For a topic like "ordering food", each turn should have its own specific hint like "Greet the waiter" or "Ask about daily specials" or "Request the bill".`;
+Example: For a topic like "ordering food", each turn should have a specific hint like "Greet the waiter" or "Ask about daily specials" or "Request the bill".`;
   }
 
 
@@ -270,5 +284,4 @@ Example: For a topic like "ordering food", each turn should have its own specifi
 
   return response.json();
 }
-
 

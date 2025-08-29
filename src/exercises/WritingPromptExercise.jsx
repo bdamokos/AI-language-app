@@ -70,20 +70,26 @@ export async function generateWritingPrompts(topic, count = 2, languageContext =
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
 
-  const system = `Generate ${languageName} open-ended writing prompts designed to elicit target grammar or vocabulary usage. Target CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}.`;
+  const system = `You are a language pedagogy assistant that generates open-ended writing prompts.
+
+Requirements:
+- For each set, include 3–5 prompts that elicit the target grammar or vocabulary
+- Provide a concise studentInstructions string
+- Provide example_answers with short model responses (one per prompt)
+- Use natural, real-world themes (avoid synthetic prompts)
+- Keep content age-appropriate and culturally relevant
+- Return ONLY fields that match the provided JSON schema (no extra text)`;
 
   const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
   const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
 
-  const user = `Create exactly ${count} writing prompt sets in ${languageName} about: ${topic}.
+  const user = `Task: Create exactly ${count} writing prompt sets.
+Target Language: ${languageName}
+Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
+Topic: ${topic}
 
-For each set:
-- Include 3-5 open-ended questions (prompts) that encourage use of the target grammar or vocabulary
-- Provide a concise studentInstructions string
-- Include example_answers with short sample responses (one per prompt) to show expected complexity and style
-- Choose real world themes, not synthetic ones.
 ${topicLine}
-- Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}`;
+Notes: Ensure vocabulary and grammar complexity match the target level.`;
 
   const schema = {
     type: 'object', additionalProperties: false,
@@ -132,5 +138,4 @@ ${topicLine}
 
   return response.json();
 }
-
 
