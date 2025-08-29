@@ -181,9 +181,18 @@ export async function generateClozeMixed(topic, languageContext = { language: 'e
   const targetDifficulties = languageContext.challengeMode 
     ? ['easy', 'medium', 'hard'] 
     : ['easy', 'medium'];
-  const maxBlanks = languageContext.challengeMode ? 12 : 8;
+  // Dynamically aim for up to 75% sentence coverage, at least baseline (8), capped at 12 and total candidates
+  const segs = Array.isArray(unifiedItem.segments) ? unifiedItem.segments : [];
+  const isFlat = segs.length > 0 && !('type' in (segs[0] || {}));
+  const candidateCount = Number(unifiedItem.total_blanks || (isFlat
+    ? segs.filter(s => Array.isArray(s.options) && s.options.some(o => o.correct)).length
+    : segs.filter(s => s.type === 'blank').length));
+  const sentenceCount = isFlat ? segs.length : Math.max(candidateCount, segs.length || candidateCount);
+  const baseline = languageContext.challengeMode ? 12 : 8;
+  const coverageAim = Math.ceil(sentenceCount * 0.75);
+  const dynamicMax = Math.max(1, Math.min(12, Math.max(baseline, Math.min(candidateCount, coverageAim))))
   
-  const filteredItem = filterBlanksByDifficulty(unifiedItem, targetDifficulties, maxBlanks);
+  const filteredItem = filterBlanksByDifficulty(unifiedItem, targetDifficulties, dynamicMax);
   
   // Convert to ClozeMixed format for UI display
   const clozeMixedItem = convertToClozeMixed(filteredItem);
@@ -192,4 +201,3 @@ export async function generateClozeMixed(topic, languageContext = { language: 'e
 }
 
 // Deprecated traditional generation functions removed - using unified approach exclusively
-
