@@ -176,17 +176,11 @@ export async function generateUnifiedClozeStepwise(topic, languageContext) {
   const rewritten = String(step1.rewritten_passage || chapter.passage || '');
   const sentences = compactSentences(splitIntoSentences(rewritten));
 
-  // Step 2: Presence check per sentence (cached), sequential with cap to avoid RPM limits
+  // Step 2: Presence check per sentence (cached), sequential to respect RPM limits
   const presenceSystem = 'You are a strict boolean classifier and language expert. Return JSON { "present": true|false } only.';
-  const maxBlanksDesired = challengeMode ? 12 : 8;
   const presenceResults = [];
-  let presentCount = 0;
   for (let idx = 0; idx < sentences.length; idx++) {
     const s = sentences[idx];
-    if (presentCount >= maxBlanksDesired) {
-      presenceResults.push({ present: false });
-      continue;
-    }
     const user = [
       `Target Grammar: ${topic}`,
       `Sentence Index: ${idx}`,
@@ -197,17 +191,45 @@ export async function generateUnifiedClozeStepwise(topic, languageContext) {
     ].join('\n');
     const pr = await llmGenerate({ system: presenceSystem, user, jsonSchema: STEP2_PRESENCE_SCHEMA, metadata: { language: languageName, level, challengeMode, topic } }).catch(() => ({ present: false }));
     presenceResults.push(pr);
-    if (pr?.present === true) presentCount++;
   }
+
+  // Decide target blanks dynamically: aim for max(8, ceil(0.75 * candidates)), capped at 12
+  const candidateIdx = presenceResults.map((r, i) => (r?.present ? i : -1)).filter(i => i >= 0);
+  const baseAim = 8;
+  const coverageAim = Math.ceil(candidateIdx.length * 0.75);
+  const hardCap = 12;
+  const targetBlanks = Math.max(1, Math.min(hardCap, Math.max(baseAim, coverageAim)));
+
+  // Select indices evenly across the candidate list to avoid clustering
+  function pickEvenlySpaced(indices, k) {
+    if (k >= indices.length) return new Set(indices);
+    if (k <= 0) return new Set();
+    const chosen = new Set();
+    const n = indices.length;
+    const step = (n - 1) / (k - 1);
+    for (let j = 0; j < k; j++) {
+      const pos = Math.round(j * step);
+      chosen.add(indices[pos]);
+    }
+    return chosen;
+  }
+  const selectedForBlank = pickEvenlySpaced(candidateIdx, targetBlanks);
+  try {
+    if (selectedForBlank.size) {
+      fetch('/api/log', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level: 'debug', message: 'Cloze selection', data: { candidateCount: candidateIdx.length, targetBlanks, selected: Array.from(selectedForBlank) } })
+      }).catch(() => {});
+    }
+  } catch {}
 
   // Step 3: Segment sentences with target grammar into prefix/blank/suffix (cached per sentence)
 const segmentSystem = 'You are a language pedagogy expert. You segment a single sentence for a cloze blank. Return strict JSON matching the schema. Ensure full_sentence = preceding_text + (one correct option text) + succeeding_text. Provide options with exactly one correct=true; include short explanations.';
   const segmented = [];
-  let blanksAdded = 0;
   for (let i = 0; i < sentences.length; i++) {
     const s = sentences[i];
-    const p = presenceResults[i]?.present === true;
-    if (!p || blanksAdded >= maxBlanksDesired) {
+    const p = selectedForBlank.has(i);
+    if (!p) {
       segmented.push({ preceding_text: s, succeeding_text: '', full_sentence: s, hint: '', options: [], difficulty_level: null, grammar_focus: null });
       continue;
     }
@@ -229,7 +251,6 @@ const segmentSystem = 'You are a language pedagogy expert. You segment a single 
     }
     const fixed = reconcileFlatSegmentFromSentence(s, seg);
     segmented.push(fixed);
-    blanksAdded++;
   }
 
   // Minimal structural repair and warnings (flat)
