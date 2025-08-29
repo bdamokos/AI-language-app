@@ -1054,6 +1054,16 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
     const promptSha12 = promptSha.slice(0, 12);
     explanationPersistentKey = `exp:${languageName}:${lvl}:${ch}:${String(topic || '').trim() || 'unknown'}:${currentModel}:${schemaVersion}:${promptSha12}`;
 
+    // Logging parity with non-streaming generation
+    const startedAt = Date.now();
+    const provider = runtimeConfig.provider;
+    const logPrefix = `[LLM ${provider}]`;
+    const systemPreview = String(system || '').replace(/\s+/g, ' ');
+    const userPreview = String(user || '').replace(/\s+/g, ' ');
+    try {
+      console.log(`${logPrefix} stream start model=${currentModel} maxTokens=${runtimeConfig.maxTokens} topic="${String(topic || '').trim()}" lang=${languageName} level=${lvl} challenging=${ch} systemPreview="${systemPreview}" userPreview="${userPreview}"`);
+    } catch {}
+
     // SSE headers
     res.set({
       'Content-Type': 'text/event-stream',
@@ -1071,6 +1081,7 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
       try {
         const rec = await getExplanation(cacheLayout, explanationPersistentKey);
         if (rec && rec.content) {
+          try { console.log(`[CACHE HIT] explanation (stream) ${String(topic || '').trim()} | model=${currentModel} | v=${schemaVersion}`); } catch {}
           sse({ type: 'prefill', explanation: { ...rec.content, _cacheKey: explanationPersistentKey } });
           clearInterval(keepAlive);
           return res.end();
@@ -1091,7 +1102,6 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
     };
 
     // Streaming per provider
-    const provider = runtimeConfig.provider;
     let aborted = false;
     req.on('close', () => { aborted = true; });
     let content = '';
@@ -1120,9 +1130,30 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
         body: JSON.stringify(payload)
       });
       if (!resp.ok || !resp.body) {
+        try {
+          const errorText = await resp.text().catch(() => '');
+          const debugId = addDebugLog({ provider: 'openrouter', model: runtimeConfig.openrouter.model, status: resp.status, request: payload, responseText: errorText });
+          console.error(`${logPrefix} stream HTTP ${resp.status} body: ${errorText || '(empty)'} | debug=/api/debug/${debugId}`);
+          try {
+            const payloadStr = JSON.stringify(payload);
+            const curlDebugId = addDebugLog({ provider: 'openrouter', model: runtimeConfig.openrouter.model, curlPayload: payload });
+            console.error(`${logPrefix} stream request payload: ${payloadStr} | curl=/api/debug/${curlDebugId}`);
+            const curl = [
+              'curl -X POST https://openrouter.ai/api/v1/chat/completions',
+              "-H 'Content-Type: application/json'",
+              "-H 'Authorization: Bearer $OPENROUTER_API_KEY'",
+              `-H 'HTTP-Referer: ${runtimeConfig.openrouter.appUrl || 'http://localhost:5173'}'`,
+              "-H 'X-Title: Language AI App'",
+              '--data @payload.json'
+            ].join(' \\\n');
+            console.error(`${logPrefix} stream repro: save payload from curl debug endpoint above to payload.json then run:\n${curl}`);
+          } catch {}
+        } catch {}
         clearInterval(keepAlive);
         return res.end();
       }
+      // Try to capture a generation id from headers if provided (may not always exist)
+      const headerGenId = resp.headers?.get('x-openrouter-generation-id') || resp.headers?.get('openrouter-generation-id') || resp.headers?.get('x-request-id') || null;
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -1151,6 +1182,27 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
           } catch {}
         }
       }
+      // Log completion summary
+      try {
+        const ms = Date.now() - startedAt;
+        const preview = String(content || '').slice(0, 400);
+        console.log(`${logPrefix} stream ok in ${ms}ms | chars=${content.length}${headerGenId ? ` | id: ${headerGenId}` : ''}\npreview: ${preview}`);
+        // Attempt cost fetch if we have a valid generation id
+        if (headerGenId && /^[a-zA-Z0-9_-]+$/.test(headerGenId)) {
+          (async () => {
+            try {
+              await new Promise(r => setTimeout(r, 500));
+              const costResp = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(headerGenId)}`, { headers: { authorization: `Bearer ${runtimeConfig.openrouter.apiKey}` } });
+              if (costResp.ok) {
+                const costData = await costResp.json();
+                if (costData.data && typeof costData.data.total_cost === 'number') {
+                  console.log(`${logPrefix} cost: $${Number(costData.data.total_cost).toFixed(6)} | native tokens: ${costData.data.tokens_prompt || 0}→${costData.data.tokens_completion || 0} | provider: ${costData.data.provider_name || 'unknown'}`);
+                }
+              }
+            } catch {}
+          })();
+        }
+      } catch {}
     } else if (provider === 'ollama') {
       const normalizedHost = validateAndNormalizeOllamaHost(runtimeConfig.ollama.host) || 'http://127.0.0.1:11434';
       const resp = await fetch(`${normalizedHost}/api/chat`, {
@@ -1192,6 +1244,12 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
           } catch {}
         }
       }
+      // Log completion summary for Ollama
+      try {
+        const ms = Date.now() - startedAt;
+        const preview = String(content || '').slice(0, 400);
+        console.log(`${logPrefix} stream ok in ${ms}ms | model=${runtimeConfig.ollama.model} | chars=${content.length}\npreview: ${preview}`);
+      } catch {}
     } else {
       // Unsupported provider for streaming; end gracefully
       clearInterval(keepAlive);
@@ -1211,6 +1269,7 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
         const meta = { language: languageName, level: lvl, challengeMode: ch, grammarConcept: String(topic || '').trim(), model: currentModel, schemaVersion, promptSha, promptSha12 };
         const cap = Number(process.env.CACHE_EXPLANATIONS_MAX || 1000);
         await setExplanation(cacheLayout, explanationPersistentKey, meta, explanation, cap);
+        try { console.log(`[CACHE SET] explanation (stream) ${String(topic || '').trim()} | model=${currentModel} | v=${schemaVersion}`); } catch {}
       } catch {}
     }
     sse({ type: 'final', explanation: explanationPersistentKey ? { ...explanation, _cacheKey: explanationPersistentKey } : explanation });
@@ -1222,6 +1281,7 @@ Output as markdown. Start with a top-level heading (#) for the title, then the e
       res.write(`data: ${JSON.stringify({ type: 'error', error: err?.message || 'Failed to stream explanation' })}\n\n`);
       res.end();
     } catch {}
+    try { console.error('[STREAM]', err?.message || err); } catch {}
   }
 });
 
@@ -2371,4 +2431,3 @@ app.listen(PORT, () => {
   console.log(`[FALAI] Startup - API key loaded: ${!!runtimeConfig.falai.apiKey}, enabled: ${runtimeConfig.falai.enabled}`);
   console.log(`[FALAI] Environment - API key: ${!!process.env.FALAI_API_KEY}, enabled: ${process.env.FALAI_ENABLED}`);
 });
-
