@@ -445,7 +445,8 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
       });
       if (!resp.ok) {
         // Capture error body for diagnostics
-        const errorText = await resp.text().catch(() => '');
+        // Use clone() so caller can still read the body if needed (e.g., to parse 429 details)
+        const errorText = await resp.clone().text().catch(() => '');
         const debugId = addDebugLog({
           provider: 'openrouter',
           model: runtimeConfig.openrouter.model,
@@ -469,7 +470,7 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
             body: JSON.stringify(enabledPayload)
           });
           if (!resp.ok) {
-            const secondBody = await resp.text().catch(() => '');
+            const secondBody = await resp.clone().text().catch(() => '');
             const debugId2 = addDebugLog({
               provider: 'openrouter',
               model: runtimeConfig.openrouter.model,
@@ -516,12 +517,37 @@ async function callLLM({ system, user, maxTokens, jsonSchema, schemaName }) {
     if (!resp.ok) {
       console.error(`${logPrefix} HTTP ${resp.status}`);
       if (resp.status === 429) {
-        try {
-          const info = await getOpenRouterKeyInfo();
-          console.warn(`${logPrefix} 429 rate-limited. usage=${info?.data?.usage} limit=${info?.data?.limit} freeTier=${info?.data?.is_free_tier}`);
-        } catch (e) {
-          console.warn(`${logPrefix} 429 and failed to fetch key info: ${e?.message}`);
+        // Attempt to parse structured rate limit details from body and headers
+        const raw = await resp.text().catch(() => '');
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch {}
+        const hdr = (parsed?.error?.metadata?.headers) || {};
+        const limit = Number(hdr['X-RateLimit-Limit'] || hdr['x-ratelimit-limit'] || resp.headers?.get('x-ratelimit-limit') || resp.headers?.get('X-RateLimit-Limit')) || undefined;
+        const remaining = Number(hdr['X-RateLimit-Remaining'] || hdr['x-ratelimit-remaining'] || resp.headers?.get('x-ratelimit-remaining') || resp.headers?.get('X-RateLimit-Remaining'));
+        const resetStr = hdr['X-RateLimit-Reset'] || hdr['x-ratelimit-reset'] || resp.headers?.get('x-ratelimit-reset') || resp.headers?.get('X-RateLimit-Reset');
+        let resetMs = resetStr ? Number(resetStr) : undefined;
+        if (Number.isFinite(resetMs) && resetMs < 1e12 && resetMs > 1e9) {
+          // Likely seconds; convert to ms
+          resetMs = resetMs * 1000;
         }
+        const now = Date.now();
+        const retryAfterSeconds = Number.isFinite(resetMs) ? Math.max(0, Math.ceil((resetMs - now) / 1000)) : undefined;
+        const providerName = parsed?.error?.metadata?.provider_name || 'openrouter';
+        const message = parsed?.error?.message || 'Rate limit exceeded';
+        console.warn(`${logPrefix} 429 parsed: limit=${limit ?? 'n/a'} remaining=${Number.isFinite(remaining) ? remaining : 'n/a'} resetMs=${resetMs ?? 'n/a'} retryAfter=${retryAfterSeconds ?? 'n/a'}s provider=${providerName}`);
+        const rateErr = new Error(message);
+        rateErr.name = 'RateLimitError';
+        rateErr.httpStatus = 429;
+        rateErr.provider = 'openrouter';
+        rateErr.rateLimit = {
+          limit: Number.isFinite(limit) ? Number(limit) : undefined,
+          remaining: Number.isFinite(remaining) ? Number(remaining) : undefined,
+          reset_ms: Number.isFinite(resetMs) ? Number(resetMs) : undefined,
+          reset_iso: Number.isFinite(resetMs) ? new Date(Number(resetMs)).toISOString() : undefined,
+          retry_after_seconds: Number.isFinite(retryAfterSeconds) ? Number(retryAfterSeconds) : undefined,
+          provider_name: providerName
+        };
+        throw rateErr;
       }
       throw new Error(`OpenRouter error ${resp.status}`);
     }
@@ -1039,7 +1065,26 @@ app.post('/api/generate', async (req, res) => {
     }
     return res.json(parsed);
   } catch (err) {
-    console.error(err);
+    try { console.error(err); } catch {}
+    if (err && err.name === 'RateLimitError') {
+      const rl = err.rateLimit || {};
+      if (Number.isFinite(rl.retry_after_seconds)) {
+        try { res.set('Retry-After', String(rl.retry_after_seconds)); } catch {}
+      }
+      return res.status(429).json({
+        error: 'rate_limited',
+        message: err.message || 'Rate limit exceeded',
+        provider: err.provider || runtimeConfig.provider,
+        rate_limit: {
+          limit: rl.limit,
+          remaining: rl.remaining,
+          reset_ms: rl.reset_ms,
+          reset_iso: rl.reset_iso,
+          retry_after_seconds: rl.retry_after_seconds,
+          provider_name: rl.provider_name
+        }
+      });
+    }
     const status = /Missing/i.test(err?.message || '') ? 400 : 500;
     return res.status(status).json({ error: 'Failed to generate content', details: err?.message, provider: runtimeConfig.provider });
   }
@@ -1156,9 +1201,39 @@ Target Level: ${lvl}${ch ? ' (slightly challenging)' : ''}`;
       });
       if (!resp.ok || !resp.body) {
         try {
-          const errorText = await resp.text().catch(() => '');
+          const errorText = await resp.clone().text().catch(() => '');
           const debugId = addDebugLog({ provider: 'openrouter', model: runtimeConfig.openrouter.model, status: resp.status, request: payload, responseText: errorText });
           console.error(`${logPrefix} stream HTTP ${resp.status} body: ${errorText || '(empty)'} | debug=/api/debug/${debugId}`);
+          // If 429, attempt to parse and emit structured error over SSE
+          if (resp.status === 429) {
+            let parsed;
+            try { parsed = JSON.parse(errorText); } catch {}
+            const hdr = (parsed?.error?.metadata?.headers) || {};
+            const limit = Number(hdr['X-RateLimit-Limit'] || hdr['x-ratelimit-limit'] || resp.headers?.get('x-ratelimit-limit') || resp.headers?.get('X-RateLimit-Limit')) || undefined;
+            const remaining = Number(hdr['X-RateLimit-Remaining'] || hdr['x-ratelimit-remaining'] || resp.headers?.get('x-ratelimit-remaining') || resp.headers?.get('X-RateLimit-Remaining'));
+            const resetStr = hdr['X-RateLimit-Reset'] || hdr['x-ratelimit-reset'] || resp.headers?.get('x-ratelimit-reset') || resp.headers?.get('X-RateLimit-Reset');
+            let resetMs = resetStr ? Number(resetStr) : undefined;
+            if (Number.isFinite(resetMs) && resetMs < 1e12 && resetMs > 1e9) resetMs = resetMs * 1000;
+            const now = Date.now();
+            const retryAfterSeconds = Number.isFinite(resetMs) ? Math.max(0, Math.ceil((resetMs - now) / 1000)) : undefined;
+            const providerName = parsed?.error?.metadata?.provider_name || 'openrouter';
+            const message = parsed?.error?.message || 'Rate limit exceeded';
+            sse({
+              type: 'error',
+              error: 'rate_limited',
+              message,
+              provider: 'openrouter',
+              rate_limit: {
+                limit: Number.isFinite(limit) ? Number(limit) : undefined,
+                remaining: Number.isFinite(remaining) ? Number(remaining) : undefined,
+                reset_ms: Number.isFinite(resetMs) ? Number(resetMs) : undefined,
+                reset_iso: Number.isFinite(resetMs) ? new Date(Number(resetMs)).toISOString() : undefined,
+                retry_after_seconds: Number.isFinite(retryAfterSeconds) ? Number(retryAfterSeconds) : undefined,
+                provider_name: providerName
+              },
+              debug: `/api/debug/${debugId}`
+            });
+          }
           try {
             const payloadStr = JSON.stringify(payload);
             const curlDebugId = addDebugLog({ provider: 'openrouter', model: runtimeConfig.openrouter.model, curlPayload: payload });
@@ -2486,6 +2561,44 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 }
+// Centralized error handler to surface structured 429s and other errors
+app.use((err, req, res, next) => {
+  try {
+    if (err && err.name === 'RateLimitError') {
+      const rl = err.rateLimit || {};
+      if (Number.isFinite(rl.retry_after_seconds)) {
+        try { res.set('Retry-After', String(rl.retry_after_seconds)); } catch {}
+      }
+      const body = {
+        error: 'rate_limited',
+        message: err.message || 'Rate limit exceeded',
+        provider: err.provider || 'unknown',
+        rate_limit: {
+          limit: rl.limit,
+          remaining: rl.remaining,
+          reset_ms: rl.reset_ms,
+          reset_iso: rl.reset_iso,
+          retry_after_seconds: rl.retry_after_seconds,
+          provider_name: rl.provider_name
+        }
+      };
+      return res.status(429).json(body);
+    }
+  } catch {}
+  return next(err);
+});
+
+// Fallback error handler
+app.use((err, req, res, next) => {
+  try {
+    const status = Number(err?.httpStatus) || 500;
+    const message = err?.message || 'Internal Server Error';
+    return res.status(status).json({ error: 'server_error', message });
+  } catch {
+    return res.status(500).end();
+  }
+});
+
 app.listen(PORT, () => {
 
   console.log(`Server listening on http://localhost:${PORT} (provider=${runtimeConfig.provider})`);
