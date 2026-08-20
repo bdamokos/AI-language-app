@@ -1388,6 +1388,12 @@ Target Level: ${lvl}${ch ? ' (slightly challenging)' : ''}`;
 // Base text selection/generation endpoint
 app.get('/api/base-text-content/:baseTextId', async (req, res) => {
   try {
+    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    if (!checkRateLimit(clientIP, 'base-text-content', BASE_TEXT_RATE_LIMIT_MAX_REQUESTS)) {
+      res.set('Retry-After', String(Math.ceil(RATE_LIMIT_WINDOW / 1000)));
+      return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
+    }
+
     const { baseTextId } = req.params;
     if (!baseTextId) return res.status(400).json({ error: 'Base text ID required' });
 
@@ -2292,7 +2298,8 @@ app.post('/api/cache/exercise-image', async (req, res) => {
   try {
     // Rate limiting for file system access
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
-    if (!checkRateLimit(clientIP)) {
+    if (!checkRateLimit(clientIP, 'exercise-image', CACHE_IMAGE_RATE_LIMIT_MAX_REQUESTS)) {
+      res.set('Retry-After', String(Math.ceil(RATE_LIMIT_WINDOW / 1000)));
       return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
     }
     
@@ -2420,16 +2427,16 @@ app.post('/api/log', (req, res) => {
     // Log to console with appropriate level
     switch (logLevel) {
       case 'error':
-        console.error(logMessage, data || '');
+        console.error('%s', logMessage, data || '');
         break;
       case 'warn':
-        console.warn(logMessage, data || '');
+        console.warn('%s', logMessage, data || '');
         break;
       case 'debug':
-        console.debug(logMessage, data || '');
+        console.debug('%s', logMessage, data || '');
         break;
       default:
-        console.log(logMessage, data || '');
+        console.log('%s', logMessage, data || '');
     }
     
     // Store in debug logs for debugging purposes
@@ -2511,27 +2518,35 @@ app.post('/api/persist-exercise', async (req, res) => {
 // Simple in-memory rate limiter for file system access
 const rateLimitStore = new Map();
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 10; // max 10 requests per minute per IP
+const CACHE_IMAGE_RATE_LIMIT_MAX_REQUESTS = positiveIntegerEnv('CACHE_IMAGE_RATE_LIMIT_MAX', 10);
+const BASE_TEXT_RATE_LIMIT_MAX_REQUESTS = positiveIntegerEnv('BASE_TEXT_RATE_LIMIT_MAX', 30);
+const SPA_RATE_LIMIT_MAX_REQUESTS = positiveIntegerEnv('SPA_RATE_LIMIT_MAX', 120);
 
-function checkRateLimit(ip) {
+function positiveIntegerEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function checkRateLimit(ip, scope, maxRequests) {
   const now = Date.now();
   const windowStart = now - RATE_LIMIT_WINDOW;
+  const storeKey = `${scope}:${ip}`;
   
-  if (!rateLimitStore.has(ip)) {
-    rateLimitStore.set(ip, []);
+  if (!rateLimitStore.has(storeKey)) {
+    rateLimitStore.set(storeKey, []);
   }
   
-  const requests = rateLimitStore.get(ip);
+  const requests = rateLimitStore.get(storeKey);
   // Remove old requests outside the window
   const validRequests = requests.filter(timestamp => timestamp > windowStart);
   
-  if (validRequests.length >= RATE_LIMIT_MAX_REQUESTS) {
+  if (validRequests.length >= maxRequests) {
     return false; // Rate limited
   }
   
   // Add current request
   validRequests.push(now);
-  rateLimitStore.set(ip, validRequests);
+  rateLimitStore.set(storeKey, validRequests);
   return true; // Allowed
 }
 
@@ -2540,12 +2555,12 @@ setInterval(() => {
   const now = Date.now();
   const windowStart = now - RATE_LIMIT_WINDOW;
   
-  for (const [ip, requests] of rateLimitStore.entries()) {
+  for (const [storeKey, requests] of rateLimitStore.entries()) {
     const validRequests = requests.filter(timestamp => timestamp > windowStart);
     if (validRequests.length === 0) {
-      rateLimitStore.delete(ip);
+      rateLimitStore.delete(storeKey);
     } else {
-      rateLimitStore.set(ip, validRequests);
+      rateLimitStore.set(storeKey, validRequests);
     }
   }
 }, RATE_LIMIT_WINDOW);
@@ -2558,7 +2573,12 @@ if (process.env.NODE_ENV === 'production') {
   const distPath = path.resolve(__dirname, '..', 'dist');
   app.use(express.static(distPath));
   app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
+    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    if (!checkRateLimit(clientIP, 'spa-fallback', SPA_RATE_LIMIT_MAX_REQUESTS)) {
+      res.set('Retry-After', String(Math.ceil(RATE_LIMIT_WINDOW / 1000)));
+      return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
+    }
+    return res.sendFile(path.join(distPath, 'index.html'));
   });
 }
 // Centralized error handler to surface structured 429s and other errors

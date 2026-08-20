@@ -79,7 +79,15 @@ export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchI
 }
 
 function guessExtension(url, contentType) {
-  const byType = contentType.startsWith('image/') ? `.${contentType.split('/')[1].split(';')[0]}` : '';
+  const normalizedContentType = contentType.split(';', 1)[0].trim();
+  const byType = new Map([
+    ['image/png', '.png'],
+    ['image/jpeg', '.jpg'],
+    ['image/jpg', '.jpg'],
+    ['image/webp', '.webp'],
+    ['image/gif', '.gif'],
+    ['image/bmp', '.bmp']
+  ]).get(normalizedContentType) || '';
   const byUrl = (() => {
     try {
       const u = new URL(url);
@@ -801,6 +809,5 @@ export async function rateExerciseGroup(layout, groupId, isLike = true) {
   await saveExercisesIndex(layout, idx);
   return true;
 }
-
 
 

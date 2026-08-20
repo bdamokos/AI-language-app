@@ -34,8 +34,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Build
-        run: npm run build
-
+      - name: Build and test
+        run: npm test
 
 
