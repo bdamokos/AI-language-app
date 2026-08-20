@@ -65,7 +65,7 @@ export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchI
     throw new Error(`Failed to download image (${res.status}): ${text}`);
   }
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
-  const ext = guessExtension(url, contentType) || '.bin';
+  const ext = guessExtension(contentType) || '.bin';
   const filename = `${exerciseSha}${ext}`;
   const destPath = path.join(imagesDir, filename);
   const buf = Buffer.from(await res.arrayBuffer());
@@ -78,9 +78,9 @@ export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchI
   return { localPath: destPath, filename, ext, contentType, localUrl };
 }
 
-function guessExtension(url, contentType) {
+function guessExtension(contentType) {
   const normalizedContentType = contentType.split(';', 1)[0].trim();
-  const byType = new Map([
+  return new Map([
     ['image/png', '.png'],
     ['image/jpeg', '.jpg'],
     ['image/jpg', '.jpg'],
@@ -88,15 +88,6 @@ function guessExtension(url, contentType) {
     ['image/gif', '.gif'],
     ['image/bmp', '.bmp']
   ]).get(normalizedContentType) || '';
-  const byUrl = (() => {
-    try {
-      const u = new URL(url);
-      const m = (u.pathname || '').match(/\.(png|jpg|jpeg|webp|gif|bmp)$/i);
-      return m ? `.${m[1].toLowerCase()}` : '';
-    } catch { return ''; }
-  })();
-  // Prefer URL-specified ext if present, else content-type
-  return byUrl || byType || '';
 }
 
 // -----------------------------
@@ -809,5 +800,4 @@ export async function rateExerciseGroup(layout, groupId, isLike = true) {
   await saveExercisesIndex(layout, idx);
   return true;
 }
-
 

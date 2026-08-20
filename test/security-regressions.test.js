@@ -81,7 +81,7 @@ test('client logging keeps format tokens literal and file routes enforce separat
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       baseTextId: 'security-regression',
-      url: `http://127.0.0.1:${maliciousImagePort}/image`
+      url: `http://127.0.0.1:${maliciousImagePort}/attacker.png`
     })
   });
   assert.equal(cacheImageResponse.status, 200);
