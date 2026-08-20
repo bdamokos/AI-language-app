@@ -67,7 +67,11 @@ export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchI
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
   const ext = guessExtension(contentType) || '.bin';
   const filename = `${exerciseSha}${ext}`;
-  const destPath = path.join(imagesDir, filename);
+  const imagesRoot = path.resolve(imagesDir);
+  const destPath = path.resolve(imagesRoot, filename);
+  if (!destPath.startsWith(`${imagesRoot}${path.sep}`)) {
+    throw new Error('Invalid image cache path');
+  }
   const buf = Buffer.from(await res.arrayBuffer());
   await fs.writeFile(destPath, buf);
   const indexPath = path.join(imagesDir, 'index.json');
