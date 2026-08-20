@@ -67,7 +67,11 @@ export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchI
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
   const ext = guessExtension(contentType) || '.bin';
   const filename = `${exerciseSha}${ext}`;
-  const destPath = path.join(imagesDir, filename);
+  const imagesRoot = path.resolve(imagesDir);
+  const destPath = path.resolve(imagesRoot, filename);
+  if (!destPath.startsWith(`${imagesRoot}${path.sep}`)) {
+    throw new Error('Invalid image cache path');
+  }
   const buf = Buffer.from(await res.arrayBuffer());
   await fs.writeFile(destPath, buf);
   const indexPath = path.join(imagesDir, 'index.json');
@@ -80,14 +84,15 @@ export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchI
 
 function guessExtension(contentType) {
   const normalizedContentType = contentType.split(';', 1)[0].trim();
-  return new Map([
-    ['image/png', '.png'],
-    ['image/jpeg', '.jpg'],
-    ['image/jpg', '.jpg'],
-    ['image/webp', '.webp'],
-    ['image/gif', '.gif'],
-    ['image/bmp', '.bmp']
-  ]).get(normalizedContentType) || '';
+  switch (normalizedContentType) {
+    case 'image/png': return '.png';
+    case 'image/jpeg':
+    case 'image/jpg': return '.jpg';
+    case 'image/webp': return '.webp';
+    case 'image/gif': return '.gif';
+    case 'image/bmp': return '.bmp';
+    default: return '';
+  }
 }
 
 // -----------------------------
@@ -800,4 +805,3 @@ export async function rateExerciseGroup(layout, groupId, isLike = true) {
   await saveExercisesIndex(layout, idx);
   return true;
 }
-
