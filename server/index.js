@@ -1,4 +1,5 @@
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -15,6 +16,27 @@ dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+const RATE_LIMIT_WINDOW = 60 * 1000;
+
+function positiveIntegerEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function createFileSystemRateLimiter(maxRequests) {
+  return rateLimit({
+    windowMs: RATE_LIMIT_WINDOW,
+    limit: maxRequests,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Rate limit exceeded. Please try again later.' }
+  });
+}
+
+const cacheImageRateLimiter = createFileSystemRateLimiter(positiveIntegerEnv('CACHE_IMAGE_RATE_LIMIT_MAX', 10));
+const baseTextRateLimiter = createFileSystemRateLimiter(positiveIntegerEnv('BASE_TEXT_RATE_LIMIT_MAX', 30));
+const spaRateLimiter = createFileSystemRateLimiter(positiveIntegerEnv('SPA_RATE_LIMIT_MAX', 120));
 
 // Persistent cache directories (lazy-init)
 // Default fallback is a local .cache directory; override via CACHE_DIR env in prod
@@ -1386,7 +1408,7 @@ Target Level: ${lvl}${ch ? ' (slightly challenging)' : ''}`;
 });
 
 // Base text selection/generation endpoint
-app.get('/api/base-text-content/:baseTextId', async (req, res) => {
+app.get('/api/base-text-content/:baseTextId', baseTextRateLimiter, async (req, res) => {
   try {
     const { baseTextId } = req.params;
     if (!baseTextId) return res.status(400).json({ error: 'Base text ID required' });
@@ -2288,14 +2310,8 @@ app.post('/api/falai/generate', async (req, res) => {
 });
 
 // Persist an external image to local cache and link to an existing exercise
-app.post('/api/cache/exercise-image', async (req, res) => {
+app.post('/api/cache/exercise-image', cacheImageRateLimiter, async (req, res) => {
   try {
-    // Rate limiting for file system access
-    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
-    if (!checkRateLimit(clientIP)) {
-      return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
-    }
-    
     if (!cacheLayout) return res.status(503).json({ error: 'Cache not initialized' });
     const { exerciseSha, url, baseTextId, chapterNumber } = req.body || {};
     if (!url) return res.status(400).json({ error: 'url is required' });
@@ -2420,16 +2436,16 @@ app.post('/api/log', (req, res) => {
     // Log to console with appropriate level
     switch (logLevel) {
       case 'error':
-        console.error(logMessage, data || '');
+        console.error('%s', logMessage, data || '');
         break;
       case 'warn':
-        console.warn(logMessage, data || '');
+        console.warn('%s', logMessage, data || '');
         break;
       case 'debug':
-        console.debug(logMessage, data || '');
+        console.debug('%s', logMessage, data || '');
         break;
       default:
-        console.log(logMessage, data || '');
+        console.log('%s', logMessage, data || '');
     }
     
     // Store in debug logs for debugging purposes
@@ -2508,48 +2524,6 @@ app.post('/api/persist-exercise', async (req, res) => {
   }
 });
 
-// Simple in-memory rate limiter for file system access
-const rateLimitStore = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 10; // max 10 requests per minute per IP
-
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const windowStart = now - RATE_LIMIT_WINDOW;
-  
-  if (!rateLimitStore.has(ip)) {
-    rateLimitStore.set(ip, []);
-  }
-  
-  const requests = rateLimitStore.get(ip);
-  // Remove old requests outside the window
-  const validRequests = requests.filter(timestamp => timestamp > windowStart);
-  
-  if (validRequests.length >= RATE_LIMIT_MAX_REQUESTS) {
-    return false; // Rate limited
-  }
-  
-  // Add current request
-  validRequests.push(now);
-  rateLimitStore.set(ip, validRequests);
-  return true; // Allowed
-}
-
-// Clean up old rate limit data periodically
-setInterval(() => {
-  const now = Date.now();
-  const windowStart = now - RATE_LIMIT_WINDOW;
-  
-  for (const [ip, requests] of rateLimitStore.entries()) {
-    const validRequests = requests.filter(timestamp => timestamp > windowStart);
-    if (validRequests.length === 0) {
-      rateLimitStore.delete(ip);
-    } else {
-      rateLimitStore.set(ip, validRequests);
-    }
-  }
-}, RATE_LIMIT_WINDOW);
-
 const PORT = process.env.PORT || 3000;
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {
@@ -2557,8 +2531,8 @@ if (process.env.NODE_ENV === 'production') {
   const __dirname = path.dirname(__filename);
   const distPath = path.resolve(__dirname, '..', 'dist');
   app.use(express.static(distPath));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
+  app.get('*', spaRateLimiter, (req, res) => {
+    return res.sendFile(path.join(distPath, 'index.html'));
   });
 }
 // Centralized error handler to surface structured 429s and other errors
