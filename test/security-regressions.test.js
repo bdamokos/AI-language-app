@@ -110,9 +110,16 @@ test('client logging keeps format tokens literal and file routes enforce separat
   assert.equal(limitedBaseText.status, 429);
   assert.equal(limitedBaseText.headers.get('retry-after'), '60');
 
-  for (let request = 0; request < 3; request += 1) {
-    const response = await fetch(`${baseUrl}/spa-route-${request}`);
+  const indexHtml = await fs.readFile(path.join(process.cwd(), 'dist', 'index.html'), 'utf8');
+  const homepage = await fetch(`${baseUrl}/`);
+  assert.equal(homepage.status, 200);
+  assert.equal(await homepage.text(), indexHtml);
+
+  for (const route of ['/spa-route', '/lessons/unit/exercise', '/spa-route/']) {
+    const response = await fetch(`${baseUrl}${route}`);
     assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/html\b/);
+    assert.equal(await response.text(), indexHtml);
   }
   const limitedSpa = await fetch(`${baseUrl}/spa-route-limited`);
   assert.equal(limitedSpa.status, 429);
