@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cacheDir = path.resolve(process.env.CACHE_DIR || path.join(root, '.cache'));
 const auth = await createAuth({ config: { cacheDir } });
 const inference = createInference({ auth });
-const app = createApp({ auth, inference, cacheDir, distDir: path.join(root, 'dist') });
+const app = createApp({ auth, inference, cacheDir, distDir: path.join(root, 'dist'), trustedProxyCidrs: process.env.TRUSTED_PROXY_CIDRS || '' });
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be a valid TCP port.');
 const server = app.listen(port, process.env.HOST || '0.0.0.0', () => {

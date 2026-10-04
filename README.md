@@ -40,7 +40,11 @@ npm run build
 APP_ORIGIN=https://YOUR_DOMAIN HOST=127.0.0.1 npm start
 ```
 
-Serve the app through an HTTPS reverse proxy. Preserve the public `Host` header and forward `/api` to the same backend. The server validates the configured origin and does not trust arbitrary forwarded headers. The registered redirect URI must match `APP_ORIGIN` and `/api/auth/callback` exactly. Do not log callback query strings or authorization headers at the proxy.
+Serve the app through an HTTPS reverse proxy. Preserve the public `Host` header and forward `/api` to the same backend. The server validates the raw `Host` and `Origin` headers against the configured origin; forwarded host/protocol headers do not override these checks. The registered redirect URI must match `APP_ORIGIN` and `/api/auth/callback` exactly. Do not log callback query strings or authorization headers at the proxy.
+
+For per-client rate limits behind a proxy, set `TRUSTED_PROXY_CIDRS` to a comma-separated list of the **proxy peer addresses actually seen by Node**. The default is empty, so direct clients cannot choose their IP through `X-Forwarded-For`. For a same-host proxy connecting directly to Node over loopback, use `TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128`. With Docker port forwarding, identify the bridge gateway or proxy container IP seen by the application and allow that specific address instead; do not copy the loopback example without checking the network path. For multiple controlled proxies, include their exact addresses or dedicated proxy-only subnets. Names, hop counts, wildcards, `/0`, and IPv4-mapped IPv6 CIDRs are rejected. The public-facing proxy must overwrite untrusted client `X-Forwarded-For` values with the real client address, and the backend port must be reachable only through the intended route. Express walks the address chain back to the first untrusted peer.
+
+Sign-in endpoints allow 120 requests per minute per client, with 10 login attempts within that budget. Production assets and SPA routes share a separate 600-request-per-minute client limit. Authenticated lesson APIs retain their independent per-account limit.
 
 Set private, persistent `AUTH_DIR` and `CACHE_DIR` locations outside the static site. Use **one Node process per storage pair**. The file store serializes refreshes and cache writes in that process; multiple replicas require a shared transactional session store before deployment.
 

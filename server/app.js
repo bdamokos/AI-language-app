@@ -1,6 +1,7 @@
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import path from 'node:path';
+import { isIP } from 'node:net';
 import { ensureCacheLayout, getExplanation, setExplanation, getBaseText, setBaseText, loadBaseTextsIndex, sha256Hex, readExerciseItem, selectUnseenCrossModel, selectUnseenCrossModelGrouped, addExercisesToPool, makeBucketKey, incrementExerciseHits, rateExplanation, rateExerciseGroup, loadExercisesIndex } from './cacheStore.js';
 import { BASE_TEXT_SYSTEM_PROMPT, generateBaseTextUserPrompt, BASE_TEXT_SCHEMA, addSourceMetadata, calculateTextSuitability, checkTextSuitability } from './baseTextPrompts.js';
 import { pickRandomTopicSuggestion } from '../shared/topicRoulette.js';
@@ -65,22 +66,52 @@ function dedupeMcqItemOptions(originalItem) {
   }
 }
 
+// Only network peers controlled by the operator may supply client addresses.
+// Named shortcuts and hop counts can accidentally trust a shorter public route.
+export function parseTrustedProxyCidrs(value = '') {
+  if (typeof value !== 'string') throw new Error('TRUSTED_PROXY_CIDRS must be a comma-separated list of explicit IP addresses or CIDRs.');
+  if (!value.trim()) return [];
+  return [...new Set(value.split(',').map(part => {
+    const entry = part.trim();
+    const [address, prefixText, extra] = entry.split('/');
+    const family = isIP(address);
+    const fail = () => { throw new Error('TRUSTED_PROXY_CIDRS accepts explicit IP addresses and nonzero CIDR prefixes only; wildcards, names and hop counts are not allowed.'); };
+    if (!family || address.includes('%') || extra !== undefined) return fail();
+    if (prefixText === undefined) return address;
+    if (!/^[0-9]{1,3}$/.test(prefixText)) return fail();
+    const prefix = Number(prefixText);
+    if (prefix < 1 || prefix > (family === 4 ? 32 : 128)) return fail();
+    // proxy-addr converts mapped IPv6 ranges to IPv4. Require ordinary IPv4
+    // notation so a /96 cannot silently become an all-addresses IPv4 /0.
+    if (family === 6 && new URL(`http://[${address}]/`).hostname.startsWith('[::ffff:')) return fail();
+    return `${address}/${prefix}`;
+  }))];
+}
+
+function ipRateLimiter(limit, message) {
+  return rateLimit({ windowMs: 60_000, limit, standardHeaders: 'draft-8', legacyHeaders: false,
+    // With no trusted proxy, forged X-Forwarded-For is deliberately ignored.
+    validate: { xForwardedForHeader: false }, message: { error: message } });
+}
+
 /** Account credentials are supplied only by auth; legacy operator keys are never read. */
-export function createApp({ auth, inference, cacheDir = path.resolve('.cache'), distDir = path.resolve('dist'), production = process.env.NODE_ENV === 'production', rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10 } = {}) {
+export function createApp({ auth, inference, cacheDir = path.resolve('.cache'), distDir = path.resolve('dist'), production = process.env.NODE_ENV === 'production', rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10, frontendRateLimitMax = 600, trustedProxyCidrs = '' } = {}) {
   if (!auth || !inference) throw new Error('Authentication and inference services are required.');
+  const proxies = parseTrustedProxyCidrs(trustedProxyCidrs);
   const app = express();
+  app.set('trust proxy', proxies.length ? proxies : false);
   app.disable('x-powered-by');
   // Host validation uses APP_ORIGIN in auth, not untrusted forwarded headers.
   app.use((req, res, next) => {
     res.set({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()' });
-    if (production) res.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://auth.openai.com");
+    if (production) res.set('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://auth.openai.com");
     if (req.path.startsWith('/api') || req.path.startsWith('/cache')) res.set('Cache-Control', 'no-store');
     next();
   });
   app.get('/healthz', (req, res) => res.json({ ok: true }));
   app.use('/api', auth.guard);
-  app.use('/api/auth', rateLimit({ windowMs: 60_000, limit: authRateLimitMax, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many sign-in requests. Please try again shortly.' } }));
-  app.use('/api/auth/login', rateLimit({ windowMs: 60_000, limit: loginRateLimitMax, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many sign-in attempts. Please wait a minute.' } }));
+  app.use('/api/auth', ipRateLimiter(authRateLimitMax, 'Too many sign-in requests. Please try again shortly.'));
+  app.use('/api/auth/login', ipRateLimiter(loginRateLimitMax, 'Too many sign-in attempts. Please wait a minute.'));
   app.use(express.json({ limit: '1mb' }));
   auth.attachRoutes(app);
   app.use('/api', auth.requireCsrf, auth.middleware);
@@ -732,6 +763,8 @@ app.post('/api/persist-exercise', async (req, res) => {
   app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found' }));
   app.use('/cache', (req, res) => res.status(404).json({ error: 'Not found' }));
   if (production) {
+    // Apply before both assets and the SPA fallback, which read from disk.
+    app.use(ipRateLimiter(frontendRateLimitMax, 'Too many page requests. Please try again shortly.'));
     app.use(express.static(distDir, { dotfiles: 'deny' }));
     app.get('/{*splat}', (req, res) => res.sendFile(path.join(distDir, 'index.html')));
   }

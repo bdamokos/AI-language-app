@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createApp } from '../server/app.js';
+import { createApp, parseTrustedProxyCidrs } from '../server/app.js';
+import { createAuth } from '../server/auth.js';
 import { ensureCacheLayout, writeJson, readJson, setExplanation, loadExercisesIndex, addExercisesToPool, makeBucketKey, sha256Hex } from '../server/cacheStore.js';
 
 // Auth is tested against a real local OAuth fixture in auth.test.js. These
 // explicit injected identities test application boundaries independently.
-async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10 } = {}) {
+async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10, frontendRateLimitMax = 600, trustedProxyCidrs = '', production = false, guardOrigin } = {}) {
   const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'language-private-cache-'));
   const calls = [];
   let cancelledResolve;
@@ -29,6 +31,11 @@ async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRat
       next();
     },
   };
+  if (guardOrigin) {
+    // Use the production guard even though inference and identity are fixtures.
+    const realAuth = await createAuth({ config: { appOrigin: guardOrigin, redirectUri: `${guardOrigin}/api/auth/callback`, clientId: '', clientSecret: '', tokenAuthMethod: 'none', authDir: path.join(cacheDir, 'auth'), cacheDir: path.join(cacheDir, 'lessons') } });
+    auth.guard = realAuth.guard;
+  }
   const model = req => `${req.auth.accountId}-model`;
   const inference = {
     getModel: async req => model(req),
@@ -57,7 +64,13 @@ async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRat
       return JSON.stringify({ items: [{ sentence: `${req.auth.accountId} _____ aquí.`, answer: 'está' }] });
     },
   };
-  const app = createApp({ auth, inference, cacheDir, production: false, rateLimitMax, authRateLimitMax, loginRateLimitMax });
+  const distDir = path.join(cacheDir, 'frontend');
+  if (production) {
+    await fs.mkdir(distDir);
+    await fs.writeFile(path.join(distDir, 'index.html'), '<!doctype html><title>Fixture app</title>');
+    await fs.writeFile(path.join(distDir, 'asset.js'), '/* Fixture asset */');
+  }
+  const app = createApp({ auth, inference, cacheDir, distDir, production, rateLimitMax, authRateLimitMax, loginRateLimitMax, frontendRateLimitMax, trustedProxyCidrs });
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -72,7 +85,19 @@ async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRat
     headers: { 'x-test-account': account, 'x-csrf-token': 'fixture-csrf', ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  return { request, calls, cacheDir, cancelled };
+  // Native fetch deliberately replaces Host, so use HTTP directly to exercise
+  // raw-host spoofing against the production guard over the same real socket.
+  const rawRequest = (route, headers) => new Promise((resolve, reject) => {
+    const req = httpRequest(`${origin}${route}`, { headers }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers: response.headers })));
+      response.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  return { request, rawRequest, calls, cacheDir, cancelled };
 }
 
 function events(text) {
@@ -179,6 +204,82 @@ test('authentication endpoints are limited before unauthenticated session writes
   assert.equal((await request('/api/auth/session', { account: '' })).status, 200);
   assert.equal((await request('/api/auth/session', { account: '' })).status, 200);
   assert.equal((await request('/api/auth/session', { account: '' })).status, 429);
+});
+
+test('trusted proxy configuration accepts explicit networks and rejects permissive shortcuts', () => {
+  assert.deepEqual(parseTrustedProxyCidrs(), []);
+  assert.deepEqual(parseTrustedProxyCidrs('  '), []);
+  assert.deepEqual(parseTrustedProxyCidrs('127.0.0.1/32, ::1/128, 192.0.2.5, 127.0.0.1/32'), ['127.0.0.1/32', '::1/128', '192.0.2.5']);
+  for (const value of [true, false, 1, null, 'true', 'false', '1', '*', 'loopback', 'linklocal', 'uniquelocal', 'example.com', '0.0.0.0/0', '::/0', '::ffff:0.0.0.0/96', '::ffff:0:0/96', '127.0.0.1/33', '::1/129', '127.0.0.1/', '127.0.0.1,', 'http://127.0.0.1', 'fe80::1%en0']) {
+    assert.throws(() => parseTrustedProxyCidrs(value), /TRUSTED_PROXY_CIDRS/, String(value));
+  }
+});
+
+test('clients behind an explicitly trusted socket peer have independent sign-in limits', async t => {
+  const { request } = await fixture(t, { trustedProxyCidrs: '127.0.0.1/32', loginRateLimitMax: 1 });
+  const login = client => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': client } });
+  assert.equal((await login('198.51.100.10')).status, 200);
+  assert.equal((await login('198.51.100.10')).status, 429);
+  assert.equal((await login('198.51.100.11')).status, 200);
+});
+
+test('untrusted socket peers cannot rotate forwarded addresses to bypass sign-in limits', async t => {
+  for (const trustedProxyCidrs of ['', '192.0.2.5/32']) {
+    const { request } = await fixture(t, { trustedProxyCidrs, loginRateLimitMax: 1 });
+    const login = client => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': client } });
+    assert.equal((await login('198.51.100.10')).status, 200);
+    assert.equal((await login('198.51.100.11')).status, 429);
+  }
+});
+
+test('trusted proxy chains stop at the first untrusted address', async t => {
+  const { request } = await fixture(t, { trustedProxyCidrs: '127.0.0.1/32', loginRateLimitMax: 1 });
+  const login = spoofedClient => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': `${spoofedClient}, 203.0.113.42` } });
+  assert.equal((await login('198.51.100.10')).status, 200);
+  assert.equal((await login('198.51.100.11')).status, 429);
+});
+
+test('trusting a proxy never lets forwarded host headers replace raw Host or Origin checks', async t => {
+  const { rawRequest } = await fixture(t, { trustedProxyCidrs: '127.0.0.1/32', guardOrigin: 'https://language.example' });
+  const invalidHost = await rawRequest('/api/auth/session', { host: 'attacker.example', 'x-forwarded-host': 'language.example', 'x-forwarded-proto': 'https', 'x-forwarded-for': '198.51.100.10' });
+  assert.equal(invalidHost.status, 403);
+  assert.equal((await invalidHost.json()).code, 'untrusted_origin');
+  assert.equal((await rawRequest('/api/auth/session', { host: 'language.example', 'x-forwarded-host': 'attacker.example' })).status, 200);
+  const invalidOrigin = await rawRequest('/api/auth/session', { host: 'language.example', origin: 'https://attacker.example', 'x-forwarded-host': 'language.example' });
+  assert.equal(invalidOrigin.status, 403);
+  assert.equal((await invalidOrigin.json()).code, 'untrusted_origin');
+});
+
+test('static assets and SPA fallback share a client limit independent from API and health checks', async t => {
+  const { request } = await fixture(t, { production: true, trustedProxyCidrs: '127.0.0.1/32', frontendRateLimitMax: 2 });
+  const headers = { 'x-forwarded-for': '198.51.100.10' };
+  const asset = await request('/asset.js', { headers });
+  assert.equal(asset.status, 200);
+  assert.equal(await asset.text(), '/* Fixture asset */');
+  const fallback = await request('/lessons/grammar', { headers });
+  assert.equal(fallback.status, 200);
+  assert.match(await fallback.text(), /Fixture app/);
+  const limited = await request('/', { headers });
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+  assert.equal((await request('/', { headers: { 'x-forwarded-for': '198.51.100.11' } })).status, 200);
+  assert.equal((await request('/api/auth/session', { headers })).status, 200);
+  assert.equal((await request('/healthz', { headers })).status, 200);
+});
+
+test('production CSP permits bundled PDF WebAssembly without arbitrary JavaScript evaluation or external connections', async t => {
+  const { request } = await fixture(t, { production: true });
+  const response = await request('/');
+  assert.equal(response.status, 200);
+  const policy = new Map(response.headers.get('content-security-policy').split(';').map(directive => {
+    const [name, ...sources] = directive.trim().split(/\s+/);
+    return [name, sources];
+  }));
+  assert.deepEqual(policy.get('script-src'), ["'self'", "'wasm-unsafe-eval'"]);
+  assert.deepEqual(policy.get('connect-src'), ["'self'", 'data:']);
+  assert.deepEqual(policy.get('object-src'), ["'none'"]);
+  assert.deepEqual(policy.get('base-uri'), ["'none'"]);
+  assert.deepEqual(policy.get('frame-ancestors'), ["'none'"]);
 });
 
 test('closing a streamed response cancels inference and leaves the cache empty', async t => {
