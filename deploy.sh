@@ -42,6 +42,7 @@
 #
 # USAGE:
 # ------
+# All deployment modes require REGISTRY_HOST.
 # Build, push, and deploy:  ./deploy.sh
 # Deploy only:              ./deploy.sh --deploy-only
 #                          ./deploy.sh -d
@@ -113,7 +114,8 @@ parse_args() {
                 echo ""
                         echo "Configuration:"
         echo "  Set REMOTE_HOST, REMOTE_USER, and DEPLOY_PATH in .env file"
-        echo "  Set REGISTRY_HOST, REGISTRY_PORT, IMAGE_NAME, IMAGE_TAG for build/push"
+        echo "  REGISTRY_HOST is required in every deployment mode, including --deploy-only"
+        echo "  Set REGISTRY_PORT, IMAGE_NAME, and IMAGE_TAG for the image to deploy"
                 exit 0
                 ;;
             *)
@@ -251,42 +253,17 @@ build_and_push() {
         exit 1
     fi
     
-    # If registry is specified, tag and push
-    if [ -n "$REGISTRY_HOST" ]; then
-        # Use registry port if specified, default to 5010 like Travel Tracker
-        REGISTRY_PORT=${REGISTRY_PORT:-5010}
-        REGISTRY_FULL="$REGISTRY_HOST:$REGISTRY_PORT"
-        
-        echo "🏷️  Tagging image for registry at $REGISTRY_FULL..."
-        docker tag $IMAGE_NAME:$IMAGE_TAG $REGISTRY_FULL/$IMAGE_NAME:$IMAGE_TAG
-        
-        echo "⬆️  Pushing image to registry..."
-        if ! docker push $REGISTRY_FULL/$IMAGE_NAME:$IMAGE_TAG; then
-            echo "❌ Docker push failed. If using HTTP registry, configure Docker daemon with:"
-            echo "  \"insecure-registries\": [\"$REGISTRY_FULL\"]"
-            echo "in /etc/docker/daemon.json or Docker Desktop settings"
-            exit 1
-        fi
-        
+    echo "🏷️  Tagging image for registry at $REGISTRY_FULL..."
+    docker tag "$IMAGE_NAME:$IMAGE_TAG" "$FULL_IMAGE_NAME"
 
-        
-        echo "✅ Image pushed to registry successfully!"
-        
-        # Update docker-compose.yml with registry image
-        REGISTRY_PORT=${REGISTRY_PORT:-5010}
-        REGISTRY_FULL="$REGISTRY_HOST:$REGISTRY_PORT"
-        FULL_IMAGE_NAME="$REGISTRY_FULL/$IMAGE_NAME:$IMAGE_TAG"
-        
-        # Update the image in docker-compose.yml
-        sed -i.bak "s|image: .*|image: $FULL_IMAGE_NAME|g" docker-compose.yml
-        rm docker-compose.yml.bak
-    else
-        echo "⚠️  No registry specified. Image will be built locally on remote server."
-        echo "   This requires copying the Dockerfile and build context."
-        
-
+    echo "⬆️  Pushing image to registry..."
+    if ! docker push "$FULL_IMAGE_NAME"; then
+        echo "❌ Docker push failed. If using HTTP registry, configure Docker daemon with:"
+        echo "  \"insecure-registries\": [\"$REGISTRY_FULL\"]"
+        echo "in /etc/docker/daemon.json or Docker Desktop settings"
+        exit 1
     fi
-    
+
     echo "✅ Build and push completed successfully!"
 }
 
@@ -307,12 +284,20 @@ validate_config() {
         exit 1
     fi
     
+    if [ -z "$REGISTRY_HOST" ]; then
+        echo "❌ Error: REGISTRY_HOST is required for remote deployment, including --deploy-only."
+        echo "Set REGISTRY_HOST in .env. This script deploys a published registry image."
+        exit 1
+    fi
+    REGISTRY_FULL="$REGISTRY_HOST:$REGISTRY_PORT"
+    FULL_IMAGE_NAME="$REGISTRY_FULL/$IMAGE_NAME:$IMAGE_TAG"
+
     echo "📋 Deployment Configuration:"
     echo "   Host: $REMOTE_HOST"
     echo "   User: $REMOTE_USER"
     echo "   Path: $DEPLOY_PATH"
     echo "   Port: $DEPLOY_PORT"
-    echo "   Image: ${REGISTRY_HOST:+$REGISTRY_HOST/}$IMAGE_NAME:$IMAGE_TAG"
+    echo "   Image: $FULL_IMAGE_NAME"
     echo "   Cache dir (remote): $CACHE_HOST_DIR"
     echo ""
 }
@@ -343,7 +328,7 @@ run_ssh "mkdir -p $DEPLOY_PATH"
 run_scp docker-compose.yml .env $REMOTE_USER@$REMOTE_HOST:$DEPLOY_PATH/
 
 echo "🔄 Running deployment on remote server..."
-sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST" bash -s -- "$DEPLOY_PATH" "$CACHE_HOST_DIR" "$DEPLOY_PORT" <<'REMOTE_SCRIPT'
+sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST" bash -s -- "$DEPLOY_PATH" "$CACHE_HOST_DIR" "$DEPLOY_PORT" "$FULL_IMAGE_NAME" <<'REMOTE_SCRIPT'
 set -e
 DEPLOY_PATH="$1"
 CACHE_HOST_DIR="$2"
@@ -354,11 +339,13 @@ cd "$DEPLOY_PATH"
 set -a
 [ -f .env ] && . ./.env
 set +a
+# Select the same published image in normal and --deploy-only runs.
+export APP_IMAGE="$4"
 
 echo "📁 Setting up LanguageAIApp deployment..."
 
 sudo mkdir -p "$CACHE_HOST_DIR"
-sudo chmod 775 "$CACHE_HOST_DIR" || true
+sudo install -d -m 700 -o 1000 -g 1000 "$CACHE_HOST_DIR/auth" "$CACHE_HOST_DIR/cache"
 echo "📁 Ensured persistent cache directory exists at $CACHE_HOST_DIR"
 
 if docker compose version >/dev/null 2>&1; then
@@ -376,13 +363,10 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 echo "⬇️  Pulling latest image..."
-$COMPOSE_CMD pull || true
-
-echo "⏹️  Stopping existing containers..."
-$COMPOSE_CMD down || true
+$COMPOSE_CMD pull
 
 echo "▶️  Starting services..."
-$COMPOSE_CMD up -d --remove-orphans
+$COMPOSE_CMD up -d --no-build --remove-orphans
 
 echo "📊 Services status:"
 $COMPOSE_CMD ps

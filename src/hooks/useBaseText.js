@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 import { useCallback, useState } from 'react';
 
 /**
@@ -14,7 +15,7 @@ export default function useBaseText() {
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch('/api/base-text', {
+      const resp = await apiFetch('/api/base-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, language, level, challengeMode, excludeIds, focus })

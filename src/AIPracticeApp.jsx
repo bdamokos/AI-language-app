@@ -1,4 +1,7 @@
+import { apiFetch } from './utils/api.js';
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight, Globe, GraduationCap } from 'lucide-react';
 import Joyride, { STATUS } from 'react-joyride';
 import { schemaVersions } from '../shared/schemaVersions.js';
@@ -18,7 +21,7 @@ import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
 import useBaseText from './hooks/useBaseText.js';
 
-const AIPracticeApp = () => {
+const AIPracticeApp = ({ onNewLesson }) => {
   // Language and level context
   const [languageContext, setLanguageContext] = useState(null);
   
@@ -136,7 +139,7 @@ const AIPracticeApp = () => {
     },
     {
       target: '#topic-input',
-      content: 'Enter a practice topic. Tip: try "past tense" or something specific (e.g., "preterite tense", "vocuabulary for checking in to a hotel", etc.).',
+      content: 'Enter a practice topic. Tip: try "past tense" or something specific (e.g., "preterite tense", "vocabulary for checking in to a hotel", etc.).',
       placement: 'top'
     },
     {
@@ -149,7 +152,7 @@ const AIPracticeApp = () => {
   const postTourSteps = [
     {
       target: '#exercise-generation-controls',
-      content: 'Use these buttons to generate exercises on the fly. They will appear below the explanation. You can generate new sets as many times as you like. \n \n (Be conscious of the AI costs, this is a hobby project :) Generation may take some time as we are using cheap or free models.)',
+      content: 'Use these buttons to generate exercises. New sets appear below the explanation and use your ChatGPT plan allowance.',
       placement: 'bottom'
     },
     {
@@ -186,11 +189,11 @@ const AIPracticeApp = () => {
 
   useEffect(() => {
     // Auto-start post-tour once explanation is present, only if user has not seen this version
-    if (lesson?.explanation && !hasSeenOnboarding()) {
+    if (lesson?.explanation?.content_markdown && !loadingLesson && !loadingExplOnly && !hasSeenOnboarding()) {
       const t = setTimeout(() => setIsPostTourRunning(true), 300);
       return () => clearTimeout(t);
     }
-  }, [lesson]);
+  }, [lesson, loadingLesson, loadingExplOnly]);
 
   const handlePostJoyrideCallback = (data) => {
     const { status } = data;
@@ -246,7 +249,6 @@ const AIPracticeApp = () => {
         error_bundles_shared_context: ''
       });
       setOrchestratorValues({});
-      setLoadingLesson(false);
       try {
         const final = await generateExplanationStream(context.topic, context, (evt) => {
           if (evt?.type === 'delta' || evt?.type === 'prefill') {
@@ -257,12 +259,16 @@ const AIPracticeApp = () => {
       } catch (error) {
         console.error('Error generating explanation:', error);
         setErrorMsg(error.message || 'Error generating explanation. Please try again.');
+        setLesson(prev => prev ? ({ ...prev, explanation: { ...prev.explanation, title: 'Explanation unavailable' } }) : prev);
+      } finally {
+        setLoadingLesson(false);
       }
     }
   };
 
   // Reset to language selection
   const resetToLanguageSelection = () => {
+    if (onNewLesson) { onNewLesson(); return; }
     setLanguageContext(null);
     setTopic('');
     setExercises([]);
@@ -337,60 +343,7 @@ const AIPracticeApp = () => {
     }, 0);
   };
 
-  const parseMarkdown = (text) => {
-    const parts = text.split(/```/);
-    return parts.map((part, index) => {
-      if (index % 2 === 1) {
-        return (
-          <pre key={index} className="bg-gray-800 text-gray-100 p-3 rounded-md my-2 overflow-x-auto">
-            <code>{part.replace(/^\w+\n/, '')}</code>
-          </pre>
-        );
-      }
-      const lines = part.split('\n');
-      return lines.map((line, lineIndex) => {
-        if (line.match(/^###\s/)) {
-          return (
-            <h3 key={`${index}-${lineIndex}`} className="font-bold text-lg mt-3 mb-1">
-              {line.substring(4)}
-            </h3>
-          );
-        } else if (line.match(/^##\s/)) {
-          return (
-            <h2 key={`${index}-${lineIndex}`} className="font-bold text-xl mt-3 mb-1">
-              {line.substring(3)}
-            </h2>
-          );
-        }
-        let processedLine = line
-          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-          .replace(/\*(.*?)\*/g, '<em>$1</em>')
-          .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1 py-0.5 rounded text-sm">$1</code>')
-          .replace(/"([^"]+)":/g, '<strong>"$1"</strong>:');
-        if (line.match(/^\d+\.\s/)) {
-          return (
-            <div key={`${index}-${lineIndex}`} className="ml-4 my-1">
-              <span dangerouslySetInnerHTML={{ __html: processedLine }} />
-            </div>
-          );
-        } else if (line.match(/^[-•]\s/)) {
-          return (
-            <div key={`${index}-${lineIndex}`} className="ml-4 my-1">
-              <span dangerouslySetInnerHTML={{ __html: '• ' + processedLine.substring(2) }} />
-            </div>
-          );
-        } else if (line.trim() === '') {
-          return <br key={`${index}-${lineIndex}`} />;
-        } else {
-          return (
-            <div key={`${index}-${lineIndex}`} className="my-1">
-              <span dangerouslySetInnerHTML={{ __html: processedLine }} />
-            </div>
-          );
-        }
-      });
-    });
-  };
+  const parseMarkdown = (text) => <ReactMarkdown remarkPlugins={[remarkGfm]}>{String(text || '')}</ReactMarkdown>;
 
   // keyPrefix allows scoping inputs for different sections/passages
   const parseExerciseSentence = (sentence, exerciseIndex, keyPrefix = 'fib', answerLookup = null) => {
@@ -450,9 +403,9 @@ const AIPracticeApp = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-center">
         <button
           onClick={generateExplanationOnly}
-          disabled={loadingExplOnly || !topic.trim()}
+          disabled={loadingLesson || loadingExplOnly || !topic.trim()}
           className="w-full bg-gray-800 text-white py-2 px-4 rounded hover:bg-gray-900 text-sm"
-        >{loadingExplOnly ? 'Generating...' : 'Generate Explanation'}</button>
+        >{loadingLesson || loadingExplOnly ? 'Generating explanation…' : 'Generate Explanation'}</button>
 
         <div className="flex gap-2">
           <button
@@ -564,37 +517,6 @@ const AIPracticeApp = () => {
     )
   );
 
-  const generateExercises = async () => {
-    if (!topic.trim()) return;
-    setLoading(true);
-    setErrorMsg('');
-    setSubmitted(false);
-    setUserAnswers({});
-    setExplanations({});
-    setRecommendation(null);
-    setVisibleHints({});
-    setShowContext({});
-    setLesson(null);
-    try {
-      const response = await fetch('/api/generate-exercises', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, exerciseCount: Number(exerciseCount) })
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setErrorMsg(data.details || data.error || 'Failed to generate exercises');
-        return;
-      }
-      setExercises(data.exercises || []);
-    } catch (error) {
-      console.error('Error generating exercises:', error);
-      alert('Error generating exercises. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const generateLessonContent = async (t) => {
     const topicToUse = (typeof t === 'string' && t.trim()) ? t.trim() : String(topic || '').trim();
     if (!topicToUse) return;
@@ -617,8 +539,6 @@ const AIPracticeApp = () => {
         error_bundles_shared_context: ''
       });
       setOrchestratorValues({});
-      // Hide the spinner now that lesson shell is visible
-      setLoadingLesson(false);
       const final = await generateExplanationStream(topicToUse, languageContext, (evt) => {
         if (evt?.type === 'delta' || evt?.type === 'prefill') {
           setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${topicToUse}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
@@ -628,6 +548,8 @@ const AIPracticeApp = () => {
     } catch (error) {
       console.error('Error generating lesson (explanation):', error);
       setErrorMsg(error.message || 'Error generating lesson. Please try again.');
+      setLesson(prev => prev ? ({ ...prev, explanation: { ...prev.explanation, title: 'Explanation unavailable' } }) : prev);
+    } finally {
       setLoadingLesson(false);
     }
   };
@@ -689,7 +611,10 @@ const AIPracticeApp = () => {
         }
       });
       mergeLesson({ topic, explanation: final });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate explanation'); }
+    } catch (e) {
+      setErrorMsg(e.message || 'Failed to generate explanation');
+      setLesson(prev => prev ? ({ ...prev, explanation: { ...prev.explanation, title: 'Explanation unavailable' } }) : prev);
+    }
     finally { setLoadingExplOnly(false); }
   };
 
@@ -716,7 +641,9 @@ const AIPracticeApp = () => {
       const collected = [];
       if (base && chapters.length > 0) {
         let remaining = desired;
-        while (remaining > 0) {
+        let attempts = 0;
+        while (remaining > 0 && attempts < desired) {
+          attempts += 1;
           let nextIndex = reserveNextReadingChapter(chapters.length);
           if (nextIndex < 0) {
             // Exhausted chapters for current base text; fetch a new one and reset cursor
@@ -740,18 +667,21 @@ const AIPracticeApp = () => {
           const chapter = chapters[nextIndex];
           const batchSize = Math.min(remaining, 10); // Request up to 10 exercises per chapter
           const resp = await generateFIB(topic, batchSize, { ...languageContext, baseText: base, chapter });
-          if (resp?.items) {
-            collected.push(...resp.items);
-            remaining -= resp.items.length;
+          if (!Array.isArray(resp?.items) || resp.items.length === 0) {
+            throw new Error('No fill-in-the-blank exercises were returned. Please try again.');
           }
+          const batch = resp.items.slice(0, remaining);
+          collected.push(...batch);
+          remaining -= batch.length;
         }
       }
-      const items = collected.length > 0 ? collected : [];
+      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
+      const items = collected;
       // Add creation timestamp to each exercise
       const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, fill_in_blanks: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate FIB'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate FIB'); }
     finally { setLoadingFibOnly(false); }
   };
 
@@ -765,7 +695,7 @@ const AIPracticeApp = () => {
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, multiple_choice: timestampedItems });
-      } catch (e) { console.error(e); setErrorMsg('Failed to generate MCQ'); }
+      } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate MCQ'); }
     finally { setLoadingMcqOnly(false); }
   };
 
@@ -816,12 +746,13 @@ const AIPracticeApp = () => {
           if (resp?.items?.[0]) collected.push(resp.items[0]);
         }
       }
-      const items = collected.length > 0 ? collected : [];
+      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
+      const items = collected;
       // Add creation timestamp to each exercise
       const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, cloze_passages: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate cloze'); }
     finally { setLoadingClozeOnly(false); }
   };
 
@@ -872,12 +803,13 @@ const AIPracticeApp = () => {
           if (resp?.items?.[0]) collected.push(resp.items[0]);
         }
       }
-      const items = collected.length > 0 ? collected : [];
+      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
+      const items = collected;
       // Add creation timestamp to each exercise
       const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, cloze_with_mixed_options: timestampedItems });
-      } catch (e) { console.error(e); setErrorMsg('Failed to generate cloze-mixed'); }
+      } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate cloze-mixed'); }
     finally { setLoadingClozeMixOnly(false); }
   };
 
@@ -918,7 +850,7 @@ const AIPracticeApp = () => {
           try {
             // Try to fetch the base text content from cache
             console.log('Attempting to fetch base text content for ID:', selectedChapter.base_text_id);
-            const baseTextResponse = await fetch(`/api/base-text-content/${selectedChapter.base_text_id}`);
+            const baseTextResponse = await apiFetch(`/api/base-text-content/${selectedChapter.base_text_id}`);
             console.log('Base text response status:', baseTextResponse.status);
 
             if (baseTextResponse.ok) {
@@ -974,7 +906,7 @@ const AIPracticeApp = () => {
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, guided_dialogues: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate guided dialogues'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate guided dialogues'); }
     finally { setLoadingDialogueOnly(false); }
   };
 
@@ -988,7 +920,7 @@ const AIPracticeApp = () => {
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, writing_prompts: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate writing prompts'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate writing prompts'); }
     finally { setLoadingWritingOnly(false); }
   };
 
@@ -1040,7 +972,7 @@ const AIPracticeApp = () => {
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, reading_comprehension: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate reading comprehension'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate reading comprehension'); }
     finally { setLoadingReadingOnly(false); }
   };
 
@@ -1081,25 +1013,30 @@ const AIPracticeApp = () => {
 
       if (base && chapters.length > 0) {
         let remaining = desired;
-        while (remaining > 0) {
+        let attempts = 0;
+        while (remaining > 0 && attempts < desired) {
+          attempts += 1;
           const nextIndex = reserveNextErrorBundleChapter(chapters.length);
           if (nextIndex < 0) break;
           const chapter = chapters[nextIndex];
           const batchSize = Math.min(remaining, 5); // Request up to 5 exercises per chapter
           const resp = await generateErrorBundles(topic, batchSize, { ...languageContext, baseText: base, chapter });
-          if (resp?.items) {
-            collected.push(...resp.items);
-            remaining -= resp.items.length;
+          if (!Array.isArray(resp?.items) || resp.items.length === 0) {
+            throw new Error('No fill-in-the-blank exercises were returned. Please try again.');
           }
+          const batch = resp.items.slice(0, remaining);
+          collected.push(...batch);
+          remaining -= batch.length;
         }
       }
 
-      const items = collected.length > 0 ? collected : [];
+      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
+      const items = collected;
       // Add creation timestamp to each exercise
       const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, error_bundles: timestampedItems, error_bundles_shared_context: '' });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate error bundles'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate error bundles'); }
     finally { setLoadingErrorBundlesOnly(false); }
   };
 
@@ -1126,7 +1063,9 @@ const AIPracticeApp = () => {
       const collected = [];
       if (base && chapters.length > 0) {
         let remaining = desired;
-        while (remaining > 0) {
+        let attempts = 0;
+        while (remaining > 0 && attempts < desired) {
+          attempts += 1;
           let nextIndex = reserveNextReadingChapter(chapters.length);
           if (nextIndex < 0) {
             const excludeIds = [base.id].filter(Boolean);
@@ -1149,17 +1088,19 @@ const AIPracticeApp = () => {
           const chapter = chapters[nextIndex];
           const batchSize = Math.min(remaining, 10);
           const resp = await generateRewriting(topic, batchSize, { ...languageContext, baseText: base, chapter });
-          if (resp?.items) {
-            collected.push(...resp.items);
-            remaining -= resp.items.length;
+          if (!Array.isArray(resp?.items) || resp.items.length === 0) {
+            throw new Error('No rewriting exercises were returned. Please try again.');
           }
+          const batch = resp.items.slice(0, remaining);
+          collected.push(...batch);
+          remaining -= batch.length;
         }
       }
       const items = collected.length > 0 ? collected : [];
       const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, rewriting: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg('Failed to generate rewriting'); }
+    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate rewriting'); }
     finally { setLoadingRewritingOnly(false); }
   };
 
@@ -1242,7 +1183,7 @@ const AIPracticeApp = () => {
     const exercise = exercises[index];
     const userAnswer = getUserAnswersForExercise(index);
     try {
-      const response = await fetch('/api/explain', {
+      const response = await apiFetch('/api/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, exercise, userAnswer })
@@ -1300,7 +1241,7 @@ const AIPracticeApp = () => {
       });
     }
     try {
-      const response = await fetch('/api/recommend', {
+      const response = await apiFetch('/api/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, score, percentage, wrongExercises })
@@ -1308,7 +1249,7 @@ const AIPracticeApp = () => {
       const data = await response.json();
       setRecommendation(data);
     } catch (error) {
-      console.error('Error getting recommendation:', error);
+      setErrorMsg(error.message || 'Could not get an AI recommendation. Please try again.');
     } finally {
       setLoadingRecommendation(false);
     }
@@ -1400,14 +1341,14 @@ const AIPracticeApp = () => {
             <ul className="list-disc pl-5 space-y-2 text-sm text-gray-700">
             <li>Once you've set your language and level, and chosen your topic, click "Start Lesson" to generate an explanation and start practicing. </li>
               <li>Generate exercises using the buttons in the "Add content" panel under the explanation.</li>
-              <li>Exercises appear below the explanation. You can generate new sets as many times as you want. (Be conscious of the AI costs, this is a hobby project :)</li>
+              <li>Exercises appear below the explanation. Generating content uses your ChatGPT plan allowance.</li>
               <li>Click <strong>Check Answers</strong> at the bottom to see feedback and get recommendations.</li>
-              <li>Use <strong>Export PDF</strong> in the header to download a full worksheet with solutions and images.</li>
+              <li>Use <strong>Export PDF</strong> in the lesson header to download a worksheet with solutions.</li>
               <li>To change the exercise topic, just reload your browser and start a new lesson.</li>
-            </ul>
             <li>
-              <strong>Privacy:</strong> We do <span className="font-semibold text-green-700">not</span> save any individual visitor data (such as your IP address or your performance on exercises). However, the explanations, exercises, and illustrations generated by the AI <span className="font-semibold text-blue-700">are</span> saved and may be shown to other users who select the same combination of language, difficulty, and topic. This helps reduce AI costs and improve performance for everyone.
+              <strong>Privacy:</strong> Your lesson requests are sent to OpenAI using your ChatGPT connection. Generated content is cached separately for your account. Checking answers also sends your mistakes to OpenAI for a learning recommendation. Disconnect in Account settings to end your session.
             </li>
+            </ul>
             <div className="mt-5 flex items-center justify-end gap-2">
               <button onClick={() => setIsHelpOpen(false)} className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">Close</button>
               <button
@@ -1459,13 +1400,14 @@ const AIPracticeApp = () => {
             </div>
           </div>
 
+          {errorMsg && (
+            <div role="alert" className="mb-4 bg-red-50 text-red-700 border border-red-200 p-3 rounded">{errorMsg}</div>
+          )}
+          {(loadingLesson || loadingExplOnly) && (
+            <p role="status" className="mb-4 flex items-center gap-2 text-sm text-blue-700"><RefreshCw size={16} className="animate-spin" />Generating your explanation…</p>
+          )}
           {!lesson ? (
             <div className="space-y-4">
-              {errorMsg && (
-                <div className="bg-red-50 text-red-700 border border-red-200 p-3 rounded">
-                  {errorMsg}
-                </div>
-              )}
               
               {loadingLesson ? (
                 <div className="text-left py-12">
@@ -1473,7 +1415,7 @@ const AIPracticeApp = () => {
                   <h3 className="text-xl font-semibold text-gray-800 mb-2">Generating your lesson...</h3>
                   <p className="text-gray-600">Creating explanation  for "{topic}". Once the explanation loads, you can create on-demand exercises using the buttons at the top and check your answers at the bottom.</p>
                   <p className="text-gray-600">Please be aware that the AI may create gibberish or plausible sounding but incorrect content. Please check the explanation and exercises carefully.</p>
-                  <p className="text-gray-600">Please note that loading may take 15-30 seconds as we are using cheap or free models.</p>
+                  <p className="text-gray-600">Generation time depends on your selected model.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -1648,7 +1590,7 @@ const AIPracticeApp = () => {
                   onClick={checkAnswers}
                   className="w-full bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition-colors"
                 >
-                  Check Answers
+                  Check Answers & Get Feedback
                 </button>
               ) : (
                 <div className="space-y-4">
@@ -1668,7 +1610,7 @@ const AIPracticeApp = () => {
                     disabled={loadingRecommendation}
                     className="w-full bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                   >
-                    {loadingRecommendation ? 'Re-checking...' : 'Re-check Answers'}
+                    {loadingRecommendation ? 'Getting feedback…' : 'Update AI Feedback'}
                   </button>
                   {recommendation && (
                     <div className="bg-amber-50 border border-amber-200 p-4 rounded-lg">

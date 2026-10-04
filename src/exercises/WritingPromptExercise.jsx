@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
@@ -115,7 +116,7 @@ Notes: Ensure vocabulary and grammar complexity match the target level.`;
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

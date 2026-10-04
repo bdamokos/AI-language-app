@@ -1,6 +1,24 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+// Serialize whole read-modify-write transactions, with reentrant nested calls.
+// Each hosted instance owns its cache volume; do not share it between processes.
+const cacheTransactions = new Map();
+const activeTransaction = new AsyncLocalStorage();
+async function withLayoutLock(layout, operation) {
+  const key = path.resolve(layout.explanationsDir);
+  if (activeTransaction.getStore() === key) return operation();
+  const previous = cacheTransactions.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => {
+    if (layout.signal?.aborted) throw Object.assign(new Error('The request was cancelled.'), { status: 499, code: 'request_cancelled' });
+    return activeTransaction.run(key, operation);
+  });
+  cacheTransactions.set(key, current);
+  try { return await current; } finally { if (cacheTransactions.get(key) === current) cacheTransactions.delete(key); }
+}
+
 
 export function getCacheDir(envCacheDir, fallbackDir) {
   const dir = envCacheDir && String(envCacheDir).trim() ? envCacheDir : fallbackDir;
@@ -15,13 +33,13 @@ export async function ensureCacheLayout(cacheDir) {
   const imagesDir = path.join(cacheDir, 'images');
   const baseTextsDir = path.join(cacheDir, 'base_texts');
   const baseTextItemsDir = path.join(baseTextsDir, 'items');
-  await fs.mkdir(cacheDir, { recursive: true });
-  await fs.mkdir(explanationsDir, { recursive: true });
-  await fs.mkdir(exerciseItemsDir, { recursive: true });
-  await fs.mkdir(explanationItemsDir, { recursive: true });
-  await fs.mkdir(imagesDir, { recursive: true });
-  await fs.mkdir(baseTextsDir, { recursive: true });
-  await fs.mkdir(baseTextItemsDir, { recursive: true });
+  await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(explanationsDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(exerciseItemsDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(explanationItemsDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(imagesDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(baseTextsDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(baseTextItemsDir, { recursive: true, mode: 0o700 });
   // Seed empty indexes if missing
   await seedIndexIfMissing(path.join(explanationsDir, 'index.json'), { items: {}, stats: {} });
   await seedIndexIfMissing(path.join(exercisesDir, 'index.json'), { items: {}, pools: {}, buckets: {}, groups: {}, stats: {} });
@@ -34,7 +52,7 @@ async function seedIndexIfMissing(indexPath, initial) {
   try {
     await fs.access(indexPath);
   } catch {
-    await fs.writeFile(indexPath, JSON.stringify(initial, null, 2), 'utf8');
+    await fs.writeFile(indexPath, JSON.stringify(initial, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' }).catch(error => { if (error.code !== 'EEXIST') throw error; });
   }
 }
 
@@ -52,54 +70,18 @@ export async function readJson(filePath, fallback = null) {
 }
 
 export async function writeJson(filePath, data) {
-  const tempPath = `${filePath}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
-  await fs.rename(tempPath, filePath);
-}
-
-export async function downloadImageToCache({ imagesDir, exerciseSha, url, fetchImpl, publicBase = '/cache/images' }) {
-  if (!exerciseSha || !url) throw new Error('exerciseSha and url are required');
-  const res = await fetchImpl(url);
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Failed to download image (${res.status}): ${text}`);
-  }
-  const contentType = (res.headers.get('content-type') || '').toLowerCase();
-  const ext = guessExtension(contentType) || '.bin';
-  const filename = `${exerciseSha}${ext}`;
-  const imagesRoot = path.resolve(imagesDir);
-  const destPath = path.resolve(imagesRoot, filename);
-  if (!destPath.startsWith(`${imagesRoot}${path.sep}`)) {
-    throw new Error('Invalid image cache path');
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  await fs.writeFile(destPath, buf);
-  const indexPath = path.join(imagesDir, 'index.json');
-  const idx = (await readJson(indexPath)) || { items: {} };
-  idx.items[exerciseSha] = { path: destPath, filename, contentType: contentType || null, createdAt: new Date().toISOString() };
-  await writeJson(indexPath, idx);
-  const localUrl = `${publicBase.replace(/\/$/, '')}/${filename}`;
-  return { localPath: destPath, filename, ext, contentType, localUrl };
-}
-
-function guessExtension(contentType) {
-  const normalizedContentType = contentType.split(';', 1)[0].trim();
-  switch (normalizedContentType) {
-    case 'image/png': return '.png';
-    case 'image/jpeg':
-    case 'image/jpg': return '.jpg';
-    case 'image/webp': return '.webp';
-    case 'image/gif': return '.gif';
-    case 'image/bmp': return '.bmp';
-    default: return '';
-  }
+  const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await fs.rename(tempPath, filePath);
+  } finally { await fs.rm(tempPath, { force: true }).catch(() => {}); }
 }
 
 // -----------------------------
 // Explanations persistent cache
 // -----------------------------
 
-export async function getExplanation(layout, cacheKey) {
+async function getExplanationUnlocked(layout, cacheKey) {
   const indexPath = path.join(layout.explanationsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
   const entry = idx.items?.[cacheKey];
@@ -132,7 +114,7 @@ export async function getExplanation(layout, cacheKey) {
   }
 }
 
-export async function setExplanation(layout, cacheKey, meta, content, maxCapacity = 1000) {
+async function setExplanationUnlocked(layout, cacheKey, meta, content, maxCapacity = 1000) {
   const indexPath = path.join(layout.explanationsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
   const fileBase = sha256Hex(cacheKey).slice(0, 16) + '.json';
@@ -168,7 +150,7 @@ export async function setExplanation(layout, cacheKey, meta, content, maxCapacit
 // Base texts persistent cache
 // -----------------------------
 
-export async function getBaseText(layout, cacheKey) {
+async function getBaseTextUnlocked(layout, cacheKey) {
   const indexPath = path.join(layout.baseTextsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
   const entry = idx.items?.[cacheKey];
@@ -203,7 +185,7 @@ export async function getBaseText(layout, cacheKey) {
   }
 }
 
-export async function setBaseText(layout, cacheKey, meta, content, maxCapacity = 500) {
+async function setBaseTextUnlocked(layout, cacheKey, meta, content, maxCapacity = 500) {
   const indexPath = path.join(layout.baseTextsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
   const fileBase = sha256Hex(cacheKey).slice(0, 16) + '.json';
@@ -235,7 +217,7 @@ export async function setBaseText(layout, cacheKey, meta, content, maxCapacity =
   await writeJson(indexPath, idx);
 }
 
-export async function loadBaseTextsIndex(layout) {
+async function loadBaseTextsIndexUnlocked(layout) {
   const indexPath = path.join(layout.baseTextsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [], stats: {} };
   idx.items = idx.items || {};
@@ -245,7 +227,7 @@ export async function loadBaseTextsIndex(layout) {
 }
 
 // Scan base_texts/items and rebuild index.json (idempotent)
-export async function rebuildBaseTextsIndex(layout) {
+async function rebuildBaseTextsIndexUnlocked(layout) {
   const indexPath = path.join(layout.baseTextsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [], stats: {} };
   idx.items = idx.items || {};
@@ -279,7 +261,7 @@ export async function rebuildBaseTextsIndex(layout) {
   }
 }
 // Update a base text record by cache key
-export async function updateBaseTextRecord(layout, cacheKey, updater) {
+async function updateBaseTextRecordUnlocked(layout, cacheKey, updater) {
   const indexPath = path.join(layout.baseTextsDir, 'index.json');
   const idx = (await readJson(indexPath)) || { items: {}, lru: [] };
   const entry = idx.items?.[cacheKey];
@@ -300,7 +282,7 @@ function buildExercisesIndexDefaults() {
   return { items: {}, pools: {}, buckets: {}, groups: {}, lru: [] };
 }
 
-export async function loadExercisesIndex(layout) {
+async function loadExercisesIndexUnlocked(layout) {
   const indexPath = path.join(layout.exercisesDir, 'index.json');
   const idx = (await readJson(indexPath)) || buildExercisesIndexDefaults();
   idx.items = idx.items || {};
@@ -311,7 +293,7 @@ export async function loadExercisesIndex(layout) {
   return idx;
 }
 
-export async function saveExercisesIndex(layout, idx) {
+async function saveExercisesIndexUnlocked(layout, idx) {
   const indexPath = path.join(layout.exercisesDir, 'index.json');
   await writeJson(indexPath, idx);
 }
@@ -321,10 +303,11 @@ export function makeBucketKey({ type, language, level, challengeMode, grammarTop
 }
 
 export function makeExerciseFileName(exerciseSha) {
+  if (typeof exerciseSha !== 'string' || !/^[a-f0-9]{64}$/.test(exerciseSha)) throw new Error('Invalid exercise identifier');
   return `${exerciseSha}.json`;
 }
 
-export async function readExerciseItem(layout, exerciseSha) {
+async function readExerciseItemUnlocked(layout, exerciseSha) {
   const file = makeExerciseFileName(exerciseSha);
   const filePath = path.join(layout.exerciseItemsDir, file);
   return await readJson(filePath, null);
@@ -381,7 +364,7 @@ export function pickUnseenWeighted(shas, seenSet, idx, count, currentModel) {
   return chosen;
 }
 
-export async function selectUnseenFromPool(layout, poolKey, seenSet, count) {
+async function selectUnseenFromPoolUnlocked(layout, poolKey, seenSet, count) {
   const idx = await loadExercisesIndex(layout);
   const poolList = idx.pools[poolKey] || [];
   const chosen = pickUnseenWeighted(poolList, seenSet, idx, count);
@@ -393,7 +376,7 @@ export async function selectUnseenFromPool(layout, poolKey, seenSet, count) {
   return { items, shas: chosen };
 }
 
-export async function selectUnseenFromPoolGrouped(layout, poolKey, seenSet, count, currentModel) {
+async function selectUnseenFromPoolGroupedUnlocked(layout, poolKey, seenSet, count, currentModel) {
   const idx = await loadExercisesIndex(layout);
   const poolList = idx.pools[poolKey] || [];
   const poolSet = new Set(poolList);
@@ -453,8 +436,9 @@ function collectPoolFamilyShas(idx, family) {
     const parts = String(key).split(':');
     // Formats:
     //  - 7 parts: [type, language, level, challengeMode, model, schemaVersion, promptSha12]
-    if (parts.length !== 7) continue;
-    const [t, lang, lvl, chall, /*model*/, ver] = parts;
+    if (parts.length < 7) continue;
+    const [t, lang, lvl, chall] = parts;
+    const ver = parts[parts.length - 2];
     if (t === type && lang === language && lvl === level && chall === String(challengeMode) && ver === String(schemaVersion)) {
       const list = idx.pools[key] || [];
       for (const sha of list) result.push(sha);
@@ -467,7 +451,7 @@ function collectPoolFamilyShas(idx, family) {
   return deduped;
 }
 
-export async function selectUnseenCrossModel(layout, family, seenSet, count, currentModel, grammarTopic = null) {
+async function selectUnseenCrossModelUnlocked(layout, family, seenSet, count, currentModel, grammarTopic = null) {
   const idx = await loadExercisesIndex(layout);
   const allCandidates = collectPoolFamilyShas(idx, family);
   // Filter by grammarTopic if provided to ensure topic-appropriate items are returned
@@ -488,7 +472,7 @@ export async function selectUnseenCrossModel(layout, family, seenSet, count, cur
   return { items, shas: chosen };
 }
 
-export async function selectUnseenCrossModelGrouped(layout, family, seenSet, count, currentModel, grammarTopic = null) {
+async function selectUnseenCrossModelGroupedUnlocked(layout, family, seenSet, count, currentModel, grammarTopic = null) {
   const idx = await loadExercisesIndex(layout);
   const allCandidates = collectPoolFamilyShas(idx, family);
   const normalizedTopic = typeof grammarTopic === 'string' && grammarTopic.trim() ? grammarTopic.trim().toLowerCase() : null;
@@ -543,7 +527,7 @@ export async function selectUnseenCrossModelGrouped(layout, family, seenSet, cou
   return { items, shas: chosen };
 }
 
-export async function touchExercises(layout, exerciseShas) {
+async function touchExercisesUnlocked(layout, exerciseShas) {
   if (!Array.isArray(exerciseShas) || exerciseShas.length === 0) return;
   const idx = await loadExercisesIndex(layout);
   const now = new Date().toISOString();
@@ -593,7 +577,7 @@ async function evictFromBucketIfNeeded(layout, idx, bucketKey, perTypeLimit) {
   }
 }
 
-export async function addExercisesToPool(layout, { type, poolKey, bucketKey, language, level, challengeMode, grammarTopic, model, schemaVersion, baseTextId, baseTextChapter }, items, perTypeLimit = 100, groupIdInput = null) {
+async function addExercisesToPoolUnlocked(layout, { type, poolKey, bucketKey, language, level, challengeMode, grammarTopic, model, schemaVersion, baseTextId, baseTextChapter }, items, perTypeLimit = 100, groupIdInput = null) {
   const idx = await loadExercisesIndex(layout);
   const now = new Date().toISOString();
   idx.pools[poolKey] = idx.pools[poolKey] || [];
@@ -640,7 +624,7 @@ export async function addExercisesToPool(layout, { type, poolKey, bucketKey, lan
   return { addedShas, groupId };
 }
 
-export async function updateExerciseRecord(layout, exerciseSha, updater) {
+async function updateExerciseRecordUnlocked(layout, exerciseSha, updater) {
   const file = makeExerciseFileName(exerciseSha);
   const filePath = path.join(layout.exerciseItemsDir, file);
   const rec = await readJson(filePath, null);
@@ -650,7 +634,7 @@ export async function updateExerciseRecord(layout, exerciseSha, updater) {
   return true;
 }
 
-export async function purgeOutdatedSchemas(layout, schemaVersions) {
+async function purgeOutdatedSchemasUnlocked(layout, schemaVersions) {
   // Explanations
   try {
     const expIndexPath = path.join(layout.explanationsDir, 'index.json');
@@ -738,7 +722,7 @@ export async function purgeOutdatedSchemas(layout, schemaVersions) {
   } catch {}
 }
 
-export async function incrementExerciseHits(layout, type, language, level, challengeMode, grammarTopic, count) {
+async function incrementExerciseHitsUnlocked(layout, type, language, level, challengeMode, grammarTopic, count) {
   const idx = await loadExercisesIndex(layout);
   idx.stats = idx.stats || {};
   const key = `${type}|${language}|${level}|${challengeMode ? '1' : '0'}|${grammarTopic || 'unknown'}`;
@@ -753,7 +737,7 @@ export async function incrementExerciseHits(layout, type, language, level, chall
 // Ratings: explanations and exercise groups
 // -----------------------------
 
-export async function rateExplanation(layout, cacheKey, isLike = true) {
+async function rateExplanationUnlocked(layout, cacheKey, isLike = true) {
   try {
     const indexPath = path.join(layout.explanationsDir, 'index.json');
     const idx = (await readJson(indexPath)) || { items: {} };
@@ -777,7 +761,7 @@ export async function rateExplanation(layout, cacheKey, isLike = true) {
   }
 }
 
-export async function rateExerciseGroup(layout, groupId, isLike = true) {
+async function rateExerciseGroupUnlocked(layout, groupId, isLike = true) {
   const idx = await loadExercisesIndex(layout);
   if (!idx.groups[groupId]) return false;
   const g = idx.groups[groupId];
@@ -805,3 +789,26 @@ export async function rateExerciseGroup(layout, groupId, isLike = true) {
   await saveExercisesIndex(layout, idx);
   return true;
 }
+
+// Public operations retain the cache API while protecting concurrent requests.
+export async function getExplanation(...args) { return withLayoutLock(args[0], () => getExplanationUnlocked(...args)); }
+export async function setExplanation(...args) { return withLayoutLock(args[0], () => setExplanationUnlocked(...args)); }
+export async function getBaseText(...args) { return withLayoutLock(args[0], () => getBaseTextUnlocked(...args)); }
+export async function setBaseText(...args) { return withLayoutLock(args[0], () => setBaseTextUnlocked(...args)); }
+export async function loadBaseTextsIndex(...args) { return withLayoutLock(args[0], () => loadBaseTextsIndexUnlocked(...args)); }
+export async function rebuildBaseTextsIndex(...args) { return withLayoutLock(args[0], () => rebuildBaseTextsIndexUnlocked(...args)); }
+export async function updateBaseTextRecord(...args) { return withLayoutLock(args[0], () => updateBaseTextRecordUnlocked(...args)); }
+export async function loadExercisesIndex(...args) { return withLayoutLock(args[0], () => loadExercisesIndexUnlocked(...args)); }
+export async function saveExercisesIndex(...args) { return withLayoutLock(args[0], () => saveExercisesIndexUnlocked(...args)); }
+export async function readExerciseItem(...args) { return withLayoutLock(args[0], () => readExerciseItemUnlocked(...args)); }
+export async function selectUnseenFromPool(...args) { return withLayoutLock(args[0], () => selectUnseenFromPoolUnlocked(...args)); }
+export async function selectUnseenFromPoolGrouped(...args) { return withLayoutLock(args[0], () => selectUnseenFromPoolGroupedUnlocked(...args)); }
+export async function selectUnseenCrossModel(...args) { return withLayoutLock(args[0], () => selectUnseenCrossModelUnlocked(...args)); }
+export async function selectUnseenCrossModelGrouped(...args) { return withLayoutLock(args[0], () => selectUnseenCrossModelGroupedUnlocked(...args)); }
+export async function touchExercises(...args) { return withLayoutLock(args[0], () => touchExercisesUnlocked(...args)); }
+export async function addExercisesToPool(...args) { return withLayoutLock(args[0], () => addExercisesToPoolUnlocked(...args)); }
+export async function updateExerciseRecord(...args) { return withLayoutLock(args[0], () => updateExerciseRecordUnlocked(...args)); }
+export async function purgeOutdatedSchemas(...args) { return withLayoutLock(args[0], () => purgeOutdatedSchemasUnlocked(...args)); }
+export async function incrementExerciseHits(...args) { return withLayoutLock(args[0], () => incrementExerciseHitsUnlocked(...args)); }
+export async function rateExplanation(...args) { return withLayoutLock(args[0], () => rateExplanationUnlocked(...args)); }
+export async function rateExerciseGroup(...args) { return withLayoutLock(args[0], () => rateExerciseGroupUnlocked(...args)); }

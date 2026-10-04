@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 /**
  * Unified Cloze Exercise Generation
  * 
@@ -57,7 +58,7 @@ const STEP3_SEGMENT_SCHEMA = {
 };
 
 async function llmGenerate({ system, user, jsonSchema, metadata }) {
-  const resp = await fetch('/api/generate', {
+  const resp = await apiFetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // Use a non-persistent schemaName so steps stay in-memory only on the server
@@ -215,15 +216,6 @@ export async function generateUnifiedClozeStepwise(topic, languageContext) {
     return chosen;
   }
   const selectedForBlank = pickEvenlySpaced(candidateIdx, targetBlanks);
-  try {
-    if (selectedForBlank.size) {
-      fetch('/api/log', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ level: 'debug', message: 'Cloze selection', data: { candidateCount: candidateIdx.length, targetBlanks, selected: Array.from(selectedForBlank) } })
-      }).catch(() => {});
-    }
-  } catch {}
-
   // Step 3: Segment sentences with target grammar into prefix/blank/suffix (cached per sentence)
 const segmentSystem = 'You are a language pedagogy expert. You segment a single sentence for a cloze blank. Return strict JSON matching the schema. Ensure full_sentence = preceding_text + (one correct option text) + succeeding_text. Provide options with exactly one correct=true; include short explanations.';
   const segmented = [];
@@ -256,16 +248,6 @@ const segmentSystem = 'You are a language pedagogy expert. You segment a single 
 
   // Minimal structural repair and warnings (flat)
   const { segments, warnings } = validateAndRepairFlatSegments(segmented);
-  if (warnings && warnings.length) {
-    try {
-      fetch('/api/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ level: 'warn', message: 'Unified cloze flat segment validation warnings', data: { warnings } })
-      }).catch(() => {});
-    } catch {}
-  }
-
   // Compute metadata
   const totalBlanks = segments.filter(s => Array.isArray(s.options) && s.options.some(o => o.correct)).length;
   const difficultyCounts = segments.reduce((acc, s) => {
@@ -290,7 +272,7 @@ const segmentSystem = 'You are a language pedagogy expert. You segment a single 
   };
   // Persist the assembled exercise so downstream features (images, reuse) have a stable exerciseSha
   try {
-    const persistResp = await fetch('/api/persist-exercise', {
+    const persistResp = await apiFetch('/api/persist-exercise', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'unified_cloze', items: [item], metadata: { language: languageName, level, challengeMode, topic } })
@@ -462,30 +444,13 @@ The totality of the alternating text and blank segments should reconstruct the o
 
 Return comprehensive analysis with all segments and metadata.`;
 
-  // Some OpenRouter models (e.g., Meta Llama free tiers) reject deep JSON Schemas.
-  // Probe current settings and disable structured schema for known-limited models.
-  let sendSchema = true;
-  try {
-    const s = await fetch('/api/settings');
-    if (s.ok) {
-      const cfg = await s.json();
-      const provider = String(cfg?.provider || '').toLowerCase();
-      const modelId = String(cfg?.openrouter?.model || cfg?.ollama?.model || '');
-      if (provider === 'openrouter') {
-        if (/meta-llama\//i.test(modelId) || /maverick/i.test(modelId) || /:free$/i.test(modelId)) {
-          sendSchema = false; // avoid json_schema depth limits
-        }
-      }
-    }
-  } catch {}
-
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
       user,
-      jsonSchema: sendSchema ? UNIFIED_CLOZE_SCHEMA : undefined,
+      jsonSchema: UNIFIED_CLOZE_SCHEMA,
       schemaName: 'unified_cloze',
       metadata: { 
         language: languageName, 

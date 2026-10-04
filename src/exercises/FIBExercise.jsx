@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 import React from 'react';
 import { Check } from 'lucide-react';
 import { normalizeText, countBlanks, splitByBlanks } from './utils.js';
@@ -141,7 +142,7 @@ Important:
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

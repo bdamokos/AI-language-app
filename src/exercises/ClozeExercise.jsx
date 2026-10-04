@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { normalizeText, countBlanks, splitByBlanks, sanitizeClozeItem } from './utils.js';
-import useImageGeneration from '../hooks/useImageGeneration.js';
 import { generateUnifiedCloze, generateUnifiedClozeStepwise, convertToTraditionalCloze, filterBlanksByDifficulty } from './ClozeUnified.jsx';
 
 /**
@@ -13,12 +12,6 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
   const [showRationale, setShowRationale] = useState({});
   const [sanitizedItem, setSanitizedItem] = useState(item);
   const [warnings, setWarnings] = useState([]);
-  const [generatedImage, setGeneratedImage] = useState(null);
-  const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
-  const { generateImage, loading: imageLoading, error: imageError } = useImageGeneration();
-  const isGeneratingRef = useRef(false);
-  const lastItemRef = useRef(null);
-  
   // Sanitize the item when it changes
   useEffect(() => {
     if (item) {
@@ -26,195 +19,10 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
       setSanitizedItem(sanitization.item);
       setWarnings(sanitization.warnings);
       
-      // Log warnings to server if there are issues
-      if (sanitization.warnings.length > 0) {
-        fetch('/api/log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            level: 'warn',
-            message: 'Cloze passage validation warnings',
-            data: { item, warnings: sanitization.warnings }
-          })
-        }).catch(console.error); // Don't let logging errors break the UI
-      }
+
     }
   }, [item]);
 
-  // Check if image generation is enabled once on mount
-  useEffect(() => {
-    const checkImageGenerationEnabled = async () => {
-      try {
-        const settingsRes = await fetch('/api/settings');
-        const settings = await settingsRes.json();
-        const imageProvider = settings.imageProvider || 'runware';
-        setImageGenerationEnabled(settings[imageProvider]?.enabled || false);
-      } catch (error) {
-        console.log('[CLOZE] Could not check image generation settings:', error.message);
-        setImageGenerationEnabled(false);
-      }
-    };
-    
-    checkImageGenerationEnabled();
-  }, []);
-
-  // Try to use base text image if available (chapter-specific, else cover)
-  useEffect(() => {
-    const maybeUseBaseTextImage = async () => {
-      try {
-        const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
-        const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
-        if (!baseTextId) return;
-        if (lastItemRef.current === `nf:${baseTextId}:${chapterNumber || 'cover'}`) return;
-        const resp = await fetch(`/api/base-text-content/${baseTextId}`);
-        if (!resp.ok) {
-          if (resp.status === 404) lastItemRef.current = `nf:${baseTextId}:${chapterNumber || 'cover'}`;
-          return;
-        }
-        const base = await resp.json();
-        const images = base?.images || {};
-        let url = null;
-        if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
-          url = images.chapters[String(chapterNumber)].localUrl;
-        } else if (images?.cover?.localUrl) {
-          url = images.cover.localUrl;
-        }
-        if (url) {
-          const cached = { data: [{ url }] };
-          setGeneratedImage(cached);
-          if (window.globalImageStore && idPrefix) {
-            const exerciseIndex = idPrefix.split(':').pop();
-            const imageKey = `cloze:${exerciseIndex}`;
-            window.globalImageStore[imageKey] = cached;
-          }
-          lastItemRef.current = `base:${baseTextId}:${chapterNumber || 'cover'}`;
-        }
-      } catch {}
-    };
-    maybeUseBaseTextImage();
-  }, [item?.base_text_info?.base_text_id, item?.base_text_info?.chapter_number, item?.base_text_id, item?.chapter_number, idPrefix]);
-
-  // Generate image when item changes (if image generation is enabled and no cached image exists)
-  useEffect(() => {
-    const generateContextualImage = async () => {
-      // Skip if image generation is not enabled
-      if (!imageGenerationEnabled) {
-        console.log('[CLOZE] Image generation not enabled, skipping');
-        return;
-      }
-      
-      // Skip if no title or passage
-      if (!sanitizedItem?.title || !sanitizedItem?.passage) {
-        console.log('[CLOZE] No title or passage, skipping image generation');
-        return;
-      }
-      
-      // If we already have an image (e.g., pre-existing base text image), skip generation
-      if (generatedImage && getImageSource(generatedImage)) {
-        return;
-      }
-
-      // If cached local image URL is present on the item, use it and skip generation
-      if (item?.localImageUrl) {
-        setGeneratedImage({ data: [{ url: item.localImageUrl }] });
-        console.log('[CLOZE] Using cached local image URL:', item.localImageUrl);
-        return;
-      }
-
-      // Skip if this is the same item we already processed
-      const currentItemKey = `${sanitizedItem.title}-${sanitizedItem.passage.substring(0, 100)}`;
-      if (lastItemRef.current === currentItemKey) {
-        console.log('[CLOZE] Same item, skipping duplicate image generation');
-        return;
-      }
-      
-      // Prevent duplicate requests
-      if (isGeneratingRef.current) {
-        console.log('[CLOZE] Image generation already in progress, skipping');
-        return;
-      }
-      
-      // Reset previous image
-      setGeneratedImage(null);
-      isGeneratingRef.current = true;
-      lastItemRef.current = currentItemKey;
-      
-      try {
-        // Clean the passage text by removing blanks for better image generation
-        const cleanPassage = sanitizedItem.passage.replace(/_____/g, '[blank]');
-        const prompt = `Create a stock photo that goes along with this topic: ${sanitizedItem.title}\n${cleanPassage}`;
-        
-        console.log('[CLOZE] Starting image generation for:', sanitizedItem.title);
-        
-        // Prefer existing base-text image if available
-        try {
-          const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
-          const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
-          if (baseTextId) {
-            const resp = await fetch(`/api/base-text-content/${baseTextId}`);
-            if (resp.ok) {
-              const base = await resp.json();
-              const images = base?.images || {};
-              let url = null;
-              if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
-                url = images.chapters[String(chapterNumber)].localUrl;
-              } else if (images?.cover?.localUrl) {
-                url = images.cover.localUrl;
-              }
-              if (url) {
-                const cached = { data: [{ url }] };
-                setGeneratedImage(cached);
-                if (window.globalImageStore && idPrefix) {
-                  const exerciseIndex = idPrefix.split(':').pop();
-                  const imageKey = `cloze:${exerciseIndex}`;
-                  window.globalImageStore[imageKey] = cached;
-                }
-                return; // Use existing, skip generation
-              }
-            }
-          }
-        } catch {}
-
-        const imageData = await generateImage(prompt, {
-          width: 1024,
-          height: 1024,
-          steps: 28,
-          cfgScale: 3.5,
-          // Persist to server cache if the exercise has a stable ID
-          persistToCache: true,
-          exerciseSha: item?.exerciseSha,
-          baseTextId: item?.base_text_info?.base_text_id || item?.base_text_id,
-          chapterNumber: item?.base_text_info?.chapter_number || item?.chapter_number
-        });
-        
-        // Log cost information in development mode
-        if (imageData?.data?.[0]?.cost !== undefined) {
-          console.log(`[CLOZE] Image generated with cost: $${Number(imageData.data[0].cost).toFixed(6)}`);
-        }
-        
-        // Debug the response structure
-        console.log('[CLOZE] Image data received:', imageData);
-        
-        setGeneratedImage(imageData);
-        
-        // Store image in global store for PDF export
-        if (window.globalImageStore && idPrefix) {
-          const exerciseIndex = idPrefix.split(':').pop(); // Extract index from idPrefix
-          const imageKey = `cloze:${exerciseIndex}`;
-          window.globalImageStore[imageKey] = imageData;
-          console.log('[CLOZE] Stored image in global store:', imageKey, imageData);
-        }
-      } catch (error) {
-        // Silently fail - image generation is optional
-        console.log('[CLOZE] Image generation failed:', error.message);
-      } finally {
-        isGeneratingRef.current = false;
-      }
-    };
-    
-    generateContextualImage();
-  }, [sanitizedItem?.title, sanitizedItem?.passage, imageGenerationEnabled, idPrefix]); // Added idPrefix dependency
-  
   const parts = splitByBlanks(sanitizedItem?.passage || '');
   const blanks = Array.isArray(sanitizedItem?.blanks) ? sanitizedItem.blanks : [];
   const nodes = [];
@@ -287,15 +95,6 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
     }
   }
   
-  // Helper function to get the correct image source
-  const getImageSource = (imageData) => {
-    if (!imageData?.data?.[0]) return null;
-    
-    const image = imageData.data[0];
-    // Support both fal.ai (url) and Runware (imageURL) formats
-    return image.url || image.imageURL || image.imageDataURI || image.imageBase64Data;
-  };
-  
   return (
     <div className="border rounded p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
@@ -329,54 +128,14 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         </div>
       )}
       
-      {/* Main content area with text and optional image */}
+      {/* Cloze passage */}
       <div className="flex flex-col lg:flex-row gap-4">
         {/* Text passage */}
         <div className="flex-1">
           <div className="text-gray-800 leading-relaxed">{nodes}</div>
         </div>
         
-        {/* Generated image */}
-        {imageGenerationEnabled && (imageLoading || generatedImage || imageError) && (
-          <div className="lg:w-64 xl:w-80 flex-shrink-0">
-            {imageLoading && (
-              <div className="w-full aspect-square bg-gray-100 border border-gray-200 rounded-lg flex items-center justify-center">
-                <div className="text-center">
-                  <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                  <p className="text-sm text-gray-600">Generating image...</p>
-                </div>
-              </div>
-            )}
-            
-                    {generatedImage && getImageSource(generatedImage) && (
-          <div className="w-full">
-            <img 
-              src={getImageSource(generatedImage)}
-              alt={`Illustration for: ${item?.title || 'Cloze passage'}`}
-              className="w-full aspect-square object-cover rounded-lg border border-gray-200 shadow-sm"
-              onError={(e) => {
-                console.error('[CLOZE] Failed to load generated image:', e);
-                e.target.style.display = 'none';
-              }}
-            />
-            <p className="text-xs text-gray-500 mt-1 text-center">
-              AI-generated illustration
-            </p>
-          </div>
-        )}
-        
 
-            
-            {imageError && !imageLoading && (
-              <div className="w-full aspect-square bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-center">
-                <div className="text-center p-4">
-                  <p className="text-sm text-gray-500">Image generation failed</p>
-                  <p className="text-xs text-gray-400 mt-1">{imageError}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

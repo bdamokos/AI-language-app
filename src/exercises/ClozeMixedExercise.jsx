@@ -20,18 +20,7 @@ export default function ClozeMixedExercise({ item, value, onChange, checked, str
       setSanitizedItem(sanitization.item);
       setWarnings(sanitization.warnings);
       
-      // Log warnings to server if there are issues
-      if (sanitization.warnings.length > 0) {
-        fetch('/api/log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            level: 'warn',
-            message: 'ClozeMixed passage validation warnings',
-            data: { item, warnings: sanitization.warnings }
-          })
-        }).catch(console.error); // Don't let logging errors break the UI
-      }
+
     }
   }, [item]);
   

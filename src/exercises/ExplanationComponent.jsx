@@ -1,3 +1,5 @@
+import { readExplanationStream } from '../utils/explanationStream.js';
+import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -9,15 +11,15 @@ import remarkGfm from 'remark-gfm';
  * - explanation: { title: string, content_markdown: string }
  */
 export default function ExplanationComponent({ explanation }) {
-  if (!explanation) return null;
   const [voted, setVoted] = useState(null);
+  if (!explanation) return null;
   const cacheKey = explanation._cacheKey;
 
   const sendVote = async (like) => {
     if (!cacheKey || voted !== null) return;
     setVoted(like ? 'up' : 'down');
     try {
-      await fetch('/api/rate/explanation', {
+      await apiFetch('/api/rate/explanation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: cacheKey, like })
@@ -149,7 +151,7 @@ Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
     required: ['title', 'content_markdown']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -187,7 +189,7 @@ export async function generateExplanationStream(topic, languageContext = { langu
     level: languageContext?.level || 'B1',
     challengeMode: !!languageContext?.challengeMode
   };
-  const resp = await fetch('/api/explanations/stream', {
+  const resp = await apiFetch('/api/explanations/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -200,29 +202,5 @@ export async function generateExplanationStream(topic, languageContext = { langu
     if (json && json.title && json.content_markdown) return json;
     throw new Error('Unexpected response');
   }
-  const reader = resp.body?.getReader();
-  if (!reader) throw new Error('Streaming not supported');
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let final = null;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() || '';
-    for (const chunk of chunks) {
-      const line = chunk.split('\n').find(l => l.startsWith('data:')) || '';
-      if (!line) continue;
-      try {
-        const payload = JSON.parse(line.slice(5).trim());
-        onUpdate(payload);
-        if (payload.type === 'final' && payload.explanation) {
-          final = payload.explanation;
-        }
-      } catch {}
-    }
-  }
-  if (!final) throw new Error('Stream ended without final explanation');
-  return final;
+  return readExplanationStream(resp, onUpdate);
 }

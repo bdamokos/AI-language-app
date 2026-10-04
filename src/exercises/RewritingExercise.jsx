@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { Check } from 'lucide-react';
 import { normalizeText } from './utils.js';
@@ -156,7 +157,7 @@ ${chapter.passage}`;
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
