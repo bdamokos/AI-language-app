@@ -20,6 +20,14 @@ const error = (status, code, message) => Object.assign(new Error(message), { sta
 const wrap = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const within = (parent, child) => child === parent || child.startsWith(`${parent}${path.sep}`);
 const isLoopback = url => ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
+class InvalidSessionData extends Error {}
+
+function decodeSessionBytes(value, expectedLength) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) throw new InvalidSessionData();
+  const decoded = Buffer.from(value, 'base64url');
+  if (decoded.toString('base64url') !== value || (expectedLength && decoded.length !== expectedLength)) throw new InvalidSessionData();
+  return decoded;
+}
 
 function validatedUrl(value, label, originOnly = false) {
   const url = new URL(value);
@@ -63,11 +71,26 @@ async function createStore(authDir, cacheDir) {
     async read(id) {
       let raw;
       try { raw = await fs.readFile(filename(id), 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
-      const envelope = JSON.parse(raw);
-      const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64url'));
-      decipher.setAAD(Buffer.from(id));
-      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64url'));
-      return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64url')), decipher.final()]).toString('utf8'));
+      try {
+        const envelope = JSON.parse(raw);
+        if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) throw new InvalidSessionData();
+        const iv = decodeSessionBytes(envelope.iv, 12);
+        const tag = decodeSessionBytes(envelope.tag, 16);
+        const data = decodeSessionBytes(envelope.data);
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAAD(Buffer.from(id));
+        decipher.setAuthTag(tag);
+        let plaintext;
+        try { plaintext = Buffer.concat([decipher.update(data), decipher.final()]); }
+        catch { throw new InvalidSessionData(); }
+        const session = JSON.parse(plaintext.toString('utf8'));
+        if (!session || typeof session !== 'object' || Array.isArray(session) || !Number.isFinite(session.expiresAt) || !/^[A-Za-z0-9_-]{43}$/.test(session.csrfToken)) throw new InvalidSessionData();
+        return session;
+      } catch (e) {
+        if (!(e instanceof SyntaxError || e instanceof InvalidSessionData)) throw e;
+        await fs.rm(filename(id), { force: true });
+        return null;
+      }
     },
     async write(id, value) {
       const iv = crypto.randomBytes(12);
@@ -281,6 +304,20 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
     return locked(auth.sessionId, async () => {
       const session = await load(auth.sessionId);
       if (!session?.user || session.accountId !== auth.accountId || auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+      const clearInvalidIdentity = async () => {
+        delete session.credentials; session.user = null; session.accountId = null;
+        controllers.get(auth.sessionId)?.value.abort(); controllers.delete(auth.sessionId);
+        await store.write(auth.sessionId, session);
+      };
+      if (session.credentials?.pendingIdentityToken) {
+        try { await verifyIdentity(session.credentials.pendingIdentityToken, undefined, session.subject); }
+        catch (e) { if (e.status === 401) await clearInvalidIdentity(); throw e; }
+        session.credentials.expiresAt = session.credentials.pendingExpiresAt;
+        delete session.credentials.pendingIdentityToken;
+        delete session.credentials.pendingExpiresAt;
+        await store.write(auth.sessionId, session);
+        if (auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+      }
       if (!inferenceEnabled(session)) throw error(403, 'inference_not_enabled', 'Allow this app to use your ChatGPT plan to continue.');
       if (session.credentials.expiresAt > now() + 60_000) return session.credentials.accessToken;
       if (!session.credentials.refreshToken) throw error(401, 'session_expired', 'Your ChatGPT connection expired. Please sign in again.');
@@ -288,15 +325,24 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
       try { tokens = await exchange({ grant_type: 'refresh_token', refresh_token: session.credentials.refreshToken, resource: RESOURCE }); }
       catch (e) {
         if (e.terminal) {
-          delete session.credentials; session.user = null; session.accountId = null;
-          controllers.get(auth.sessionId)?.value.abort(); controllers.delete(auth.sessionId);
-          await store.write(auth.sessionId, session);
+          await clearInvalidIdentity();
         }
         throw e;
       }
-      if (tokens.id_token) await verifyIdentity(tokens.id_token, undefined, session.subject);
       if (!tokens.access_token) throw error(503, 'auth_unavailable', 'ChatGPT returned invalid credentials. Please try again.');
       const updated = credentials(tokens, session.credentials);
+      if (tokens.id_token) {
+        try { await verifyIdentity(tokens.id_token, undefined, session.subject); }
+        catch (e) {
+          if (e.status === 503) {
+            // Rotation already happened at the issuer. Retain that grant but
+            // quarantine it until the new identity token is verified.
+            session.credentials = { ...updated, expiresAt: 0, pendingIdentityToken: tokens.id_token, pendingExpiresAt: updated.expiresAt };
+            await store.write(auth.sessionId, session);
+          } else if (e.status === 401) await clearInvalidIdentity();
+          throw e;
+        }
+      }
       session.credentials = updated;
       await store.write(auth.sessionId, session);
       if (auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
@@ -358,9 +404,20 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
           fresh.clientId = clientId;
           fresh.user = { id: accountId, name: typeof identity.name === 'string' ? identity.name : null, email: typeof identity.email === 'string' ? identity.email : null };
           fresh.credentials = credentials(tokens);
+          fresh.revocationUnconfirmed = Boolean(session.revocationUnconfirmed);
           const freshId = random();
           await store.write(freshId, fresh);
           if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
+          const previousRefreshToken = session.credentials?.refreshToken;
+          if (previousRefreshToken && previousRefreshToken !== fresh.credentials.refreshToken) {
+            if (!await revoke(previousRefreshToken)) {
+              fresh.revocationUnconfirmed = true;
+              await store.write(freshId, fresh);
+              session.revocationUnconfirmed = true;
+              await store.write(id, session);
+            }
+            if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
+          }
           await drop(id);
           setCookie(res, freshId);
         });

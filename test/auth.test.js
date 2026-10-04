@@ -19,7 +19,7 @@ async function harness(t, options = {}) {
   const [{ privateKey, publicKey }, invalidKeys] = await fixtureKeys;
   const jwk = { ...await exportJWK(publicKey), kid: 'key-1', alg: 'RS256' };
   const codes = new Map(), issuedRefresh = new Map();
-  const state = { now: Date.now(), exchanges: [], refreshes: 0, revocations: 0, sequence: 0, ...options.state };
+  const state = { now: Date.now(), exchanges: [], refreshes: 0, revocations: 0, revokedTokens: [], sequence: 0, ...options.state };
   const app = express();
   const server = http.createServer(app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -34,8 +34,9 @@ async function harness(t, options = {}) {
     const id_token = await makeToken(context);
     if (context.identityOnly) return { id_token };
     const number = ++state.sequence;
-    issuedRefresh.set(`refresh-${number}`, context);
-    return { id_token, access_token: `access-${number}`, refresh_token: `refresh-${number}`, token_type: 'Bearer', expires_in: 3600, scope: context.scope ?? scope };
+    const refreshToken = state.reuseRefreshToken ?? `refresh-${number}`;
+    issuedRefresh.set(refreshToken, context);
+    return { id_token, access_token: `access-${number}`, refresh_token: refreshToken, token_type: 'Bearer', expires_in: 3600, scope: context.scope ?? scope };
   };
   const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
   const fetchImpl = async (input, init = {}) => {
@@ -43,7 +44,7 @@ async function harness(t, options = {}) {
     assert.equal(init.redirect, 'error');
     assert.ok(init.signal);
     if (pathname === '/.well-known/openid-configuration') return json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/keys`, revocation_endpoint: `${issuer}/revoke`, ...state.discovery });
-    if (pathname === '/keys') return json({ keys: [jwk] });
+    if (pathname === '/keys') return state.keyFailure ? json({ error: 'temporarily_unavailable' }, 503) : json({ keys: [jwk] });
     if (pathname === '/token') {
       const body = new URLSearchParams(init.body);
       state.exchanges.push({ body, headers: init.headers });
@@ -58,7 +59,7 @@ async function harness(t, options = {}) {
         assert.equal(body.get('resource'), 'https://api.openai.com/v1');
         assert.equal(body.has('scope'), false);
         issuedRefresh.delete(body.get('refresh_token'));
-        return json(await makeTokens(context));
+        return json(await makeTokens({ ...context, ...state.refreshContext }));
       }
       const context = codes.get(body.get('code'));
       codes.delete(body.get('code'));
@@ -72,6 +73,7 @@ async function harness(t, options = {}) {
       state.revocations++;
       const body = new URLSearchParams(init.body);
       state.revokedToken = body.get('token');
+      state.revokedTokens.push(state.revokedToken);
       assert.equal(body.get('token_type_hint'), 'refresh_token');
       assert.equal(body.get('client_id'), config.clientId);
       if (state.revokeFailure) return new Response('', { status: 503 });
@@ -129,7 +131,7 @@ async function harness(t, options = {}) {
       }
     };
   }
-  return { auth, browser, state, dir, config, codes };
+  return { auth, browser, state, dir, config, codes, fetchImpl };
 }
 
 test('unconfigured hosted auth fails closed; origins, hosts, and CSRF are checked', async t => {
@@ -264,6 +266,33 @@ test('accounts never enumerate across browsers and returning sign-in cannot repl
   assert.equal((await bob.status()).data.user.id, bobStatus.user.id);
 });
 
+test('replacing a signed-in account revokes its previous grant and preserves revocation warnings', async t => {
+  const h = await harness(t), browser = h.browser();
+  await browser.login({ subject: 'alice' });
+  await browser.login({ subject: 'bob' });
+  assert.deepEqual(h.state.revokedTokens, ['refresh-1']);
+  assert.deepEqual(await (await browser.request('/api/token')).json(), { token: 'access-2' });
+  h.state.revokeFailure = true;
+  await browser.login({ subject: 'alice' });
+  assert.deepEqual(h.state.revokedTokens, ['refresh-1', 'refresh-2', 'refresh-2']);
+  h.state.revokeFailure = false;
+  await browser.login({ subject: 'bob' });
+  await browser.status();
+  const logout = await browser.request('/api/auth/logout', { method: 'POST' });
+  assert.deepEqual(await logout.json(), { ok: true, revocationConfirmed: false });
+  assert.deepEqual(h.state.revokedTokens, ['refresh-1', 'refresh-2', 'refresh-2', 'refresh-3', 'refresh-4']);
+});
+
+test('reauthorization never revokes a refresh token reused by the new grant', async t => {
+  const h = await harness(t), browser = h.browser();
+  await browser.login();
+  h.state.reuseRefreshToken = 'refresh-1';
+  await browser.login();
+  assert.deepEqual(h.state.revokedTokens, []);
+  h.state.now += 3_550_000;
+  assert.deepEqual(await (await browser.request('/api/token')).json(), { token: 'access-3' });
+});
+
 test('refresh serializes rotation, survives network failures, and clears terminally invalid grants', async t => {
   const h = await harness(t), browser = h.browser();
   await browser.login();
@@ -305,6 +334,51 @@ test('refresh recovery distinguishes every terminal provider code from configura
   h.state.refreshErrorStatus = 503;
   assert.equal((await browser.request('/api/token')).status, 503);
   assert.equal((await browser.status()).data.authenticated, true);
+});
+
+test('rotated refresh credentials survive unavailable identity keys without bypassing verification', async t => {
+  const h = await harness(t), browser = h.browser();
+  await browser.login();
+  await browser.request('/api/protected');
+  const originalAuth = h.state.lastAuth;
+  h.state.now += 3_550_000;
+  h.state.keyFailure = true;
+  assert.equal((await browser.request('/api/token')).status, 503);
+  assert.equal(h.state.refreshes, 1);
+  assert.equal((await browser.request('/api/token')).status, 503);
+  assert.equal(h.state.refreshes, 1);
+  assert.equal((await browser.status()).data.authenticated, true);
+  // Quarantine is durable, so a restart cannot use the unverified access token.
+  const restarted = await createAuth({ config: h.config, issuer, fetch: h.fetchImpl, now: () => h.state.now });
+  await assert.rejects(restarted.getAccessToken(originalAuth), { status: 503 });
+  h.state.keyFailure = false;
+  assert.equal(await restarted.getAccessToken(originalAuth), 'access-2');
+  h.state.now += 3_550_000;
+  assert.equal(await restarted.getAccessToken(originalAuth), 'access-3');
+  assert.equal(h.state.exchanges.at(-1).body.get('refresh_token'), 'refresh-2');
+});
+
+test('a mismatched refreshed identity clears the session immediately or after deferred verification', async t => {
+  for (const deferVerification of [false, true]) {
+    await t.test(deferVerification ? 'after key service recovery' : 'immediate verification', async t => {
+      const h = await harness(t), browser = h.browser();
+      await browser.login({ subject: 'alice' });
+      await browser.request('/api/protected');
+      const signal = h.state.lastAuth.signal;
+      h.state.now += 3_550_000;
+      h.state.refreshContext = { subject: 'bob' };
+      if (deferVerification) {
+        h.state.keyFailure = true;
+        assert.equal((await browser.request('/api/token')).status, 503);
+        h.state.keyFailure = false;
+      }
+      assert.equal((await browser.request('/api/token')).status, 401);
+      assert.equal(signal.aborted, true);
+      assert.equal((await browser.status()).data.authenticated, false);
+      assert.equal((await browser.request('/api/token')).status, 401);
+      assert.equal(h.state.refreshes, 1);
+    });
+  }
 });
 
 test('logout aborts in-flight work, revokes only this browser grant, and blocks queued refresh results', async t => {
@@ -406,6 +480,43 @@ test('startup and periodic maintenance remove expired sessions and abandoned wri
   h.state.now += 5 * 60 * 1000;
   await browser.status();
   assert.equal((await fs.readdir(h.config.authDir)).includes(recent), false);
+});
+
+test('corrupt session files are removed and replaced with an anonymous session', async t => {
+  const h = await harness(t);
+  for (const corrupt of [
+    () => '{truncated',
+    () => 'null',
+    () => JSON.stringify({ iv: 'invalid', tag: 'invalid', data: 'invalid' }),
+    contents => { const envelope = JSON.parse(contents); const tag = Buffer.from(envelope.tag, 'base64url'); tag[0] ^= 1; envelope.tag = tag.toString('base64url'); return JSON.stringify(envelope); }
+  ]) {
+    const browser = h.browser();
+    await browser.login();
+    const oldCookie = browser.cookie;
+    const id = oldCookie.split('=')[1];
+    const filename = path.join(h.config.authDir, `${createHash('sha256').update(id).digest('hex')}.session`);
+    const contents = await fs.readFile(filename, 'utf8');
+    await fs.writeFile(filename, corrupt(contents));
+    const { response, data } = await browser.status();
+    assert.equal(response.status, 200);
+    assert.equal(data.authenticated, false);
+    assert.notEqual(browser.cookie, oldCookie);
+    await assert.rejects(fs.stat(filename), { code: 'ENOENT' });
+    assert.equal((await browser.request('/api/token')).status, 401);
+  }
+});
+
+test('filesystem read failures are propagated without deleting session paths', async t => {
+  const h = await harness(t), browser = h.browser();
+  await browser.login();
+  const id = browser.cookie.split('=')[1];
+  const filename = path.join(h.config.authDir, `${createHash('sha256').update(id).digest('hex')}.session`);
+  await fs.rm(filename);
+  await fs.mkdir(filename);
+  const response = await browser.request('/api/auth/session');
+  assert.equal(response.status, 500);
+  assert.equal((await response.json()).code, 'EISDIR');
+  assert.equal((await fs.stat(filename)).isDirectory(), true);
 });
 
 test('private credentials cannot be placed under a public cache directory', async t => {

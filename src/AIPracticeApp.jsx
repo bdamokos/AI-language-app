@@ -1022,7 +1022,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
           const batchSize = Math.min(remaining, 5); // Request up to 5 exercises per chapter
           const resp = await generateErrorBundles(topic, batchSize, { ...languageContext, baseText: base, chapter });
           if (!Array.isArray(resp?.items) || resp.items.length === 0) {
-            throw new Error('No fill-in-the-blank exercises were returned. Please try again.');
+            throw new Error('No error bundles were returned. Please try again.');
           }
           const batch = resp.items.slice(0, remaining);
           collected.push(...batch);
@@ -1096,7 +1096,8 @@ const AIPracticeApp = ({ onNewLesson }) => {
           remaining -= batch.length;
         }
       }
-      const items = collected.length > 0 ? collected : [];
+      if (!collected.length) throw new Error('No rewriting exercises were returned. Please try again.');
+      const items = collected;
       const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, rewriting: timestampedItems });
