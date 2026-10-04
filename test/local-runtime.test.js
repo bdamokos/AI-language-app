@@ -103,6 +103,41 @@ test('shutdown retains exclusive ownership until a pending cache transaction fin
   t.after(() => next.close());
 });
 
+test('an auth shutdown error still drains cache writes and releases ownership before rejecting', { timeout: 10_000 }, async t => {
+  const dataDir = await directory(t);
+  const runtime = await startLocalRuntime({ dataDir, port: 0, production: false });
+  const failure = new Error('Auth persistence failed after operations finished');
+  const layout = await ensureCacheLayout(path.join(runtime.dataDir, 'cache', 'accounts', 'test-account'));
+  const rename = fs.rename, closeAuth = runtime.auth.close;
+  let finishWrite, enteredWrite, authFinished;
+  const entered = new Promise(resolve => { enteredWrite = resolve; });
+  const waiting = new Promise(resolve => { finishWrite = resolve; });
+  const authStopped = new Promise(resolve => { authFinished = resolve; });
+  t.after(async () => { finishWrite(); await assert.rejects(runtime.close(), error => error === failure); });
+  t.mock.method(fs, 'rename', async (from, to) => {
+    if (to.startsWith(layout.explanationItemsDir)) { enteredWrite(); await waiting; }
+    return rename(from, to);
+  });
+  t.mock.method(runtime.auth, 'close', async () => { await closeAuth(); authFinished(); throw failure; });
+  const write = setExplanation(layout, 'test-lesson', { language: 'es' }, 'A completed lesson');
+  await entered;
+  const closing = runtime.close();
+  const rejected = assert.rejects(closing, error => error === failure);
+  await authStopped;
+  try {
+    await assert.rejects(startLocalRuntime({ dataDir, port: 0 }), /already locked/);
+    await fs.stat(path.join(dataDir, 'runtime.lock'));
+  } finally { finishWrite(); }
+  await write;
+  await rejected;
+  assert.equal((await getExplanation(layout, 'test-lesson')).content, 'A completed lesson');
+  await assert.rejects(fs.stat(path.join(dataDir, 'runtime.lock')), { code: 'ENOENT' });
+  const next = await startLocalRuntime({ dataDir, port: 0, production: false });
+  t.after(() => next.close());
+  assert.equal(runtime.close(), closing, 'Repeated close must not touch the next runtime owner');
+  await fs.stat(path.join(dataDir, 'runtime.lock'));
+});
+
 test('shutdown cancels requests still loading authentication before they can start a later cache write', { timeout: 15_000 }, async t => {
   const dataDir = await directory(t);
   const provider = await startOpenAIFixture();

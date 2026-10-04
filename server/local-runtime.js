@@ -63,9 +63,14 @@ export async function startLocalRuntime({ port = 3210, dataDir = defaultLocalDat
     const stopped = new Promise((resolve, reject) => server.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve()));
     server.closeAllConnections();
     await stopped;
-    await auth?.close?.();
+    // Auth waits for its active operations before reporting a persistence error.
+    // Finish draining other writes and release ownership even in that case.
+    let authError, authFailed = false;
+    try { await auth?.close?.(); }
+    catch (error) { authFailed = true; authError = error; }
     await drainCacheWrites(path.join(dataDir, 'cache'));
     await release();
+    if (authFailed) throw authError;
   })();
   try {
     await new Promise((resolve, reject) => {
