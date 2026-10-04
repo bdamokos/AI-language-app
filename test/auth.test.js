@@ -870,3 +870,88 @@ test('failed local replacement never restores a previous grant already revoked b
   assert.equal(profile.credentials, null);
   assert.equal(profile.idToken, null);
 });
+
+test('logout during final callback session removal cancels publication and cleans up the new grant', { timeout: 10_000 }, async t => {
+  for (const mode of ['hosted', 'local']) {
+    for (const revokeFailure of [false, true]) await t.test(`${mode}, revocation unavailable: ${revokeFailure}`, async t => {
+      const h = await harness(t, { config: { mode }, state: { revokeFailure } }), browser = h.browser();
+      await browser.status();
+      const oldCookie = browser.cookie;
+      const logoutBrowser = h.browser();
+      logoutBrowser.cookie = oldCookie; logoutBrowser.csrf = browser.csrf;
+      const directory = await fs.realpath(h.config.authDir);
+      const oldSessionPath = path.join(directory, `${createHash('sha256').update(oldCookie.split('=')[1]).digest('hex')}.session`);
+      const originalRemove = fs.rm, originalRead = fs.readFile;
+      let releaseRemoval, removalStarted, logoutChecked;
+      const removalGate = new Promise(resolve => { releaseRemoval = resolve; });
+      const removing = new Promise(resolve => { removalStarted = resolve; });
+      const logoutReady = new Promise(resolve => { logoutChecked = resolve; });
+      let blocked = false;
+      fs.rm = async (target, options) => {
+        if (!blocked && target === oldSessionPath) {
+          blocked = true;
+          removalStarted();
+          await removalGate;
+        }
+        return originalRemove(target, options);
+      };
+      fs.readFile = async (target, ...args) => {
+        const result = await originalRead(target, ...args);
+        // Once the paused removal starts, only the logout's CSRF check reads
+        // this anonymous session. Let its middleware finish before releasing I/O.
+        if (blocked && target === oldSessionPath) setImmediate(logoutChecked);
+        return result;
+      };
+      t.after(() => { fs.rm = originalRemove; fs.readFile = originalRead; releaseRemoval(); });
+      const signIn = browser.login({ issuedClientId: 'oaiapp_final_publication' });
+      await removing;
+      const logout = logoutBrowser.request('/api/auth/logout', { method: 'POST' });
+      await logoutReady;
+      releaseRemoval();
+      const signInResult = await signIn;
+      const logoutResult = await logout;
+      assert.match(signInResult.response.headers.get('location'), /auth=error$/);
+      assert.equal(browser.cookie, oldCookie);
+      assert.deepEqual(await logoutResult.json(), { ok: true, revocationConfirmed: !revokeFailure });
+      assert.deepEqual(h.state.revokedTokens, Array(revokeFailure ? 2 : 1).fill('refresh-1'));
+      const status = (await logoutBrowser.status()).data;
+      assert.equal(status.authenticated, false);
+      assert.equal((await browser.request('/api/token')).status, 401);
+      assert.equal((await fs.readdir(directory)).filter(name => name.endsWith('.session')).length, 1);
+      if (mode === 'local') {
+        assert.equal(status.accounts[0].connected, false);
+        await h.auth.close();
+        const profile = (await createLocalProfileStore(h.config.authDir)).get(status.accounts[0].id);
+        assert.equal(profile.credentials, null);
+        assert.equal(profile.idToken, null);
+        assert.equal(profile.revocationUnconfirmed, revokeFailure);
+      }
+    });
+  }
+});
+
+test('failed hosted publication aborts work authorized by the retired previous grant', async t => {
+  const h = await harness(t), browser = h.browser();
+  await browser.login({ subject: 'alice' });
+  await browser.status();
+  await browser.request('/api/protected');
+  const previousSignal = h.state.lastAuth.signal;
+  const oldSessionPath = path.join(await fs.realpath(h.config.authDir), `${createHash('sha256').update(browser.cookie.split('=')[1]).digest('hex')}.session`);
+  const originalRemove = fs.rm;
+  let injected = false;
+  fs.rm = async (target, options) => {
+    if (!injected && target === oldSessionPath) {
+      injected = true;
+      throw Object.assign(new Error('Injected final session removal failure'), { code: 'EIO' });
+    }
+    return originalRemove(target, options);
+  };
+  t.after(() => { fs.rm = originalRemove; });
+  const { response } = await browser.login({ subject: 'bob' });
+  assert.match(response.headers.get('location'), /auth=error$/);
+  assert.equal(injected, true);
+  assert.equal(previousSignal.aborted, true);
+  assert.deepEqual(h.state.revokedTokens, ['refresh-1', 'refresh-2']);
+  assert.equal((await browser.status()).data.authenticated, false);
+  assert.equal((await browser.request('/api/token')).status, 401);
+});

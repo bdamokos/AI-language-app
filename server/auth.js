@@ -484,6 +484,8 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
                 // the old browser session so a queued logout can report it.
                 session.user = null; session.accountId = null;
                 delete session.credentials; delete session.idToken;
+                controllers.get(id)?.value.abort();
+                controllers.delete(id);
               }
               // These attempts must remain independent: a disk failure in one
               // location must not leave another provisional credential usable.
@@ -533,8 +535,13 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
                 }
                 assertSignInActive();
               }
+              // Keep cancellation reachable throughout the final filesystem wait.
+              // Publication follows the last check without another await.
+              await store.remove(id);
+              assertSignInActive();
               if (local) abortProfile(accountId);
-              await drop(id);
+              controllers.get(id)?.value.abort();
+              controllers.delete(id);
               setCookie(res, freshId);
             } catch (failure) {
               await rollbackSignIn();
