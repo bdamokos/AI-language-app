@@ -6,7 +6,7 @@
 /**
  * System prompt for base text generation
  */
-export const BASE_TEXT_SYSTEM_PROMPT = `You generate rich narrative base texts used to derive multiple exercise types. The base text should be structured, cohesive, and divided into three chapters that progressively build context.`;
+export const BASE_TEXT_SYSTEM_PROMPT = `Write a cohesive three-chapter story for language practice. Return the requested JSON, with concise metadata and natural prose appropriate to the learner's level.`;
 
 /**
  * Generate user prompt for base text creation
@@ -28,12 +28,10 @@ Requirements:
 - Audience CEFR level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 - Use a natural mix of grammar structures appropriate for ${level} level across all chapters
 - Provide JSON with the required fields (see schema)
-- Chapters should be of increasing complexity and each 120-250 words for B1; scale by level
-- For each chapter's suitability field, return ALL CEFR levels where the text is suitable (understandable yet challenging)
-- Use ONLY these exact CEFR codes: A1, A2, B1, B2, C1, C2 (no descriptive text)
-- Example: A B1 chapter might be suitable for ["A2", "B1", "B2"] learners - include all applicable levels
-- Assess which CEFR levels each chapter is suitable for and identify key grammar concepts used
-- Ensure cultural appropriateness
+- Write 100-140 words per chapter at B1; use shorter, simpler passages at A1-A2 and richer language at B2-C2
+- Give each chapter 6-10 complete sentences and a clear connection to the story
+- List suitable CEFR codes and 2-4 key grammar concepts per chapter
+- Keep the synopsis to one sentence and each vocabulary/entity list to at most six entries
 ${focusLine}`;
 }
 

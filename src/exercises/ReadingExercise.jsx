@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import useImageGeneration from '../hooks/useImageGeneration.js';
+import { apiFetch } from '../utils/api.js';
+import React from 'react';
 import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 /**
@@ -21,143 +21,6 @@ import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './uti
  *           pp:{index} => string
  */
 export default function ReadingExercise({ item, value, onChange, checked, idPrefix, onFocusKey }) {
-  const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
-  const [generatedImage, setGeneratedImage] = useState(null);
-  const { generateImage, loading: imageLoading, error: imageError } = useImageGeneration();
-  const lastKeyRef = useRef('');
-  const isGeneratingRef = useRef(false);
-
-  // Check settings once
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const res = await fetch('/api/settings');
-        const settings = await res.json();
-        const providerKey = settings.imageProvider || 'runware';
-        setImageGenerationEnabled(!!settings[providerKey]?.enabled);
-      } catch {
-        setImageGenerationEnabled(false);
-      }
-    };
-    check();
-  }, []);
-
-  // Attempt to use base-text-associated image if available
-  useEffect(() => {
-    const maybeUseBaseTextImage = async () => {
-      try {
-        const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
-        const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
-        if (!baseTextId) return;
-        // Skip if we already determined not found for this combo
-        if (lastKeyRef.current === `nf:${baseTextId}:${chapterNumber || 'cover'}`) return;
-        const resp = await fetch(`/api/base-text-content/${baseTextId}`);
-        if (!resp.ok) {
-          if (resp.status === 404) {
-            lastKeyRef.current = `nf:${baseTextId}:${chapterNumber || 'cover'}`;
-          }
-          return;
-        }
-        const base = await resp.json();
-        const images = base?.images || {};
-        let url = null;
-        if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
-          url = images.chapters[String(chapterNumber)].localUrl;
-        } else if (images?.cover?.localUrl) {
-          url = images.cover.localUrl;
-        }
-        if (url) {
-          const cached = { data: [{ url }] };
-          setGeneratedImage(cached);
-          if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
-            const exerciseIndex = idPrefix.split(':').pop();
-            window.globalImageStore[`reading:${exerciseIndex}`] = cached;
-          }
-          // mark signature to avoid regenerating for same
-          lastKeyRef.current = `base:${baseTextId}:${chapterNumber || 'cover'}`;
-        }
-      } catch {}
-    };
-    maybeUseBaseTextImage();
-  }, [item?.base_text_info?.base_text_id, item?.base_text_info?.chapter_number, item?.base_text_id, item?.chapter_number, idPrefix]);
-
-  // Generate image based on image_prompt when present
-  useEffect(() => {
-    const doGen = async () => {
-      if (!imageGenerationEnabled) return;
-      if (!item?.image_prompt) return;
-      // If we already have an image (e.g., from base text), skip generation
-      if (generatedImage && getImageSource(generatedImage)) return;
-      // If a cached local image URL is present on the item, use it and skip generation
-      if (item?.localImageUrl) {
-        const cached = { data: [{ url: item.localImageUrl }] };
-        setGeneratedImage(cached);
-        if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
-          const exerciseIndex = idPrefix.split(':').pop();
-          window.globalImageStore[`reading:${exerciseIndex}`] = cached;
-        }
-        // Prevent subsequent generation attempts for this item
-        lastKeyRef.current = `local:${item.localImageUrl}`;
-        return;
-      }
-      const sig = `${item.image_prompt}`;
-      if (lastKeyRef.current === sig) return;
-      if (isGeneratingRef.current) return;
-      isGeneratingRef.current = true;
-      lastKeyRef.current = sig;
-      try {
-        // Prefer existing base-text image if available
-        const baseTextId = item?.base_text_info?.base_text_id || item?.base_text_id;
-        const chapterNumber = item?.base_text_info?.chapter_number || item?.chapter_number;
-        if (baseTextId) {
-          try {
-            const resp = await fetch(`/api/base-text-content/${baseTextId}`);
-            if (resp.ok) {
-              const base = await resp.json();
-              const images = base?.images || {};
-              let url = null;
-              if (chapterNumber && images?.chapters && images.chapters[String(chapterNumber)]?.localUrl) {
-                url = images.chapters[String(chapterNumber)].localUrl;
-              } else if (images?.cover?.localUrl) {
-                url = images.cover.localUrl;
-              }
-              if (url) {
-                const cached = { data: [{ url }] };
-                setGeneratedImage(cached);
-                if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
-                  const exerciseIndex = idPrefix.split(':').pop();
-                  window.globalImageStore[`reading:${exerciseIndex}`] = cached;
-                }
-                return; // Use existing, do not generate
-              }
-            }
-          } catch {}
-        }
-        const img = await generateImage(item.image_prompt, {
-          width: 1024,
-          height: 1024,
-          steps: 28,
-          cfgScale: 3.5,
-          persistToCache: true,
-          exerciseSha: item?.exerciseSha,
-          baseTextId: item?.base_text_info?.base_text_id || item?.base_text_id,
-          chapterNumber: item?.base_text_info?.chapter_number || item?.chapter_number
-        });
-        setGeneratedImage(img);
-        if (typeof window !== 'undefined' && window.globalImageStore && idPrefix) {
-          const exerciseIndex = idPrefix.split(':').pop();
-          window.globalImageStore[`reading:${exerciseIndex}`] = img;
-        }
-      } catch (e) {
-        // optional, ignore
-      } finally {
-        isGeneratingRef.current = false;
-      }
-    };
-    doGen();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageGenerationEnabled, item?.image_prompt, idPrefix, item?.exerciseSha, item?.localImageUrl, item?.base_text_info?.base_text_id, item?.base_text_info?.chapter_number, item?.base_text_id, item?.chapter_number]);
-
   const tfItems = Array.isArray(item?.true_false) ? item.true_false : [];
   const qaItems = Array.isArray(item?.comprehension_questions) ? item.comprehension_questions : [];
   const glossary = Array.isArray(item?.glossary) ? item.glossary : [];
@@ -182,17 +45,11 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
   const setQA = (i, val) => onChange(`qa:${i}`, val);
   const setPP = (i, val) => onChange(`pp:${i}`, val);
 
-  const getImageSource = (imageData) => {
-    if (!imageData?.data?.[0]) return null;
-    const img = imageData.data[0];
-    return img.url || img.imageURL || img.imageDataURI || img.imageBase64Data;
-  };
-
   return (
     <div className="border rounded p-3">
       {item?.title && <p className="font-medium text-gray-900 mb-2">{item.title}</p>}
 
-      {/* Text + optional image side by side on large screens */}
+      {/* Reading passage */}
       <div className="flex flex-col lg:flex-row gap-4">
         {/* Passage */}
         <div className="flex-1">
@@ -200,38 +57,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
             <div className="text-gray-800 leading-relaxed whitespace-pre-wrap">{item.passage}</div>
           )}
         </div>
-        {/* Optional generated image */}
-        {imageGenerationEnabled && (imageLoading || generatedImage || imageError) && (
-          <div className="lg:w-64 xl:w-80 flex-shrink-0">
-            {imageLoading && (
-              <div className="w-full aspect-square bg-gray-100 border border-gray-200 rounded-lg flex items-center justify-center">
-                <div className="text-center">
-                  <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                  <p className="text-sm text-gray-600">Generating image...</p>
-                </div>
-              </div>
-            )}
-            {generatedImage && getImageSource(generatedImage) && (
-              <div className="w-full">
-                <img
-                  src={getImageSource(generatedImage)}
-                  alt={`Illustration for: ${item?.title || 'Reading passage'}`}
-                  className="w-full aspect-square object-cover rounded-lg border border-gray-200 shadow-sm"
-                  onError={(e) => { e.target.style.display = 'none'; }}
-                />
-                <p className="text-xs text-gray-500 mt-1 text-center">AI-generated illustration</p>
-              </div>
-            )}
-            {imageError && !imageLoading && (
-              <div className="w-full aspect-square bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-center">
-                <div className="text-center p-4">
-                  <p className="text-sm text-gray-500">Image generation failed</p>
-                  <p className="text-xs text-gray-400 mt-1">{imageError}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+
       </div>
 
       {/* Glossary */}
@@ -397,38 +223,20 @@ export function scoreReading(item, value) {
  * Generate Reading Comprehension exercises - base text aware version
  */
 export async function generateReading(topic, count = 1, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
-  // Check if we have a base text chapter context
-  if (languageContext.chapter) {
-    return generateReadingFromBaseText(topic, count, languageContext);
+  const requestedCount = Number(count);
+  if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 10) {
+    throw new Error('Choose between 1 and 10 reading sets.');
   }
-  // Single-call path
-  if (count === 1) {
-    return generateSingleReading(topic, null, languageContext);
+  const result = languageContext.chapter
+    ? await generateReadingFromBaseText(topic, requestedCount, languageContext)
+    : await generateStandaloneReading(topic, requestedCount, languageContext);
+  if (!Array.isArray(result?.items) || result.items.length !== requestedCount || result.items.some(item => !item || typeof item.passage !== 'string' || !item.passage.trim())) {
+    throw new Error(`ChatGPT did not return ${requestedCount} complete reading ${requestedCount === 1 ? 'set' : 'sets'}. Please generate them again.`);
   }
-
-  // Multi-call path: sequential requests similar to Cloze/ClozeMixed
-  const allItems = [];
-  const errors = [];
-  for (let i = 0; i < count; i++) {
-    try {
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      const result = await generateSingleReading(topic, i + 1, languageContext);
-      if (result && Array.isArray(result.items)) {
-        allItems.push(...result.items);
-      }
-    } catch (e) {
-      errors.push({ index: i + 1, error: e.message });
-    }
-  }
-  if (allItems.length === 0) {
-    throw new Error(`Failed to generate any reading passages. Errors: ${errors.map(e => `#${e.index}: ${e.error}`).join('; ')}`);
-  }
-  return { items: allItems };
+  return result;
 }
 
-async function generateSingleReading(topic, passageNumber = null, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+async function generateStandaloneReading(topic, count, languageContext) {
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
@@ -448,41 +256,28 @@ async function generateSingleReading(topic, passageNumber = null, languageContex
 
   const lengthTarget = levelToLength(level);
   const maxNewWords = challengeMode ? 8 : 5;
-  const passageContext = passageNumber ? ` (Set ${passageNumber})` : '';
-
-  const system = `You are a language pedagogy assistant that generates reading comprehension passages with supporting materials.
-
-Requirements:
-- Title: ≤ 60 characters
-- Use natural, real-world language
-- Provide an image_prompt (short, descriptive, no text overlays)
-- Glossary: 3–8 terms (term, part of speech, definition, optional translation, example sentence in target language)
-- True/False: 3–5 statements answerable directly from the passage
-- Comprehension questions: 2–4 with concise model answers
-- Productive prompts: 1–2 with short model answers
-- Opinion questions: exactly 3 with model answers for agree/disagree/neutral
-- Keep content age-appropriate and culturally relevant
-- Return ONLY fields that match the provided JSON schema (no extra text)`;
+  const system = `Create reading comprehension sets in the target language, matching the JSON schema and CEFR level.
+Use distinct, natural passages relevant to the topic. Ground factual questions and answers in each passage.
+Include the glossary and question types specified by the schema, with concise model answers and agree/disagree/neutral answers for opinion questions.
+Keep image prompts descriptive, without text overlays.`;
 
   const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
   const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
 
-  const user = `Task: Create exactly 1 reading comprehension set${passageContext}.
+  const user = `Task: Create exactly ${count} reading comprehension sets.
 Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging; allow more complex syntax and subordinate clauses)' : ''}
 Topic: ${topic}
 Passage length target: ${lengthTarget}
 Max new vocabulary terms: ${maxNewWords}
 
-${topicLine}
-
-Return STRICT JSON only per schema.`;
+${topicLine}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', minItems: 1, maxItems: 1, items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string', maxLength: 60 },
@@ -548,15 +343,16 @@ Return STRICT JSON only per schema.`;
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
       user,
       jsonSchema: schema,
       schemaName: 'reading_list',
-      metadata: { language: languageName, level, challengeMode, topic }
+      metadata: { language: languageName, level, challengeMode, topic, count }
     })
   });
 
@@ -581,20 +377,12 @@ async function generateReadingFromBaseText(topic, count = 1, languageContext) {
     throw new Error('No base text chapter provided for reading comprehension');
   }
 
-  const system = `You are creating reading comprehension exercises based on a provided text passage.
+  const system = `Create reading comprehension sets in the target language, matching the JSON schema and CEFR level.
+Use the supplied passage unchanged. Ground factual questions and answers in it, without invented facts.
+Include passage vocabulary and the question types specified by the schema, with concise model answers and agree/disagree/neutral answers for opinion questions.
+When several sets are requested, vary the questions. Keep image prompts descriptive, without text overlays.`;
 
-Requirements:
-- Create an appropriate title (≤ 60 characters) reflecting the chapter content
-- Generate an image_prompt that captures the scene/mood of the specific chapter
-- Identify 4–6 key vocabulary terms from the passage (POS, definition, translation, example)
-- Extract 4–5 TRUE/FALSE statements verifiable directly from the text
-- Create 3–4 comprehension questions with concise model answers
-- Provide 1–2 productive prompts with short model answers
-- Create exactly 3 opinion questions with agree/disagree/neutral model answers
-- Use ONLY the provided passage; do not invent facts
-- Return ONLY fields that match the provided JSON schema (no extra text)`;
-
-  const user = `Task: Create exactly 1 reading comprehension set based on a provided passage.
+  const user = `Task: Create exactly ${count} reading comprehension sets based on the provided passage.
 Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging analysis)' : ''}
 Topic: ${topic}
@@ -603,15 +391,13 @@ Source: ${baseText?.title || 'Unknown'}
 
 **Chapter: ${chapter.title}**
 **Passage:**
-${chapter.passage}
-
-Return STRICT JSON only per schema.`;
+${chapter.passage}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', minItems: 1, maxItems: 1, items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string', maxLength: 60 },
@@ -687,8 +473,9 @@ Return STRICT JSON only per schema.`;
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -700,6 +487,7 @@ Return STRICT JSON only per schema.`;
         level, 
         challengeMode, 
         topic,
+        count,
         baseTextId: baseText?.id,
         chapterNumber: chapter?.number,
         chapterTitle: chapter?.title
@@ -714,16 +502,16 @@ Return STRICT JSON only per schema.`;
   const result = await response.json();
   
   // Add base text metadata to the result
-  if (result.items && result.items[0]) {
-    result.items[0].base_text_info = {
+  for (const item of result?.items || []) {
+    if (!item || typeof item !== 'object') continue;
+    item.base_text_info = {
       base_text_id: baseText?.id,
       chapter_number: chapter?.number, 
       chapter_title: chapter?.title
     };
     // Ensure we use the original passage
-    result.items[0].passage = chapter.passage;
+    item.passage = chapter.passage;
   }
 
   return result;
 }
-

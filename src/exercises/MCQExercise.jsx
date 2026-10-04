@@ -1,5 +1,7 @@
+import { apiFetch } from '../utils/api.js';
 import React from 'react';
 import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
+import { hasText, normalizeExerciseCount, validateGeneratedItems } from './generationValidation.js';
 
 /**
  * Multiple-choice exercise renderer
@@ -78,6 +80,7 @@ export function scoreMCQ(item, value) {
  * @returns {Promise<{items: Array}>} Generated MCQ exercises
  */
 export async function generateMCQ(topic, count = 5, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+  count = normalizeExerciseCount(count);
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
@@ -108,7 +111,7 @@ ${topicLine}`;
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             question: { type: 'string' },
@@ -127,8 +130,9 @@ ${topicLine}`;
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -148,6 +152,10 @@ ${topicLine}`;
     throw new Error(`Failed to generate MCQ exercises: ${response.status}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  return validateGeneratedItems(result, count, 'multiple-choice exercises', item =>
+    hasText(item.question) && Array.isArray(item.options) && item.options.length === 4 &&
+    item.options.every(option => hasText(option?.text) && hasText(option?.rationale) && typeof option.correct === 'boolean') &&
+    item.options.filter(option => option.correct).length === 1 &&
+    new Set(item.options.map(option => option.text.trim().toLocaleLowerCase())).size === 4);
 }
-

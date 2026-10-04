@@ -1,7 +1,10 @@
+import { readExplanationStream } from '../utils/explanationStream.js';
+import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { hasText } from './generationValidation.js';
 
 /**
  * Explanation component for lessons
@@ -9,15 +12,15 @@ import remarkGfm from 'remark-gfm';
  * - explanation: { title: string, content_markdown: string }
  */
 export default function ExplanationComponent({ explanation }) {
-  if (!explanation) return null;
   const [voted, setVoted] = useState(null);
+  if (!explanation) return null;
   const cacheKey = explanation._cacheKey;
 
   const sendVote = async (like) => {
     if (!cacheKey || voted !== null) return;
     setVoted(like ? 'up' : 'down');
     try {
-      await fetch('/api/rate/explanation', {
+      await apiFetch('/api/rate/explanation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: cacheKey, like })
@@ -122,10 +125,11 @@ export async function generateExplanation(topic, languageContext = { language: '
 Requirements:
 - Write in the target language and match the target level
 - Where relevant, add sections on common mistakes (and fixes), cultural context, regional differences, usage tips, and etymology
-- Return clean markdown: start with a top-level heading (#) for the title, then the explanation
+- Return the schema's JSON object: a short title and the explanation in content_markdown
+- Use clean markdown within content_markdown; do not repeat the title as a heading
 - Keep length roughly 200–600 words
 - If necessary for clarity, include brief English translations in parentheses
-- Return ONLY content; do not echo instructions`;
+- Return only that JSON object; do not echo instructions`;
 
   const normalizeTopic = (input) => {
     if (typeof input === 'string') return input.trim();
@@ -149,8 +153,9 @@ Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
     required: ['title', 'content_markdown']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -170,7 +175,11 @@ Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
     throw new Error(`Failed to generate explanation: ${response.status}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  if (!hasText(result?.title) || !hasText(result?.content_markdown)) {
+    throw new Error('ChatGPT returned an incomplete explanation. Please try again.');
+  }
+  return result;
 }
 
 /**
@@ -187,8 +196,9 @@ export async function generateExplanationStream(topic, languageContext = { langu
     level: languageContext?.level || 'B1',
     challengeMode: !!languageContext?.challengeMode
   };
-  const resp = await fetch('/api/explanations/stream', {
+  const resp = await apiFetch('/api/explanations/stream', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
@@ -200,29 +210,5 @@ export async function generateExplanationStream(topic, languageContext = { langu
     if (json && json.title && json.content_markdown) return json;
     throw new Error('Unexpected response');
   }
-  const reader = resp.body?.getReader();
-  if (!reader) throw new Error('Streaming not supported');
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let final = null;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() || '';
-    for (const chunk of chunks) {
-      const line = chunk.split('\n').find(l => l.startsWith('data:')) || '';
-      if (!line) continue;
-      try {
-        const payload = JSON.parse(line.slice(5).trim());
-        onUpdate(payload);
-        if (payload.type === 'final' && payload.explanation) {
-          final = payload.explanation;
-        }
-      } catch {}
-    }
-  }
-  if (!final) throw new Error('Stream ended without final explanation');
-  return final;
+  return readExplanationStream(resp, onUpdate);
 }

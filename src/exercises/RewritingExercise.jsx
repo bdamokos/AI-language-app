@@ -1,6 +1,8 @@
+import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { Check } from 'lucide-react';
 import { normalizeText } from './utils.js';
+import { hasText, normalizeExerciseCount, validateGeneratedItems } from './generationValidation.js';
 
 /**
  * Sentence Rewriting exercise
@@ -108,6 +110,7 @@ export function scoreRewriting(item, value, eq) {
  * @returns {Promise<{items: Array}>}
  */
 export async function generateRewriting(topic, count = 5, languageContext) {
+  count = normalizeExerciseCount(count);
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
@@ -140,7 +143,7 @@ ${chapter.passage}`;
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             original: { type: 'string' },
@@ -156,8 +159,9 @@ ${chapter.passage}`;
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -182,6 +186,8 @@ ${chapter.passage}`;
   }
 
   const result = await response.json();
+  validateGeneratedItems(result, count, 'rewriting exercises', item =>
+    hasText(item.original) && hasText(item.instruction) && hasText(item.answer));
   if (result.items && result.items.length > 0) {
     result.items.forEach(it => {
       it.base_text_info = {
@@ -193,4 +199,3 @@ ${chapter.passage}`;
   }
   return result;
 }
-

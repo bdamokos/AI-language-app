@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { normalizeText, splitByBlanks, sanitizeClozeItem } from './utils.js';
-import { generateUnifiedCloze, generateUnifiedClozeStepwise, convertToClozeMixed, filterBlanksByDifficulty } from './ClozeUnified.jsx';
+import { generateUnifiedCloze, convertToClozeMixed } from './ClozeUnified.jsx';
 
 /**
  * Cloze with mixed options per blank (dropdowns)
@@ -20,18 +20,7 @@ export default function ClozeMixedExercise({ item, value, onChange, checked, str
       setSanitizedItem(sanitization.item);
       setWarnings(sanitization.warnings);
       
-      // Log warnings to server if there are issues
-      if (sanitization.warnings.length > 0) {
-        fetch('/api/log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            level: 'warn',
-            message: 'ClozeMixed passage validation warnings',
-            data: { item, warnings: sanitization.warnings }
-          })
-        }).catch(console.error); // Don't let logging errors break the UI
-      }
+
     }
   }, [item]);
   
@@ -158,46 +147,12 @@ export function scoreClozeMixed(item, value, eq) {
 /**
  * Generate ClozeMixed exercises using the generic LLM endpoint
  * @param {string} topic - The topic to generate exercises about
- * @param {number} count - Number of exercises to generate (1-10)
  * @param {Object} languageContext - Language and level context { language, level, challengeMode }
  * @returns {Promise<{items: Array}>} Generated ClozeMixed exercises
  */
 export async function generateClozeMixed(topic, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
-  // Always use unified approach - this is the only supported method going forward
-  console.log('Using unified cloze generation for ClozeMixed (cached as unified_cloze)');
-  
-  // Generate unified cloze using unified schema
-  // Prefer stepwise generation with prompt caching; fallback to single-shot unified
-  let unifiedResult;
-  try {
-    unifiedResult = await generateUnifiedClozeStepwise(topic, languageContext);
-  } catch (e) {
-    console.warn('[CLOZE-MIXED] Stepwise generation failed, falling back:', e?.message);
-    unifiedResult = await generateUnifiedCloze(topic, 1, languageContext);
-  }
-  const unifiedItem = unifiedResult.items[0];
-  
-  // Apply difficulty filtering based on challenge mode and level
-  const targetDifficulties = languageContext.challengeMode 
-    ? ['easy', 'medium', 'hard'] 
-    : ['easy', 'medium'];
-  // Dynamically aim for up to 75% sentence coverage, at least baseline (8), capped at 12 and total candidates
-  const segs = Array.isArray(unifiedItem.segments) ? unifiedItem.segments : [];
-  const isFlat = segs.length > 0 && !('type' in (segs[0] || {}));
-  const candidateCount = Number(unifiedItem.total_blanks || (isFlat
-    ? segs.filter(s => Array.isArray(s.options) && s.options.some(o => o.correct)).length
-    : segs.filter(s => s.type === 'blank').length));
-  const sentenceCount = isFlat ? segs.length : Math.max(candidateCount, segs.length || candidateCount);
-  const baseline = languageContext.challengeMode ? 12 : 8;
-  const coverageAim = Math.ceil(sentenceCount * 0.75);
-  const dynamicMax = Math.max(1, Math.min(12, Math.max(baseline, Math.min(candidateCount, coverageAim))))
-  
-  const filteredItem = filterBlanksByDifficulty(unifiedItem, targetDifficulties, dynamicMax);
-  
-  // Convert to ClozeMixed format for UI display
-  const clozeMixedItem = convertToClozeMixed(filteredItem);
-  
-  return { items: [clozeMixedItem] };
+  const result = await generateUnifiedCloze(topic, 1, languageContext);
+  return { items: [convertToClozeMixed(result.items[0])] };
 }
 
 // Deprecated traditional generation functions removed - using unified approach exclusively

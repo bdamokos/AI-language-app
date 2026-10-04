@@ -1,127 +1,315 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
-import http from 'node:http';
-import net from 'node:net';
+import { request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createApp, parseTrustedProxyCidrs } from '../server/app.js';
+import { createAuth } from '../server/auth.js';
+import { ensureCacheLayout, writeJson, readJson, setExplanation, loadExercisesIndex, addExercisesToPool, makeBucketKey, sha256Hex } from '../server/cacheStore.js';
 
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return port;
-}
-
-async function waitForOutput(getOutput, expected, process, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (getOutput().includes(expected)) return;
-    if (process.exitCode !== null) {
-      throw new Error(`Server exited before producing ${JSON.stringify(expected)}:\n${getOutput()}`);
-    }
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  throw new Error(`Timed out waiting for ${JSON.stringify(expected)}:\n${getOutput()}`);
-}
-
-test('client logging keeps format tokens literal and file routes enforce separate limits', { timeout: 20_000 }, async t => {
-  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'language-ai-security-'));
-  const port = await reservePort();
-  let output = '';
-  const server = spawn(process.execPath, ['server/index.js'], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      NODE_ENV: 'production',
-      PORT: String(port),
-      CACHE_DIR: cacheDir,
-      CACHE_PURGE_ON_STARTUP: 'false',
-      BASE_TEXT_RATE_LIMIT_MAX: '2',
-      SPA_RATE_LIMIT_MAX: '3'
+// Auth is tested against a real local OAuth fixture in auth.test.js. These
+// explicit injected identities test application boundaries independently.
+async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10, frontendRateLimitMax = 600, trustedProxyCidrs = '', production = false, guardOrigin } = {}) {
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'language-private-cache-'));
+  const calls = [];
+  let cancelledResolve;
+  const cancelled = new Promise(resolve => { cancelledResolve = resolve; });
+  const auth = {
+    guard(req, res, next) { next(); },
+    attachRoutes(app) {
+      app.get('/api/auth/session', (req, res) => res.json({ authenticated: false }));
+      app.post('/api/auth/login', (req, res) => res.json({ authorizationUrl: '/fixture' }));
     },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  server.stdout.setEncoding('utf8');
-  server.stderr.setEncoding('utf8');
-  server.stdout.on('data', chunk => { output += chunk; });
-  server.stderr.on('data', chunk => { output += chunk; });
-
+    requireCsrf(req, res, next) {
+      if (req.method !== 'GET' && req.headers['x-csrf-token'] !== 'fixture-csrf') return res.status(403).json({ error: 'Invalid CSRF token' });
+      next();
+    },
+    middleware(req, res, next) {
+      if (!['alice', 'bob'].includes(req.headers['x-test-account'])) return res.status(401).json({ error: 'Please sign in with ChatGPT.' });
+      req.auth = { accountId: req.headers['x-test-account'] };
+      next();
+    },
+  };
+  if (guardOrigin) {
+    // Use the production guard even though inference and identity are fixtures.
+    const realAuth = await createAuth({ config: { appOrigin: guardOrigin, redirectUri: `${guardOrigin}/api/auth/callback`, clientId: '', clientSecret: '', tokenAuthMethod: 'none', authDir: path.join(cacheDir, 'auth'), cacheDir: path.join(cacheDir, 'lessons') } });
+    auth.guard = realAuth.guard;
+  }
+  const model = req => `${req.auth.accountId}-model`;
+  const inference = {
+    getModel: async req => model(req),
+    listModels: async req => ({ models: [{ id: model(req), name: 'ChatGPT model' }], selectedModel: model(req) }),
+    selectModel: async (req, selected) => {
+      if (selected !== model(req)) throw Object.assign(new Error('Choose a model available to your ChatGPT account.'), { status: 400, code: 'invalid_model' });
+      return selected;
+    },
+    generate: async (req, options) => {
+      calls.push({ account: req.auth.accountId, options });
+      if (options.user.includes('cancel request')) {
+        options.onDelta?.('# Partial lesson\n');
+        await new Promise(resolve => req.inferenceSignal.addEventListener('abort', resolve, { once: true }));
+        cancelledResolve();
+        return '# Cancelled lesson\nDo not cache this output.';
+      }
+      if (options.user.includes('quota failure')) throw Object.assign(new Error('Your ChatGPT usage limit has been reached.'), { status: 429, code: 'subscription_sharing_usage_limit_exceeded' });
+      if (options.onDelta) {
+        const text = `# ${req.auth.accountId} explanation\nPrivate lesson about grammar.`;
+        options.onDelta(text);
+        return text;
+      }
+      if (options.schemaName === 'base_text') return JSON.stringify({ title: `${req.auth.accountId} story`, chapters: [{ chapter_number: 1, title: 'At home', content: 'A short practice text.' }] });
+      if (options.schemaName === 'explanation') return JSON.stringify({ explanation: `${req.auth.accountId} feedback` });
+      if (options.schemaName === 'recommendation') return JSON.stringify({ recommendation: 'Past tense', reasoning: 'Practice a related skill.' });
+      if (options.schemaName === 'reading_from_base_text') return JSON.stringify({ items: Array.from({ length: options.jsonSchema.properties.items.minItems }, (_, index) => ({ title: `Reading ${index + 1}`, passage: options.user })) });
+      return JSON.stringify({ items: [{ sentence: `${req.auth.accountId} _____ aquí.`, answer: 'está' }] });
+    },
+  };
+  const distDir = path.join(cacheDir, 'frontend');
+  if (production) {
+    await fs.mkdir(distDir);
+    await fs.writeFile(path.join(distDir, 'index.html'), '<!doctype html><title>Fixture app</title>');
+    await fs.writeFile(path.join(distDir, 'asset.js'), '/* Fixture asset */');
+  }
+  const app = createApp({ auth, inference, cacheDir, distDir, production, rateLimitMax, authRateLimitMax, loginRateLimitMax, frontendRateLimitMax, trustedProxyCidrs });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => {
-    if (server.exitCode === null) {
-      server.kill('SIGTERM');
-      await new Promise(resolve => server.once('exit', resolve));
-    }
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
     await fs.rm(cacheDir, { recursive: true, force: true });
   });
-
-  await waitForOutput(() => output, '[CACHE] Initialized', server);
-  await waitForOutput(() => output, 'Server listening', server);
-  const baseUrl = `http://127.0.0.1:${port}`;
-
-  const maliciousImageServer = http.createServer((request, response) => {
-    response.setHeader('content-type', 'image/../../escaped');
-    response.end('not-really-an-image');
+  const request = (route, { account = 'alice', body, headers, ...options } = {}) => fetch(`${origin}${route}`, {
+    ...options,
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'x-test-account': account, 'x-csrf-token': 'fixture-csrf', ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  await new Promise((resolve, reject) => {
-    maliciousImageServer.once('error', reject);
-    maliciousImageServer.listen(0, '127.0.0.1', resolve);
-  });
-  t.after(() => new Promise((resolve, reject) => {
-    maliciousImageServer.close(error => error ? reject(error) : resolve());
-  }));
-  const maliciousImagePort = maliciousImageServer.address().port;
-  const cacheImageResponse = await fetch(`${baseUrl}/api/cache/exercise-image`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      baseTextId: 'security-regression',
-      url: `http://127.0.0.1:${maliciousImagePort}/attacker.png`
-    })
-  });
-  assert.equal(cacheImageResponse.status, 200);
-  const cachedImage = await cacheImageResponse.json();
-  assert.equal(path.dirname(cachedImage.localPath), path.join(cacheDir, 'images'));
-  assert.match(cachedImage.localPath, /\.bin$/);
-  assert.equal(await fs.readFile(cachedImage.localPath, 'utf8'), 'not-really-an-image');
-  await assert.rejects(fs.access(path.join(cacheDir, 'escaped')), { code: 'ENOENT' });
-
-  for (const level of ['debug', 'info', 'warn', 'error']) {
-    const logResponse = await fetch(`${baseUrl}/api/log`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ level, message: `literal ${level} %s token`, data: 'ATTACKER_DATA' })
+  // Native fetch deliberately replaces Host, so use HTTP directly to exercise
+  // raw-host spoofing against the production guard over the same real socket.
+  const rawRequest = (route, headers) => new Promise((resolve, reject) => {
+    const req = httpRequest(`${origin}${route}`, { headers }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers: response.headers })));
+      response.on('error', reject);
     });
-    assert.equal(logResponse.status, 200);
-    await waitForOutput(() => output, `literal ${level} %s token ATTACKER_DATA`, server);
-    assert.doesNotMatch(output, new RegExp(`literal ${level} ATTACKER_DATA token`));
+    req.on('error', reject);
+    req.end();
+  });
+  return { request, rawRequest, calls, cacheDir, cancelled };
+}
+
+function events(text) {
+  return text.split('\n\n').filter(line => line.startsWith('data:')).map(line => JSON.parse(line.slice(5)));
+}
+
+test('all lesson routes require identity and retired operator-key routes cannot be reached', async t => {
+  const { request, calls } = await fixture(t);
+  for (const route of ['/api/settings', '/api/models', '/api/debug', '/api/base-text-content/0000000000000000']) {
+    assert.equal((await request(route, { account: '' })).status, 401, route);
   }
-
-  const firstBaseText = await fetch(`${baseUrl}/api/base-text-content/missing`);
-  const secondBaseText = await fetch(`${baseUrl}/api/base-text-content/missing`);
-  const limitedBaseText = await fetch(`${baseUrl}/api/base-text-content/missing`);
-  assert.equal(firstBaseText.status, 404);
-  assert.equal(secondBaseText.status, 404);
-  assert.equal(limitedBaseText.status, 429);
-  assert.equal(limitedBaseText.headers.get('retry-after'), '60');
-
-  const indexHtml = await fs.readFile(path.join(process.cwd(), 'dist', 'index.html'), 'utf8');
-  const homepage = await fetch(`${baseUrl}/`);
-  assert.equal(homepage.status, 200);
-  assert.equal(await homepage.text(), indexHtml);
-
-  for (const route of ['/spa-route', '/lessons/unit/exercise', '/spa-route/']) {
-    const response = await fetch(`${baseUrl}${route}`);
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get('content-type'), /^text\/html\b/);
-    assert.equal(await response.text(), indexHtml);
+  for (const route of ['/api/generate', '/api/explanations/stream', '/api/base-text', '/api/explain', '/api/recommend', '/api/persist-exercise', '/api/cache/exercise-image']) {
+    assert.equal((await request(route, { account: '', body: {} })).status, 401, route);
   }
-  const limitedSpa = await fetch(`${baseUrl}/spa-route-limited`);
-  assert.equal(limitedSpa.status, 429);
-  assert.equal(limitedSpa.headers.get('retry-after'), '60');
+  for (const route of ['/api/debug', '/api/openrouter/models', '/api/openrouter/rate-limit', '/api/ollama/models', '/api/runware/models', '/api/falai/models']) {
+    assert.equal((await request(route)).status, 404, route);
+  }
+  for (const route of ['/api/runware/generate', '/api/falai/generate', '/api/cache/exercise-image', '/api/log']) {
+    assert.equal((await request(route, { body: { baseTextId: 'x', url: 'http://127.0.0.1/private' } })).status, 404, route);
+  }
+  assert.equal((await request('/cache/images/index.json')).status, 404);
+  assert.equal(calls.length, 0);
+});
+
+test('cached explanations complete correctly and remain private to their account', async t => {
+  const { request, calls, cacheDir } = await fixture(t);
+  const body = { topic: 'Present tense', language: 'es', level: 'B1' };
+  const first = await request('/api/explanations/stream', { body });
+  assert.equal(first.status, 200);
+  assert.match(first.headers.get('cache-control'), /no-store/);
+  assert.equal(events(await first.text()).at(-1).type, 'final');
+  const cached = events(await (await request('/api/explanations/stream', { body })).text());
+  assert.deepEqual(cached.map(event => event.type), ['prefill', 'final']);
+  assert.equal(calls.length, 1);
+  const other = events(await (await request('/api/explanations/stream', { account: 'bob', body })).text());
+  assert.equal(other.at(-1).explanation.title, 'bob explanation');
+  assert.equal(calls.length, 2);
+  assert.deepEqual((await fs.readdir(path.join(cacheDir, 'accounts'))).sort(), [sha256Hex('alice'), sha256Hex('bob')].sort());
+});
+
+test('SSE quota failures are explicit errors, never success or cached lessons', async t => {
+  const { request, calls } = await fixture(t);
+  const body = { topic: 'quota failure' };
+  for (let i = 0; i < 2; i++) {
+    const output = events(await (await request('/api/explanations/stream', { body })).text());
+    assert.equal(output.at(-1).type, 'error');
+    assert.equal(output.at(-1).status, 429);
+    assert.equal(output.at(-1).code, 'subscription_sharing_usage_limit_exceeded');
+    assert.equal(output.some(event => event.type === 'final'), false);
+  }
+  assert.equal(calls.length, 2);
+});
+
+test('exercise generation, persistence and base-text lookup cannot cross accounts', async t => {
+  const { request, calls } = await fixture(t);
+  const body = { user: 'Create exactly 1 practice exercise.', schemaName: 'fib_list', metadata: { language: 'es', level: 'B1', topic: 'Present tense', count: 1 } };
+  const a = await (await request('/api/generate', { body })).json();
+  const b = await (await request('/api/generate', { account: 'bob', body })).json();
+  assert.equal(a.items[0].sentence, 'alice _____ aquí.');
+  assert.equal(b.items[0].sentence, 'bob _____ aquí.');
+  assert.deepEqual(calls.map(call => call.account), ['alice', 'bob']);
+  const generated = await (await request('/api/generate', { body: { user: 'Read a story.', schemaName: 'base_text', metadata: { language: 'es', level: 'B1', topic: 'Home' } } })).json();
+  assert.match(generated.id, /^[a-f0-9]{16}$/);
+  assert.equal((await request(`/api/base-text-content/${generated.id}`)).status, 200);
+  assert.equal((await request(`/api/base-text-content/${generated.id}`, { account: 'bob' })).status, 404);
+  assert.equal((await request('/api/persist-exercise', { body: { type: '__proto__', items: [{}] } })).status, 400);
+});
+
+test('reading cache honors the chapter prompt and requested count', async t => {
+  const { request, calls } = await fixture(t);
+  const body = (chapter, count) => ({
+    user: `Create exactly ${count} reading sets. Chapter ${chapter}: source passage ${chapter}.`,
+    schemaName: 'reading_from_base_text',
+    metadata: { language: 'es', level: 'B1', topic: 'Present tense', baseTextId: 'same-book', chapterNumber: chapter, count },
+    jsonSchema: { type: 'object', properties: { items: { type: 'array', minItems: count, maxItems: count, items: { type: 'object' } } } },
+  });
+  const first = await (await request('/api/generate', { body: body(1, 1) })).json();
+  assert.equal(first.items.length, 1);
+  const second = await (await request('/api/generate', { body: body(2, 2) })).json();
+  assert.equal(second.items.length, 2);
+  assert.ok(second.items.every(item => item.passage.includes('Chapter 2:')));
+  assert.equal(calls.length, 2, 'a different source chapter must generate its own questions');
+  const cached = await (await request('/api/generate', { body: body(2, 2) })).json();
+  assert.equal(cached.items.length, 2);
+  assert.ok(cached.items.every(item => item.passage.includes('Chapter 2:')));
+  assert.equal(calls.length, 2, 'the same prompt can still reuse its saved exercises');
+});
+
+test('settings change only account models and requests enforce CSRF/input/rate limits', async t => {
+  const { request, calls } = await fixture(t, { rateLimitMax: 8 });
+  assert.equal((await request('/api/settings', { body: { provider: 'openrouter', openrouter: { apiKey: 'must-not-be-used' } } })).status, 400);
+  assert.equal((await request('/api/settings', { body: { model: 'bob-model' } })).status, 400);
+  assert.equal((await request('/api/settings', { body: { model: 'alice-model' } })).status, 200);
+  assert.equal((await request('/api/generate', { headers: { 'x-csrf-token': '' }, body: { user: 'hello' } })).status, 403);
+  assert.equal((await request('/api/generate', { body: { user: {} } })).status, 400);
+  assert.equal((await request('/api/generate', { body: { user: 'hello', metadata: { topic: {} } } })).status, 400);
+  assert.equal((await request('/api/explanations/stream', { body: { topic: '' } })).status, 400);
+  assert.equal((await request('/api/settings')).status, 200);
+  assert.equal((await request('/api/settings')).status, 200);
+  assert.equal((await request('/api/settings')).status, 429);
+  assert.equal(calls.length, 0);
+});
+
+test('atomic cache writes and concurrent transactions retain all records', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'language-cache-race-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const layout = await ensureCacheLayout(root);
+  const target = path.join(root, 'race.json');
+  await Promise.all(Array.from({ length: 20 }, (_, n) => writeJson(target, { n, text: 'x'.repeat(5000) })));
+  assert.equal(typeof (await readJson(target)).n, 'number');
+  await Promise.all(Array.from({ length: 20 }, (_, n) => setExplanation(layout, `exp:${n}`, { model: 'fixture' }, { title: `Lesson ${n}` })));
+  assert.equal(Object.keys((await readJson(path.join(layout.explanationsDir, 'index.json'))).items).length, 20);
+  const bucketKey = makeBucketKey({ type: 'fib', language: 'es', level: 'B1', challengeMode: false, grammarTopic: 'present' });
+  await Promise.all(Array.from({ length: 20 }, (_, n) => addExercisesToPool(layout, { type: 'fib', poolKey: 'fib:es:B1:false:model:1:prompt', bucketKey, language: 'es', level: 'B1', model: 'model', schemaVersion: 1 }, [{ sentence: `Exercise ${n}` }])));
+  assert.equal(Object.keys((await loadExercisesIndex(layout)).items).length, 20);
+  assert.equal((await fs.readdir(root)).some(name => name.endsWith('.tmp')), false);
+});
+
+
+test('authentication endpoints are limited before unauthenticated session writes', async t => {
+  const { request } = await fixture(t, { authRateLimitMax: 4, loginRateLimitMax: 1 });
+  assert.equal((await request('/api/auth/login', { account: '', body: {} })).status, 200);
+  assert.equal((await request('/api/auth/login', { account: '', body: {} })).status, 429);
+  assert.equal((await request('/api/auth/session', { account: '' })).status, 200);
+  assert.equal((await request('/api/auth/session', { account: '' })).status, 200);
+  assert.equal((await request('/api/auth/session', { account: '' })).status, 429);
+});
+
+test('trusted proxy configuration accepts explicit networks and rejects permissive shortcuts', () => {
+  assert.deepEqual(parseTrustedProxyCidrs(), []);
+  assert.deepEqual(parseTrustedProxyCidrs('  '), []);
+  assert.deepEqual(parseTrustedProxyCidrs('127.0.0.1/32, ::1/128, 192.0.2.5, 127.0.0.1/32'), ['127.0.0.1/32', '::1/128', '192.0.2.5']);
+  for (const value of [true, false, 1, null, 'true', 'false', '1', '*', 'loopback', 'linklocal', 'uniquelocal', 'example.com', '0.0.0.0/0', '::/0', '::ffff:0.0.0.0/96', '::ffff:0:0/96', '127.0.0.1/33', '::1/129', '127.0.0.1/', '127.0.0.1,', 'http://127.0.0.1', 'fe80::1%en0']) {
+    assert.throws(() => parseTrustedProxyCidrs(value), /TRUSTED_PROXY_CIDRS/, String(value));
+  }
+});
+
+test('clients behind an explicitly trusted socket peer have independent sign-in limits', async t => {
+  const { request } = await fixture(t, { trustedProxyCidrs: '127.0.0.1/32', loginRateLimitMax: 1 });
+  const login = client => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': client } });
+  assert.equal((await login('198.51.100.10')).status, 200);
+  assert.equal((await login('198.51.100.10')).status, 429);
+  assert.equal((await login('198.51.100.11')).status, 200);
+});
+
+test('untrusted socket peers cannot rotate forwarded addresses to bypass sign-in limits', async t => {
+  for (const trustedProxyCidrs of ['', '192.0.2.5/32']) {
+    const { request } = await fixture(t, { trustedProxyCidrs, loginRateLimitMax: 1 });
+    const login = client => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': client } });
+    assert.equal((await login('198.51.100.10')).status, 200);
+    assert.equal((await login('198.51.100.11')).status, 429);
+  }
+});
+
+test('trusted proxy chains stop at the first untrusted address', async t => {
+  const { request } = await fixture(t, { trustedProxyCidrs: '127.0.0.1/32', loginRateLimitMax: 1 });
+  const login = spoofedClient => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': `${spoofedClient}, 203.0.113.42` } });
+  assert.equal((await login('198.51.100.10')).status, 200);
+  assert.equal((await login('198.51.100.11')).status, 429);
+});
+
+test('trusting a proxy never lets forwarded host headers replace raw Host or Origin checks', async t => {
+  const { rawRequest } = await fixture(t, { trustedProxyCidrs: '127.0.0.1/32', guardOrigin: 'https://language.example' });
+  const invalidHost = await rawRequest('/api/auth/session', { host: 'attacker.example', 'x-forwarded-host': 'language.example', 'x-forwarded-proto': 'https', 'x-forwarded-for': '198.51.100.10' });
+  assert.equal(invalidHost.status, 403);
+  assert.equal((await invalidHost.json()).code, 'untrusted_origin');
+  assert.equal((await rawRequest('/api/auth/session', { host: 'language.example', 'x-forwarded-host': 'attacker.example' })).status, 200);
+  const invalidOrigin = await rawRequest('/api/auth/session', { host: 'language.example', origin: 'https://attacker.example', 'x-forwarded-host': 'language.example' });
+  assert.equal(invalidOrigin.status, 403);
+  assert.equal((await invalidOrigin.json()).code, 'untrusted_origin');
+});
+
+test('static assets and SPA fallback share a client limit independent from API and health checks', async t => {
+  const { request } = await fixture(t, { production: true, trustedProxyCidrs: '127.0.0.1/32', frontendRateLimitMax: 2 });
+  const headers = { 'x-forwarded-for': '198.51.100.10' };
+  const asset = await request('/asset.js', { headers });
+  assert.equal(asset.status, 200);
+  assert.equal(await asset.text(), '/* Fixture asset */');
+  const fallback = await request('/lessons/grammar', { headers });
+  assert.equal(fallback.status, 200);
+  assert.match(await fallback.text(), /Fixture app/);
+  const limited = await request('/', { headers });
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+  assert.equal((await request('/', { headers: { 'x-forwarded-for': '198.51.100.11' } })).status, 200);
+  assert.equal((await request('/api/auth/session', { headers })).status, 200);
+  assert.equal((await request('/healthz', { headers })).status, 200);
+});
+
+test('production CSP permits bundled PDF WebAssembly without arbitrary JavaScript evaluation or external connections', async t => {
+  const { request } = await fixture(t, { production: true });
+  const response = await request('/');
+  assert.equal(response.status, 200);
+  const policy = new Map(response.headers.get('content-security-policy').split(';').map(directive => {
+    const [name, ...sources] = directive.trim().split(/\s+/);
+    return [name, sources];
+  }));
+  assert.deepEqual(policy.get('script-src'), ["'self'", "'wasm-unsafe-eval'"]);
+  assert.deepEqual(policy.get('connect-src'), ["'self'", 'data:']);
+  assert.deepEqual(policy.get('object-src'), ["'none'"]);
+  assert.deepEqual(policy.get('base-uri'), ["'none'"]);
+  assert.deepEqual(policy.get('frame-ancestors'), ["'none'"]);
+});
+
+test('closing a streamed response cancels inference and leaves the cache empty', async t => {
+  const { request, cancelled, cacheDir } = await fixture(t);
+  const controller = new AbortController();
+  const response = await request('/api/explanations/stream', { body: { topic: 'cancel request' }, signal: controller.signal });
+  controller.abort();
+  await assert.rejects(response.text());
+  await Promise.race([cancelled, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Cancellation was not forwarded.')), 2000); timer.unref(); })]);
+  const layout = path.join(cacheDir, 'accounts', sha256Hex('alice'), 'explanations');
+  assert.equal(Object.keys((await readJson(path.join(layout, 'index.json'))).items).length, 0);
 });

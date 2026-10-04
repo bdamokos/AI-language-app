@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 import React, { useMemo, useState } from 'react';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import FIBExercise, { scoreFIB, generateFIB } from './FIBExercise.jsx';
@@ -86,7 +87,7 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
       if (!hasGroup || alreadyRated) return;
       setRatedGroups(prev => ({ ...prev, [groupId]: like ? 'up' : 'down' }));
       try {
-        await fetch('/api/rate/exercise-group', {
+        await apiFetch('/api/rate/exercise-group', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ groupId, like })
@@ -365,7 +366,7 @@ async function fetchBaseTextsForLesson(topic, chapterTracker, languageContext, s
  */
 async function fetchBaseText(topic, languageContext, excludeIds = []) {
   try {
-    const resp = await fetch('/api/base-text', {
+    const resp = await apiFetch('/api/base-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 

@@ -1,5 +1,7 @@
+import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
+import { hasText, normalizeExerciseCount, validateGeneratedItems } from './generationValidation.js';
 
 /**
  * Guided Dialogue exercise
@@ -123,115 +125,43 @@ export function scoreGuidedDialogue(item, value, eq) {
  * If inspiration context is provided, will generate dialogues inspired by that context.
  */
 export async function generateGuidedDialogues(topic, count = 2, languageContext = { language: 'es', level: 'B1', challengeMode: false }, inspirationContext = null) {
+  count = normalizeExerciseCount(count, 10);
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
 
-  console.log('generateGuidedDialogues received inspirationContext:', inspirationContext);
+  const system = `Create guided dialogues in the target language, matching the learner's level.
+Return only JSON matching the schema.
+- Use exactly two consistent speakers and 6–12 complete turns per dialogue, with at least two turns per speaker.
+- Each turn needs its full text and a specific hint that helps the learner reconstruct that line; do not insert blanks.
+- Give the situation in conversationContext and concise completion instructions in studentInstructions.
+- Set suggested_hide_speaker to one of the two speakers; the app hides that speaker's lines after the first example.
+- Use natural dialogue that practises the requested topic.`;
 
-  let system, user, baseTextContext;
-
-  if (inspirationContext) {
-    // Generate dialogues inspired by provided context
-    system = `You are a language pedagogy assistant that generates guided dialogues in the target language.
-
-Requirements:
-- Two consistent speakers across the whole dialogue (e.g., "A" and "B" or names); 6–12 turns total
-- Provide a conversationContext string (overall situation/setting)
-- Provide detailed studentInstructions that include the context
-- For EACH turn, provide an individual hint (not generic)
-- Provide suggested_hide_speaker indicating which speaker to hide
-- Use natural, real-world sentences (avoid synthetic phrasing)
-- Keep content age-appropriate and culturally relevant
-- Return ONLY fields that match the provided JSON schema (no extra text)`;
-
-    const chapterInfo = inspirationContext.chapter_passage
-      ? `**Chapter Content:**
-${inspirationContext.chapter_passage}
-
-**Source Material:** "${inspirationContext.chapter_title}" (Chapter ${inspirationContext.chapter_number})`
-      : `**Source Material:** "${inspirationContext.chapter_title}" (Chapter ${inspirationContext.chapter_number})`;
-
-    console.log('Generated chapterInfo for LLM prompt:', chapterInfo);
-    console.log('Has chapter passage:', !!inspirationContext.chapter_passage);
-
-    user = `Task: Create exactly ${count} guided dialogues inspired by a previously used chapter.
+  const source = inspirationContext
+    ? `Source: ${inspirationContext.chapter_title || 'Prior chapter'} (chapter ${inspirationContext.chapter_number || 1})
+${inspirationContext.chapter_passage || ''}
+Use this source's situation and vocabulary as inspiration.`
+    : formatTopicSuggestionForPrompt(pickRandomTopicSuggestion({ ensureNotEqualTo: topic }), {
+      prefix: 'Optional setting, when compatible with the requested topic'
+    });
+  const user = `Create exactly ${count} guided dialogues.
 Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
-
-${chapterInfo}
-**Previously Used For:** ${inspirationContext.exercise_type.replace('_', ' ')}
-
-Requirements:
-- Create dialogues that take inspiration from the themes, vocabulary, and situations in the chapter content above
-- Two consistent speakers across the whole dialogue (e.g., "A" and "B" or names); 6-12 turns total
-- Do NOT include blanks; produce the full conversation text for every turn
-- Provide a conversationContext string that explains the overall situation/setting of the dialogue
-- Provide detailed studentInstructions that include the conversation context so students understand what's happening
-- For EACH turn in the dialogue, provide an individual hint that helps reconstruct that specific turn (not general hints)
-- Provide suggested_hide_speaker indicating which speaker's lines would be best to hide pedagogically
-- Ensure vocabulary and grammar match ${level}${challengeMode ? ' with some challenging elements' : ''}
-- Choose real world sentences, not synthetic ones
-- Keep content age-appropriate and culturally relevant
-
-== EXAMPLES ==
-If the chapter was about "Luisa and Juan in a restaurant", create a dialogue about "a discussion at a restaurant" or "ordering food" or "restaurant conversation". Each turn should have its own specific hint like "Ask about the menu" or "Express a preference for vegetarian food" or "Make a recommendation".
-
-An example of a dialogue with hints if the topic was "indirect object pronouns", the difficulty was B1 and the challenge mode was false:
-
-- Conversation Context: "Luisa and Juan are at a restaurant discussing their orders. The first speaker is Luisa, the second speaker is Juan."
-- Student Instructions: "Complete the missing lines in the conversation, using indirect object pronouns where appropriate."
-- Turns:
-  - "A: ¿Le puedes pedir al camarero una mesa junto a la ventana?" (hint: "Luisa asks Juan to request a table by the window for them")
-  - "B: Claro, le voy a pedir una mesa allí." (hint: "Juan agrees and says he will ask the waiter for a table there")
-  - "A: ¿Te gustaría que te recomiende algún plato?" (hint: "Luisa offers to recommend a dish to Juan")
-  - "B: Sí, me encantaría que me recomiendes algo típico." (hint: "Juan says he would love a recommendation for something typical")
-  - "A: El camarero nos trae el menú." (hint: "Luisa mentions that the waiter is bringing the menu")
-
-== END EXAMPLES ==
-
-`;
-
-    baseTextContext = inspirationContext;
-  } else {
-    // Fall back to original logic with topic roulette
-    system = `You are a language pedagogy assistant that generates guided dialogues in the target language.
-
-Requirements:
-- Two consistent speakers across the whole dialogue (e.g., "A" and "B" or names); 6–12 turns total
-- Provide a conversationContext string (overall situation/setting)
-- Provide detailed studentInstructions that include the context
-- For EACH turn, provide an individual hint (not generic)
-- Provide suggested_hide_speaker indicating which speaker to hide
-- Use natural, real-world sentences (avoid synthetic phrasing)
-- Keep content age-appropriate and culturally relevant
-- Return ONLY fields that match the provided JSON schema (no extra text)`;
-
-    const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
-    const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
-
-    user = `Task: Create exactly ${count} guided dialogues about: ${topic}.
-Target Language: ${languageName}
-Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
-
-${topicLine}
-
-Example: For a topic like "ordering food", each turn should have a specific hint like "Greet the waiter" or "Ask about daily specials" or "Request the bill".`;
-  }
-
-
+Topic: ${topic}
+${source}`;
+  const baseTextContext = inspirationContext;
 
   const schema = {
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string' },
             studentInstructions: { type: 'string' },
             conversationContext: { type: 'string' },
-            context: { type: 'string' }, // Legacy field for compatibility
             turns: {
               type: 'array', minItems: 6, maxItems: 12, items: {
                 type: 'object', additionalProperties: false,
@@ -240,22 +170,22 @@ Example: For a topic like "ordering food", each turn should have a specific hint
                   text: { type: 'string' },
                   hint: { type: 'string' }
                 },
-                required: ['speaker','text']
+                required: ['speaker','text','hint']
               }
             },
             suggested_hide_speaker: { type: 'string' },
-            hints: { type: 'array', items: { type: 'string' } }, // Legacy field for compatibility
             difficulty: { type: 'string' }
           },
-          required: ['studentInstructions','conversationContext','turns']
+          required: ['studentInstructions','conversationContext','turns','suggested_hide_speaker']
         }
       }
     },
     required: ['items']
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -282,6 +212,13 @@ Example: For a topic like "ordering food", each turn should have a specific hint
     throw new Error(`Failed to generate guided dialogues: ${response.status}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  return validateGeneratedItems(result, count, 'guided dialogues', item => {
+    if (!hasText(item.studentInstructions) || !hasText(item.conversationContext) ||
+        !Array.isArray(item.turns) || item.turns.length < 6 || item.turns.length > 12 ||
+        !item.turns.every(turn => hasText(turn?.speaker) && hasText(turn?.text) && hasText(turn?.hint))) return false;
+    const speakers = new Set(item.turns.map(turn => turn.speaker));
+    return speakers.size === 2 && speakers.has(item.suggested_hide_speaker) &&
+      [...speakers].every(speaker => item.turns.filter(turn => turn.speaker === speaker).length >= 2);
+  });
 }
-

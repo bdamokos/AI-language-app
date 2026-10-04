@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 /**
  * Unified Cloze Exercise Generation
  * 
@@ -5,8 +6,6 @@
  * The core idea is to generate a comprehensive cloze analysis with all possible blanks, distractors,
  * and explanations, then let the UI components decide how to present them (text input vs dropdowns).
  */
-
-import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
 
 // Stepwise generation schemas (lightweight; do NOT persist steps to disk)
 const STEP1_REWRITE_SCHEMA = {
@@ -56,9 +55,10 @@ const STEP3_SEGMENT_SCHEMA = {
   required: ['full_sentence', 'preceding_text', 'succeeding_text', 'options']
 };
 
-async function llmGenerate({ system, user, jsonSchema, metadata }) {
-  const resp = await fetch('/api/generate', {
+async function llmGenerate({ system, user, jsonSchema, metadata, signal }) {
+  const resp = await apiFetch('/api/generate', {
     method: 'POST',
+    signal,
     headers: { 'Content-Type': 'application/json' },
     // Use a non-persistent schemaName so steps stay in-memory only on the server
     body: JSON.stringify({ system, user, jsonSchema, schemaName: 'cloze_step', metadata })
@@ -67,14 +67,18 @@ async function llmGenerate({ system, user, jsonSchema, metadata }) {
   return await resp.json();
 }
 
-function splitIntoSentences(text) {
+export function splitIntoSentences(text) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (!s) return [];
   const out = [];
   const re = /[^.!?。！？]+[.!?。！？]+(?:["'”’)\]]+)?/g;
   let m;
-  while ((m = re.exec(s)) !== null) out.push(m[0].trim());
-  const rest = s.slice(re.lastIndex).trim();
+  let end = 0;
+  while ((m = re.exec(s)) !== null) {
+    out.push(m[0].trim());
+    end = re.lastIndex;
+  }
+  const rest = s.slice(end).trim();
   if (rest) out.push(rest);
   return out;
 }
@@ -155,7 +159,7 @@ function reconcileFlatSegmentFromSentence(sentence, seg) {
 }
 
 export async function generateUnifiedClozeStepwise(topic, languageContext) {
-  const { language: languageName, level, challengeMode, chapter, baseText } = languageContext || {};
+  const { language: languageName, level, challengeMode, chapter, baseText, signal } = languageContext || {};
   if (!chapter || !chapter.passage) throw new Error('No base text chapter provided for stepwise cloze generation');
 
   // Step 1: Rewrite full passage (cached) — sentence splitting handled locally
@@ -173,7 +177,7 @@ export async function generateUnifiedClozeStepwise(topic, languageContext) {
     '- Maintain narrative coherence; adapt content to include multiple instances of the target grammar.',
     '- Return JSON with a single field: rewritten_passage (string).',
   ].join('\n');
-  const step1 = await llmGenerate({ system: step1System, user: step1User, jsonSchema: STEP1_REWRITE_SCHEMA, metadata: { language: languageName, level, challengeMode, topic } });
+  const step1 = await llmGenerate({ system: step1System, user: step1User, jsonSchema: STEP1_REWRITE_SCHEMA, metadata: { language: languageName, level, challengeMode, topic }, signal });
   const rewritten = String(step1.rewritten_passage || chapter.passage || '');
   const sentences = compactSentences(splitIntoSentences(rewritten));
 
@@ -190,7 +194,7 @@ export async function generateUnifiedClozeStepwise(topic, languageContext) {
       '',
       'Question: Does this sentence contain at least one clear instance of the target grammar (a single contiguous span you could choose)? Respond strictly with {"present": true} or {"present": false}.',
     ].join('\n');
-    const pr = await llmGenerate({ system: presenceSystem, user, jsonSchema: STEP2_PRESENCE_SCHEMA, metadata: { language: languageName, level, challengeMode, topic } }).catch(() => ({ present: false }));
+    const pr = await llmGenerate({ system: presenceSystem, user, jsonSchema: STEP2_PRESENCE_SCHEMA, metadata: { language: languageName, level, challengeMode, topic }, signal });
     presenceResults.push(pr);
   }
 
@@ -215,15 +219,6 @@ export async function generateUnifiedClozeStepwise(topic, languageContext) {
     return chosen;
   }
   const selectedForBlank = pickEvenlySpaced(candidateIdx, targetBlanks);
-  try {
-    if (selectedForBlank.size) {
-      fetch('/api/log', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ level: 'debug', message: 'Cloze selection', data: { candidateCount: candidateIdx.length, targetBlanks, selected: Array.from(selectedForBlank) } })
-      }).catch(() => {});
-    }
-  } catch {}
-
   // Step 3: Segment sentences with target grammar into prefix/blank/suffix (cached per sentence)
 const segmentSystem = 'You are a language pedagogy expert. You segment a single sentence for a cloze blank. Return strict JSON matching the schema. Ensure full_sentence = preceding_text + (one correct option text) + succeeding_text. Provide options with exactly one correct=true; include short explanations.';
   const segmented = [];
@@ -245,27 +240,13 @@ const segmentSystem = 'You are a language pedagogy expert. You segment a single 
       '- Provide 3-4 total options with exactly one marked correct=true; give a short explanation for each option.',
       '- Include a helpful hint, difficulty_level (easy|medium|hard), and grammar_focus.',
     ].join('\n');
-    const seg = await llmGenerate({ system: segmentSystem, user, jsonSchema: STEP3_SEGMENT_SCHEMA, metadata: { language: languageName, level, challengeMode, topic } }).catch(() => null);
-    if (!seg) {
-      segmented.push({ preceding_text: s, succeeding_text: '', full_sentence: s, hint: '', options: [], difficulty_level: null, grammar_focus: null });
-      continue;
-    }
+    const seg = await llmGenerate({ system: segmentSystem, user, jsonSchema: STEP3_SEGMENT_SCHEMA, metadata: { language: languageName, level, challengeMode, topic }, signal });
     const fixed = reconcileFlatSegmentFromSentence(s, seg);
     segmented.push(fixed);
   }
 
   // Minimal structural repair and warnings (flat)
   const { segments, warnings } = validateAndRepairFlatSegments(segmented);
-  if (warnings && warnings.length) {
-    try {
-      fetch('/api/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ level: 'warn', message: 'Unified cloze flat segment validation warnings', data: { warnings } })
-      }).catch(() => {});
-    } catch {}
-  }
-
   // Compute metadata
   const totalBlanks = segments.filter(s => Array.isArray(s.options) && s.options.some(o => o.correct)).length;
   const difficultyCounts = segments.reduce((acc, s) => {
@@ -288,10 +269,12 @@ const segmentSystem = 'You are a language pedagogy expert. You segment a single 
     suggested_blanks_hard: Number(difficultyCounts.hard || 0),
     validation_warnings: warnings
   };
+  validateUnifiedClozeItem(item);
   // Persist the assembled exercise so downstream features (images, reuse) have a stable exerciseSha
   try {
-    const persistResp = await fetch('/api/persist-exercise', {
+    const persistResp = await apiFetch('/api/persist-exercise', {
       method: 'POST',
+      signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'unified_cloze', items: [item], metadata: { language: languageName, level, challengeMode, topic } })
     });
@@ -299,7 +282,9 @@ const segmentSystem = 'You are a language pedagogy expert. You segment a single 
       const persisted = await persistResp.json();
       if (persisted?.items?.[0]) return { items: [persisted.items[0]] };
     }
-  } catch {}
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
   return { items: [item] };
 }
 
@@ -362,7 +347,7 @@ export const UNIFIED_CLOZE_SCHEMA = {
                 },
                 difficulty_level: {
                   type: ['string', 'null'],
-                  enum: ['easy', 'medium', 'hard'],
+                  enum: ['easy', 'medium', 'hard', null],
                   description: 'Relative difficulty of this blank within the exercise'
                 },
                 grammar_focus: {
@@ -387,8 +372,43 @@ export const UNIFIED_CLOZE_SCHEMA = {
 };
 
 /**
- * Generate unified cloze exercises from base text chapters
+ * Check answer structure before an exercise can be presented or scored.
  */
+export function validateUnifiedClozeItem(item) {
+  if (!Array.isArray(item?.segments) || !item.segments.length) {
+    throw new Error('ChatGPT returned a cloze passage without answerable blanks. Please generate it again.');
+  }
+  const invalid = () => { throw new Error('ChatGPT returned a cloze blank with missing or ambiguous answers. Please generate it again.'); };
+  const text = value => typeof value === 'string' && value.trim().length > 0;
+  const answerKey = value => value.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+  const isFlat = item.segments.every(segment => segment && typeof segment === 'object' && !('type' in segment));
+  let blankCount = 0;
+  for (const segment of item.segments) {
+    if (!segment || typeof segment !== 'object') invalid();
+    if (segment.type === 'text') {
+      if (typeof segment.content !== 'string' || /_{3,}/.test(segment.content)) invalid();
+    } else if (segment.type === 'blank') {
+      const options = [segment.solution, ...(Array.isArray(segment.distractors) ? segment.distractors : [])];
+      if (options.length < 4 || options.some(value => !text(value)) || new Set(options.map(answerKey)).size !== options.length) invalid();
+      blankCount += 1;
+    } else if (isFlat && Array.isArray(segment.options)) {
+      // Previously saved stepwise exercises use one flat segment per sentence.
+      if (typeof segment.preceding_text !== 'string' || typeof segment.succeeding_text !== 'string' || /_{3,}/.test(segment.preceding_text + segment.succeeding_text)) invalid();
+      if (segment.options.length) {
+        const options = segment.options;
+        if (options.length < 3 || options.some(option => !text(option?.text)) || options.filter(option => option.correct === true).length !== 1 || new Set(options.map(option => answerKey(option.text))).size !== options.length) invalid();
+        blankCount += 1;
+      }
+    } else invalid();
+  }
+  if (blankCount < 6) {
+    throw new Error(`ChatGPT returned only ${blankCount} cloze blanks; at least 6 are needed. Please generate it again.`);
+  }
+  item.total_blanks = blankCount;
+  return item;
+}
+
+/** Generate one passage, shared by text-input and multiple-choice cloze. */
 export async function generateUnifiedCloze(topic, count = 1, languageContext) {
   const languageName = languageContext.language;
   const level = languageContext.level;
@@ -400,92 +420,29 @@ export async function generateUnifiedCloze(topic, count = 1, languageContext) {
     throw new Error('No base text chapter provided for unified cloze generation');
   }
 
-  const system = `You are a sophisticated language learning exercise creator. Given a text passage and a grammar topic, create a comprehensive cloze exercise that maximizes learning opportunities while maintaining narrative coherence.
+  const system = `Create one coherent language-learning cloze passage matching the supplied JSON schema.
+Adapt the source story to practise the target grammar at the requested CEFR level.
+Use 6–8 blank segments, each with one nonempty solution, a helpful hint, 3–4 distinct incorrect distractors, and concise explanations. Keep all options distinct.
+Text segments contain only surrounding text, never underscores. Preserve spaces and punctuation so text segments plus solutions reconstruct the complete passage.
+Write the passage and learner instructions in the target language.`;
 
-Your task:
-1. Create a grammatically correct and narratively coherent passage that maintains the story essence
-2. Adapt the text strategically to include multiple instances of the target grammar topic
-3. Create alternating segments of text and strategic blanks
-4. For each blank, provide the solution, helpful hints, plausible distractors, and detailed explanations
-5. Ensure the resulting passage flows naturally and makes sense as a complete story
-6. Prioritize pedagogical value over exact text preservation
-`;
-
-  const user = `Task: Create a comprehensive cloze exercise based on a provided passage.
+  const user = `Task: Create exactly 1 cloze exercise.
 Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}
 Target Grammar: ${topic}
 Source: ${baseText?.title || 'Unknown'}
+Chapter: ${chapter.title}
+Passage:
+${chapter.passage}`;
 
-Create the exercise based on this passage:
-
-**Chapter: ${chapter.title}**
-
-**Original Passage:**
-${chapter.passage}
-
-**CRITICAL: You must create SEPARATE segments for text and blanks. Do NOT put underscores or blanks in text segments.**
-
-**Segment Format Requirements:**
-1. **Text segments**: contain only regular text with NO blanks or underscores
-2. **Blank segments**: separate objects with solution, hint, distractors, etc.
-3. **Alternating structure**: text → blank → text → blank → text (etc.)
-
-**Example of CORRECT segment structure:**
-For sentence "María vive en Madrid"
-- Segment 1: {"type": "text", "content": "María "}
-- Segment 2: {"type": "blank", "solution": "vive", "hint": "lives", "distractors": ["vivía", "vivirá", "vivió"], ...}  
-- Segment 3: {"type": "text", "content": " en Madrid"}
-
-**WRONG - DO NOT DO THIS:**
-- {"type": "text", "content": "María _____ en Madrid"}
-
-**Requirements:**
-1. Adapt the passage to include multiple "${topic}" opportunities
-2. Create 6-8 strategic blank segments (not text with underscores!)
-3. Each blank segment must have: solution, hint, distractors (3-4), explanation, difficulty_level, grammar_focus
-4. Text segments contain only plain text without any blanks
-5. Maintain story coherence and narrative flow
-
-Create alternating text and blank segments that reconstruct the adapted passage when combined.
-
-Notice that the original passage does not contain the grammar topic, therefore rewrite it to include it.
-
-**Example rewritten passage:**
-"Hoy compro los boletos en línea."
-
-
-**Example segment structure:**
-Text: "Hoy" → Blank: solution="compro" → Text: "los boletos en línea."
-
-The totality of the alternating text and blank segments should reconstruct the original passage or its rewritten version in its entirety.
-
-Return comprehensive analysis with all segments and metadata.`;
-
-  // Some OpenRouter models (e.g., Meta Llama free tiers) reject deep JSON Schemas.
-  // Probe current settings and disable structured schema for known-limited models.
-  let sendSchema = true;
-  try {
-    const s = await fetch('/api/settings');
-    if (s.ok) {
-      const cfg = await s.json();
-      const provider = String(cfg?.provider || '').toLowerCase();
-      const modelId = String(cfg?.openrouter?.model || cfg?.ollama?.model || '');
-      if (provider === 'openrouter') {
-        if (/meta-llama\//i.test(modelId) || /maverick/i.test(modelId) || /:free$/i.test(modelId)) {
-          sendSchema = false; // avoid json_schema depth limits
-        }
-      }
-    }
-  } catch {}
-
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
       user,
-      jsonSchema: sendSchema ? UNIFIED_CLOZE_SCHEMA : undefined,
+      jsonSchema: UNIFIED_CLOZE_SCHEMA,
       schemaName: 'unified_cloze',
       metadata: { 
         language: languageName, 
@@ -504,12 +461,12 @@ Return comprehensive analysis with all segments and metadata.`;
   }
 
   const result = await response.json();
-  
-  // Add base text metadata to the result
-  if (result.items && result.items[0]) {
-    result.items[0].base_text_id = baseText?.id;
-    result.items[0].chapter_number = chapter?.number;
+  if (!Array.isArray(result?.items) || result.items.length !== 1) {
+    throw new Error('ChatGPT did not return one complete cloze exercise. Please generate it again.');
   }
+  const item = validateUnifiedClozeItem(result.items[0]);
+  item.base_text_id = baseText?.id;
+  item.chapter_number = chapter?.number;
 
   return result;
 }

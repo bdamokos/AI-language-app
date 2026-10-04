@@ -2,3 +2,7 @@
 node_modules/
 dist/
 .cache/
+.auth/
+.env.*
+!env.example
+test-results/

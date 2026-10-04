@@ -1,0 +1,60 @@
+{
+  "items": [
+    {
+      "sentence": "El lunes por la tarde, Clara entró en la Biblioteca del Parque porque _____ estudiar en un lugar tranquilo. (decidir, ella)",
+      "answers": [
+        "había decidido"
+      ],
+      "context": "Clara tomó la decisión antes de entrar en la biblioteca."
+    },
+    {
+      "sentence": "Mientras buscaba una mesa, vio una estantería llena de cómics, algo que nunca _____ en aquella biblioteca. (ver, ella)",
+      "answers": [
+        "había visto"
+      ],
+      "context": "La estantería era una novedad para Clara."
+    },
+    {
+      "sentence": "Normalmente leía novelas históricas, pero nunca _____ una novela gráfica. (abrir, ella)",
+      "answers": [
+        "había abierto"
+      ],
+      "context": "Este hecho explica por qué los cómics eran nuevos para Clara."
+    },
+    {
+      "sentence": "La señora Ruiz le recomendó Los viajeros del tiempo, un cómic que ella misma _____ varias veces. (leer, la bibliotecaria)",
+      "answers": [
+        "había leído"
+      ],
+      "context": "La experiencia previa de la bibliotecaria apoya su recomendación."
+    },
+    {
+      "sentence": "Clara tomó el cómic que la señora Ruiz le _____ unos minutos antes. (recomendar, a Clara)",
+      "answers": [
+        "había recomendado"
+      ],
+      "context": "El complemento indirecto «le» se refiere a Clara."
+    },
+    {
+      "sentence": "Clara empezó a leer junto a la ventana después de que _____ una mesa tranquila. (encontrar, ella)",
+      "answers": [
+        "había encontrado"
+      ],
+      "context": "Primero encontró la mesa y después comenzó la lectura."
+    },
+    {
+      "sentence": "Al principio, las viñetas le parecieron extrañas porque Clara nunca _____ una historia de ese modo. (seguir, ella)",
+      "answers": [
+        "había seguido"
+      ],
+      "context": "Clara no tenía experiencia leyendo historias mediante viñetas."
+    },
+    {
+      "sentence": "Pronto comprendió cómo seguir la historia porque ya _____ con atención las primeras viñetas. (observar, ella)",
+      "answers": [
+        "había observado"
+      ],
+      "context": "La observación previa explica por qué Clara entendió el formato."
+    }
+  ]
+}

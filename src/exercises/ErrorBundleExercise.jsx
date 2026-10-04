@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api.js';
 import React from 'react';
 import { normalizeText } from './utils.js';
 
@@ -193,20 +194,17 @@ export async function generateErrorBundles(topic, count = 5, languageContext = {
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challenge = !!languageContext.challengeMode;
-  const safeCount = Math.max(2, Math.min(12, Number(count || 5)));
+  const safeCount = Number(count);
+  if (!Number.isInteger(safeCount) || safeCount < 1 || safeCount > 12) {
+    throw new Error('Choose between 1 and 12 error bundles.');
+  }
   const baseText = languageContext.baseText;
   const chapter = languageContext.chapter;
 
-  const system = `You are a language pedagogy generator. Produce compact, CEFR-appropriate error bundles.
-Each item contains FOUR sentences about the given topic with EXACTLY ONE correct.
-For each incorrect sentence, include a minimal corrected version ("fix") and a short rationale.
-
-Constraints:
-- Sentence length per CEFR level: A1 4–8, A2 6–12, B1 10–16, B2 12–20, C1 14–24, C2 16–30; when difficulty is higher, use the upper bound
-- Each item: exactly 4 sentences, exactly 1 correct; three incorrect each with ONE clear, topic-aligned error
-- Provide concise rationales (≤120 chars) and MINIMAL fixes (change only what’s necessary)
-- Optionally include a shared_context (≤80 chars) to make items cohere and reduce repetition
-- Return STRICT JSON only, matching the schema (no extra text)`;
+  const system = `Create error bundles in the target language at the requested CEFR level, matching the JSON schema.
+Each bundle has four distinct sentences: exactly one correct, and three with one clear error practising the requested topic.
+Give each incorrect sentence a minimal correction (fix) and a short rationale. Use an empty fix for the correct sentence.
+If a source chapter is provided, draw on its passage and setting. Keep shared_context brief and avoid repetitive sentences.`;
 
   const userPayload = {
     language: String(languageName || ''),
@@ -217,12 +215,12 @@ Constraints:
   };
 
   // Add base text context if available
-  if (baseText && chapter) {
+  if (chapter) {
     userPayload.baseText = {
-      title: baseText.title || '',
+      title: baseText?.title || '',
       chapter: {
         title: chapter.title || '',
-        content: chapter.content || '',
+        passage: chapter.passage || chapter.content || '',
         summary: chapter.summary || ''
       }
     };
@@ -235,7 +233,7 @@ Constraints:
     properties: {
       shared_context: { type: 'string' },
       items: {
-        type: 'array', minItems: 2, maxItems: 12,
+        type: 'array', minItems: safeCount, maxItems: safeCount,
         items: {
           type: 'object', additionalProperties: false, required: ['sentences'],
           properties: {
@@ -259,21 +257,13 @@ Constraints:
     }
   };
 
-  const response = await fetch('/api/generate', {
+  const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
-      user: JSON.stringify({
-        ...userPayload,
-        constraints: {
-          topic_must_match: true,
-          use_base_text: !!(baseText && chapter),
-          base_text_title: baseText?.title || undefined,
-          base_text_chapter_title: chapter?.title || undefined,
-          notes: 'Use natural sentences; keep age-appropriate and classroom-safe.'
-        }
-      }),
+      user: JSON.stringify(userPayload),
       jsonSchema: schema,
       schemaName: 'error_bundle_list',
       metadata: {
@@ -281,6 +271,7 @@ Constraints:
         level,
         challengeMode: challenge,
         topic,
+        count: safeCount,
         exerciseType: 'error_bundle',
         baseTextId: baseText?.id,
         chapterNumber: chapter?.number,
@@ -294,6 +285,14 @@ Constraints:
   }
 
   const result = await response.json();
+  if (!Array.isArray(result?.items) || result.items.length !== safeCount || result.items.some(item =>
+    !Array.isArray(item?.sentences) || item.sentences.length !== 4 ||
+    item.sentences.filter(sentence => sentence?.correct === true).length !== 1 ||
+    item.sentences.some(sentence => !sentence || typeof sentence.text !== 'string' || !sentence.text.trim() || typeof sentence.correct !== 'boolean' || (!sentence.correct && (typeof sentence.fix !== 'string' || !sentence.fix.trim()))) ||
+    new Set(item.sentences.map(sentence => sentence.text.normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase())).size !== 4
+  )) {
+    throw new Error(`ChatGPT did not return ${safeCount} complete error bundles with one correct answer each. Please generate them again.`);
+  }
 
   // Add base text metadata to the result when base text is provided
   if (result.items && result.items.length > 0 && baseText && chapter) {
@@ -317,4 +316,3 @@ Constraints:
 
   return result;
 }
-

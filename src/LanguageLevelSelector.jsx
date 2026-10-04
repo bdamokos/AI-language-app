@@ -59,7 +59,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
   const selectedLevelInfo = CEFR_LEVELS.find(level => level.value === selectedLevel);
 
   return (
-    <div id="language-selector-root" className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+    <div id="language-selector-root" className="w-full min-w-0 max-w-4xl mx-auto p-4 sm:p-6 bg-white rounded-lg shadow-lg">
       <div className="text-center mb-8">
         <div className="flex justify-center mb-4">
           <div className="p-3 bg-blue-100 rounded-full">
@@ -90,17 +90,17 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
                 <button
                   key={language.code}
                   onClick={() => handleLanguageSelect(language.code)}
-                  className={`p-3 border-2 rounded-lg text-left transition-all hover:shadow-md ${
+                  className={`min-w-0 p-3 border-2 rounded-lg text-left transition-all hover:shadow-md ${
                     selectedLanguage === language.code
                       ? 'border-blue-500 bg-blue-50'
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xl">{language.flag}</span>
                     <span className="font-medium text-gray-800">{language.name}</span>
                     {selectedLanguage === language.code && (
-                      <div className="w-3 h-3 bg-blue-500 rounded-full ml-auto"></div>
+                      <div className="w-3 h-3 shrink-0 bg-blue-500 rounded-full ml-auto"></div>
                     )}
                   </div>
                 </button>
@@ -243,7 +243,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
       <div className="mt-8 p-6 bg-gray-50 rounded-lg">
         <div className="text-center mb-4">
           <h3 className="text-lg font-semibold text-gray-800 mb-2">Ready to Start?</h3>
-          <div className="flex items-center justify-center gap-4 text-sm text-gray-600">
+          <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-gray-600">
             <span className="flex items-center gap-2">
               <Globe className="text-blue-600" size={16} />
               {selectedLanguage === 'custom' ? customLanguage : 
