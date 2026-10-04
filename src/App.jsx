@@ -139,7 +139,7 @@ export default function App() {
                 </>}
               </section>
             )}
-            {settingsOpen && session?.authenticated && <SettingsPanel session={session} onLogout={signOut} onConnect={signIn} busy={busy} connecting={pendingAction === 'login'} disconnecting={pendingAction === 'logout'} />}
+            {settingsOpen && session?.authenticated && <div className="order-first min-w-0 lg:order-last"><SettingsPanel session={session} onLogout={signOut} onConnect={signIn} busy={busy} connecting={pendingAction === 'login'} disconnecting={pendingAction === 'logout'} /></div>}
           </div>
         )}
       </main>

@@ -1288,7 +1288,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
   const score = getScore();
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+    <div className="w-full min-w-0 max-w-4xl mx-auto p-4 sm:p-6 bg-white rounded-lg shadow-lg">
       {/* Pre-lesson tour (language selection) */}
       {!languageContext && (
         <Joyride
