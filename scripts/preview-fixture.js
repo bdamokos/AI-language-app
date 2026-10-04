@@ -10,7 +10,8 @@ import { createApp } from '../server/app.js';
 import { startOpenAIFixture } from '../test-support/openai-fixture.js';
 import { startLocalRuntime } from '../server/local-runtime.js';
 
-const local = process.argv.includes('--local');
+if (process.argv.includes('--local') && process.argv.includes('--hosted')) throw new Error('Choose either --local or --hosted for the fixture preview.');
+const local = !process.argv.includes('--hosted');
 const port = Number(process.env.PREVIEW_PORT || (local ? 3002 : 3001));
 const origin = `http://127.0.0.1:${port}`;
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'language-ai-preview-'));
