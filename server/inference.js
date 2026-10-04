@@ -56,7 +56,10 @@ function schemaForResponses(schema, depth = 0) {
 
 /** Consume SSE through a terminal event. Partial output is never a successful lesson. */
 export async function readResponseStream(response, { onDelta, signal } = {}) {
-  if (!response.body || !/text\/event-stream/i.test(response.headers.get('content-type') || '')) {
+  const contentType = response.headers.get('content-type');
+  // Some live plan responses omit Content-Type despite carrying valid SSE.
+  // The parser still requires valid events and an explicit completed response.
+  if (!response.body || (contentType && !/text\/event-stream/i.test(contentType))) {
     throw new InferenceError('ChatGPT returned an unexpected response.', 502, 'invalid_stream');
   }
   const reader = response.body.getReader();

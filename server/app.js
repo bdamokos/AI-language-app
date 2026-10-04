@@ -95,7 +95,7 @@ function ipRateLimiter(limit, message) {
 }
 
 /** Account credentials are supplied only by auth; legacy operator keys are never read. */
-export function createApp({ auth, inference, cacheDir = path.resolve('.cache'), distDir = path.resolve('dist'), production = process.env.NODE_ENV === 'production', rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10, frontendRateLimitMax = 600, trustedProxyCidrs = '' } = {}) {
+export function createApp({ auth, inference, cacheDir = path.resolve('.cache'), distDir = path.resolve('dist'), production = process.env.NODE_ENV === 'production', rateLimitMax = 120, authRateLimitMax = 120, loginRateLimitMax = 10, frontendRateLimitMax = 600, trustedProxyCidrs = '', lifetimeSignal } = {}) {
   if (!auth || !inference) throw new Error('Authentication and inference services are required.');
   const proxies = parseTrustedProxyCidrs(trustedProxyCidrs);
   const app = express();
@@ -118,8 +118,9 @@ export function createApp({ auth, inference, cacheDir = path.resolve('.cache'), 
   app.use('/api', rateLimit({ windowMs: 60_000, limit: rateLimitMax, keyGenerator: req => req.auth.accountId, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many requests. Please try again shortly.' } }));
   app.use('/api', (req, res, next) => {
     const controller = new AbortController();
-    req.inferenceSignal = req.auth.signal ? AbortSignal.any([controller.signal, req.auth.signal]) : controller.signal;
     res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+    if (res.destroyed || res.writableEnded) controller.abort();
+    req.inferenceSignal = AbortSignal.any([controller.signal, req.auth.signal, lifetimeSignal].filter(Boolean));
     next();
   });
   // Old anonymous cache and images are intentionally not mounted or imported.
@@ -128,6 +129,7 @@ export function createApp({ auth, inference, cacheDir = path.resolve('.cache'), 
   const contentRoutes = new Set(['/api/generate', '/api/explanations/stream', '/api/base-text', '/api/explain', '/api/recommend', '/api/rate/explanation', '/api/rate/exercise-group', '/api/persist-exercise']);
   app.use('/api', async (req, res, next) => {
     if (!contentRoutes.has(req.originalUrl.split('?')[0]) && !req.originalUrl.startsWith('/api/base-text-content/')) return next();
+    if (req.inferenceSignal.aborted) throw Object.assign(new Error('The request was cancelled.'), { status: 499, code: 'request_cancelled' });
     const namespace = sha256Hex(String(req.auth.accountId));
     req.cacheNamespace = namespace;
     if (!layouts.has(namespace)) {

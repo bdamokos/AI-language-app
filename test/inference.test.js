@@ -20,6 +20,17 @@ test('SSE handles split UTF-8 and CRLF frames and waits for completed', async ()
   assert.deepEqual(deltas, ['¡Hola!']);
 });
 
+test('live SSE without Content-Type still requires an explicit successful terminal event', async () => {
+  const missingHeader = parts => new Response(stream(parts).body);
+  const completed = missingHeader([event({ type: 'response.output_text.delta', delta: 'Hola' }), event(complete('Hola'))]);
+  assert.equal(completed.headers.get('content-type'), null);
+  assert.equal(await readResponseStream(completed), 'Hola');
+  await assert.rejects(readResponseStream(missingHeader([event({ type: 'response.output_text.delta', delta: 'Partial' })])), { code: 'interrupted_stream' });
+  await assert.rejects(readResponseStream(missingHeader([event({ type: 'response.failed', response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } })])), { code: 'subscription_sharing_usage_limit_exceeded' });
+  await assert.rejects(readResponseStream(missingHeader(['<html>Not a lesson</html>'])), { code: 'interrupted_stream' });
+  await assert.rejects(readResponseStream(new Response(event(complete('Not an SSE response')), { headers: { 'content-type': 'application/json' } })), { code: 'invalid_stream' });
+});
+
 test('partial content, DONE sentinel, incomplete and late quota failure never become successful lessons', async () => {
   const partial = event({ type: 'response.output_text.delta', delta: '{"items":[]}' });
   await assert.rejects(readResponseStream(stream([partial, 'data: [DONE]\n\n'])), { code: 'interrupted_stream' });

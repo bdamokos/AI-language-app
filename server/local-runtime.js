@@ -50,11 +50,15 @@ export async function startLocalRuntime({ port = 3210, dataDir = defaultLocalDat
   const release = await acquireLock(dataDir);
   let handler = (_req, res) => { res.writeHead(503, { 'Retry-After': '1' }); res.end('Starting language practice.'); };
   const server = http.createServer((req, res) => handler(req, res));
+  const lifetime = new AbortController();
   server.requestTimeout = 150_000;
   server.headersTimeout = 20_000;
   let auth;
   let closing;
   const close = () => closing ??= (async () => {
+    // Also cancels requests that have not finished authentication yet and will
+    // create their per-request controller only after shutdown has begun.
+    lifetime.abort();
     handler = (_req, res) => { res.writeHead(503); res.end('Language practice is stopping.'); };
     const stopped = new Promise((resolve, reject) => server.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve()));
     server.closeAllConnections();
@@ -72,7 +76,7 @@ export async function startLocalRuntime({ port = 3210, dataDir = defaultLocalDat
     const cacheDir = await privateDirectory(path.join(dataDir, 'cache'));
     auth = await createAuth({ issuer, fetch: fetchImpl, config: { mode: 'local', appOrigin: origin, redirectUri: `${origin}/api/auth/callback`, authDir: path.join(dataDir, 'auth'), cacheDir } });
     const inference = createInference({ auth, ...(fetchImpl ? { fetchImpl } : {}), ...(baseUrl ? { baseUrl } : {}) });
-    const app = createApp({ auth, inference, cacheDir, distDir, production, trustedProxyCidrs: '' });
+    const app = createApp({ auth, inference, cacheDir, distDir, production, trustedProxyCidrs: '', lifetimeSignal: lifetime.signal });
     handler = (req, res) => {
       // DNS rebinding and forwarded requests are rejected before any route,
       // including the static UI. Local registration must stay on this computer.

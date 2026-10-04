@@ -5,7 +5,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { startLocalRuntime } from '../server/local-runtime.js';
-import { ensureCacheLayout, setExplanation, getExplanation } from '../server/cacheStore.js';
+import { ensureCacheLayout, setExplanation, getExplanation, setBaseText, sha256Hex } from '../server/cacheStore.js';
+import { startOpenAIFixture } from '../test-support/openai-fixture.js';
 
 const request = (origin, headers, route = '/') => new Promise((resolve, reject) => {
   http.get(new URL(route, origin), { headers }, response => {
@@ -77,7 +78,7 @@ test('shutdown retains exclusive ownership until a pending cache transaction fin
   const dataDir = await directory(t);
   const runtime = await startLocalRuntime({ dataDir, port: 0, production: false });
   t.after(() => runtime.close());
-  const layout = await ensureCacheLayout(path.join(dataDir, 'cache', 'accounts', 'test-account'));
+  const layout = await ensureCacheLayout(path.join(runtime.dataDir, 'cache', 'accounts', 'test-account'));
   const rename = fs.rename;
   let finishWrite, enteredWrite;
   const entered = new Promise(resolve => { enteredWrite = resolve; });
@@ -100,4 +101,71 @@ test('shutdown retains exclusive ownership until a pending cache transaction fin
   assert.equal(restored.content, 'A completed lesson');
   const next = await startLocalRuntime({ dataDir, port: 0, production: false });
   t.after(() => next.close());
+});
+
+test('shutdown cancels requests still loading authentication before they can start a later cache write', { timeout: 15_000 }, async t => {
+  const dataDir = await directory(t);
+  const provider = await startOpenAIFixture();
+  t.after(() => provider.close());
+  const runtime = await startLocalRuntime({ dataDir, port: 0, production: false, issuer: provider.origin, baseUrl: `${provider.origin}/v1` });
+  t.after(() => runtime.close());
+  let cookie = '', csrf = '';
+  const fetchApp = async (route, options = {}) => {
+    const response = await fetch(new URL(route, runtime.origin), { redirect: 'manual', ...options, headers: { cookie, origin: runtime.origin, 'content-type': 'application/json', 'x-csrf-token': csrf } });
+    if (response.headers.has('set-cookie')) cookie = response.headers.get('set-cookie').split(';')[0];
+    return response;
+  };
+  csrf = (await (await fetchApp('/api/auth/session')).json()).csrfToken;
+  const authorize = new URL((await (await fetchApp('/api/auth/login', { method: 'POST', body: JSON.stringify({ enableInference: true }) })).json()).url);
+  authorize.pathname = '/approve';
+  const approval = await fetch(authorize, { redirect: 'manual' });
+  await fetchApp(approval.headers.get('location'));
+  const session = await (await fetchApp('/api/auth/session')).json();
+  const layout = await ensureCacheLayout(path.join(runtime.dataDir, 'cache', 'accounts', sha256Hex(session.user.id)));
+  const baseTextId = '0123456789abcdef';
+  await setBaseText(layout, 'saved-lesson', { baseTextId }, { id: baseTextId, passage: 'A saved fixture passage.' });
+
+  let releaseAuthRead, enteredAuthRead, enteredShutdown, combinedRequestSignal, targetRequest;
+  const authGate = new Promise(resolve => { releaseAuthRead = resolve; });
+  const authReadStarted = new Promise(resolve => { enteredAuthRead = resolve; });
+  const shutdownStarted = new Promise(resolve => { enteredShutdown = resolve; });
+  const signalCreated = new Promise(resolve => { combinedRequestSignal = resolve; });
+  const readFile = fs.readFile, rename = fs.rename, closeAuth = runtime.auth.close;
+  const combineSignals = AbortSignal.any;
+  let holdNextSessionRead = true, cacheWrites = 0;
+  t.mock.method(fs, 'readFile', async (filename, ...args) => {
+    if (holdNextSessionRead && String(filename).endsWith('.session')) {
+      holdNextSessionRead = false;
+      enteredAuthRead();
+      await authGate;
+    }
+    return readFile(filename, ...args);
+  });
+  t.mock.method(fs, 'rename', async (from, to) => {
+    if (String(to).startsWith(path.join(runtime.dataDir, 'cache'))) cacheWrites++;
+    return rename(from, to);
+  });
+  t.mock.method(runtime.auth, 'close', async () => { enteredShutdown(); await closeAuth(); });
+  t.mock.method(AbortSignal, 'any', signals => {
+    const signal = combineSignals.call(AbortSignal, signals);
+    if (targetRequest?.auth?.signal && signals.includes(targetRequest.auth.signal)) combinedRequestSignal(signal);
+    return signal;
+  });
+  runtime.server.on('request', req => {
+    if ((req.originalUrl || req.url) !== `/api/base-text-content/${baseTextId}`) return;
+    targetRequest = req;
+  });
+  const pending = fetchApp(`/api/base-text-content/${baseTextId}`).catch(() => null);
+  try {
+    await authReadStarted;
+    const closing = runtime.close();
+    await shutdownStarted;
+    releaseAuthRead();
+    await closing;
+    const signal = await signalCreated;
+    assert.equal(signal.aborted, true, 'a request resumed after shutdown must inherit cancellation');
+    await pending;
+    assert.equal(cacheWrites, 0, 'a request resumed after shutdown must not write cache indexes');
+    await assert.rejects(fs.stat(path.join(runtime.dataDir, 'runtime.lock')), { code: 'ENOENT' });
+  } finally { releaseAuthRead(); await closeAuth(); }
 });
