@@ -197,7 +197,7 @@ test_ssh_connection() {
         return 1
     fi
     
-    if sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $REMOTE_USER@$REMOTE_HOST "echo 'SSH connection successful'" >/dev/null 2>&1; then
+    if sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=10 $REMOTE_USER@$REMOTE_HOST "echo 'SSH connection successful'" >/dev/null 2>&1; then
         echo "✅ SSH connection test successful."
         return 0
     else
@@ -207,12 +207,12 @@ test_ssh_connection() {
 
 # Function to run SSH commands with password
 run_ssh() {
-    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST "$1"
+    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=yes $REMOTE_USER@$REMOTE_HOST "$1"
 }
 
 # Function to run SCP with password
 run_scp() {
-    sshpass -p "$PASSWORD" scp -o StrictHostKeyChecking=no "$@"
+    sshpass -p "$PASSWORD" scp -o StrictHostKeyChecking=yes "$@"
 }
 
 # Function to follow logs
@@ -222,7 +222,7 @@ follow_logs() {
     echo ""
     
     # Stream logs reliably without relying on interactive TTY and with robust compose detection
-    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST '
+    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=yes $REMOTE_USER@$REMOTE_HOST '
         set -e
         cd "'$DEPLOY_PATH'"
         if docker compose version >/dev/null 2>&1; then
@@ -328,7 +328,7 @@ run_ssh "mkdir -p $DEPLOY_PATH"
 run_scp docker-compose.yml .env $REMOTE_USER@$REMOTE_HOST:$DEPLOY_PATH/
 
 echo "🔄 Running deployment on remote server..."
-sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST" bash -s -- "$DEPLOY_PATH" "$CACHE_HOST_DIR" "$DEPLOY_PORT" "$FULL_IMAGE_NAME" <<'REMOTE_SCRIPT'
+sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=yes "$REMOTE_USER@$REMOTE_HOST" bash -s -- "$DEPLOY_PATH" "$CACHE_HOST_DIR" "$DEPLOY_PORT" "$FULL_IMAGE_NAME" <<'REMOTE_SCRIPT'
 set -e
 DEPLOY_PATH="$1"
 CACHE_HOST_DIR="$2"

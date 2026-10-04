@@ -59,7 +59,7 @@ docker compose up --build -d
 
 Compose binds the app to loopback for a reverse proxy on the host. Adapt the network binding deliberately if your proxy runs elsewhere. Configure `APP_ORIGIN` and the approved OAuth client in `.env` before starting it. No OpenRouter, Runware, fal.ai, or Ollama credentials are used.
 
-The optional `deploy.sh` remote helper requires `REGISTRY_HOST`, including in `--deploy-only` mode. It pulls the selected image before replacing the running service. Direct local Compose builds remain supported.
+The optional `deploy.sh` remote helper requires `REGISTRY_HOST`, including in `--deploy-only` mode. It pulls the selected image before replacing the running service and requires an already verified SSH host key in `known_hosts`. Verify and add the server fingerprint through a trusted channel before first use; unknown or changed keys stop deployment. Direct local Compose builds remain supported.
 
 ## Account and inference boundaries
 
