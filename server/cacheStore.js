@@ -448,7 +448,7 @@ async function selectUnseenFromPoolGroupedUnlocked(layout, poolKey, seenSet, cou
 }
 
 function collectPoolFamilyShas(idx, family) {
-  const { type, language, level, challengeMode, schemaVersion } = family;
+  const { type, language, level, challengeMode, schemaVersion, promptSha12 } = family;
   const keys = Object.keys(idx.pools || {});
   const result = [];
   for (const key of keys) {
@@ -458,7 +458,7 @@ function collectPoolFamilyShas(idx, family) {
     if (parts.length < 7) continue;
     const [t, lang, lvl, chall] = parts;
     const ver = parts[parts.length - 2];
-    if (t === type && lang === language && lvl === level && chall === String(challengeMode) && ver === String(schemaVersion)) {
+    if (t === type && lang === language && lvl === level && chall === String(challengeMode) && ver === String(schemaVersion) && (!promptSha12 || parts.at(-1) === promptSha12)) {
       const list = idx.pools[key] || [];
       for (const sha of list) result.push(sha);
     }

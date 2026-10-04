@@ -67,7 +67,7 @@ export default function SettingsPanel({ session, onLogout, onConnect, busy, conn
         </form>
       )}
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-      <p className="text-xs text-gray-500">Image generation is unavailable with this connection.</p>
+      <p className="text-xs text-gray-500">ChatGPT plan access does not currently include image generation.</p>
       <div className="border-t pt-4">
         <button type="button" onClick={onLogout} disabled={busy} className="text-sm rounded-md border border-gray-300 px-3 py-2 hover:bg-gray-50 disabled:opacity-50">{disconnecting ? 'Disconnecting…' : 'Disconnect ChatGPT'}</button>
         <p className="mt-2 text-xs text-gray-500">{localMode ? 'Disconnecting ends this session and clears this lesson. The account stays in your saved list.' : 'Disconnecting ends this session and clears the current lesson from this browser.'}</p>

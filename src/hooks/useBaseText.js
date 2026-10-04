@@ -11,11 +11,12 @@ export default function useBaseText() {
   const [error, setError] = useState(null);
   const [last, setLast] = useState(null);
 
-  const fetchBaseText = useCallback(async ({ topic, language = 'es', level = 'B1', challengeMode = false, excludeIds = [], focus } = {}) => {
+  const fetchBaseText = useCallback(async ({ topic, language = 'es', level = 'B1', challengeMode = false, excludeIds = [], focus, signal } = {}) => {
     setLoading(true);
     setError(null);
     try {
       const resp = await apiFetch('/api/base-text', {
+        signal,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, language, level, challengeMode, excludeIds, focus })
@@ -34,5 +35,4 @@ export default function useBaseText() {
 
   return { fetchBaseText, loading, error, last };
 }
-
 

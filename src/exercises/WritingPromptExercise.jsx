@@ -1,6 +1,7 @@
 import { apiFetch } from '../utils/api.js';
 import React, { useState } from 'react';
 import { pickRandomTopicSuggestion, formatTopicSuggestionForPrompt } from './utils.js';
+import { hasText, normalizeExerciseCount, validateGeneratedItems } from './generationValidation.js';
 
 /**
  * Writing Prompt exercise (open-ended)
@@ -67,6 +68,7 @@ export function scoreWritingPrompt(item, value, eq) {
  * Generate Writing Prompt exercises
  */
 export async function generateWritingPrompts(topic, count = 2, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+  count = normalizeExerciseCount(count, 10);
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
@@ -96,7 +98,7 @@ Notes: Ensure vocabulary and grammar complexity match the target level.`;
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string' },
@@ -106,10 +108,10 @@ Notes: Ensure vocabulary and grammar complexity match the target level.`;
               properties: { question: { type: 'string' } },
               required: ['question']
             }},
-            example_answers: { type: 'array', items: { type: 'string' } },
+            example_answers: { type: 'array', minItems: 3, maxItems: 5, items: { type: 'string' } },
             difficulty: { type: 'string' }
           },
-          required: ['studentInstructions','prompts']
+          required: ['studentInstructions','prompts','example_answers']
         }
       }
     },
@@ -118,6 +120,7 @@ Notes: Ensure vocabulary and grammar complexity match the target level.`;
 
   const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -137,6 +140,9 @@ Notes: Ensure vocabulary and grammar complexity match the target level.`;
     throw new Error(`Failed to generate writing prompts: ${response.status}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  return validateGeneratedItems(result, count, 'writing exercises', item =>
+    hasText(item.studentInstructions) && Array.isArray(item.prompts) && item.prompts.length >= 3 && item.prompts.length <= 5 &&
+    item.prompts.every(prompt => hasText(prompt?.question)) && Array.isArray(item.example_answers) &&
+    item.example_answers.length === item.prompts.length && item.example_answers.every(hasText));
 }
-

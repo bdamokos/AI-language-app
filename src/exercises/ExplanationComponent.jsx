@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { hasText } from './generationValidation.js';
 
 /**
  * Explanation component for lessons
@@ -124,10 +125,11 @@ export async function generateExplanation(topic, languageContext = { language: '
 Requirements:
 - Write in the target language and match the target level
 - Where relevant, add sections on common mistakes (and fixes), cultural context, regional differences, usage tips, and etymology
-- Return clean markdown: start with a top-level heading (#) for the title, then the explanation
+- Return the schema's JSON object: a short title and the explanation in content_markdown
+- Use clean markdown within content_markdown; do not repeat the title as a heading
 - Keep length roughly 200–600 words
 - If necessary for clarity, include brief English translations in parentheses
-- Return ONLY content; do not echo instructions`;
+- Return only that JSON object; do not echo instructions`;
 
   const normalizeTopic = (input) => {
     if (typeof input === 'string') return input.trim();
@@ -153,6 +155,7 @@ Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
 
   const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -172,7 +175,11 @@ Target Level: ${level}${challengeMode ? ' (slightly challenging)' : ''}`;
     throw new Error(`Failed to generate explanation: ${response.status}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  if (!hasText(result?.title) || !hasText(result?.content_markdown)) {
+    throw new Error('ChatGPT returned an incomplete explanation. Please try again.');
+  }
+  return result;
 }
 
 /**
@@ -191,6 +198,7 @@ export async function generateExplanationStream(topic, languageContext = { langu
   };
   const resp = await apiFetch('/api/explanations/stream', {
     method: 'POST',
+    signal: languageContext?.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });

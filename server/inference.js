@@ -55,7 +55,7 @@ function schemaForResponses(schema, depth = 0) {
 }
 
 /** Consume SSE through a terminal event. Partial output is never a successful lesson. */
-export async function readResponseStream(response, { onDelta, signal } = {}) {
+export async function readResponseStream(response, { onDelta, onActivity, signal } = {}) {
   const contentType = response.headers.get('content-type');
   // Some live plan responses omit Content-Type despite carrying valid SSE.
   // The parser still requires valid events and an explicit completed response.
@@ -101,6 +101,9 @@ export async function readResponseStream(response, { onDelta, signal } = {}) {
     while (!completed) {
       if (signal?.aborted) throw signal.reason || new Error('Aborted');
       const { value, done } = await reader.read();
+      // Reasoning events, SSE heartbeats and split frames all establish that
+      // the connection is alive, even before any visible text is available.
+      if (value?.byteLength) onActivity?.();
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       let match;
       while ((match = /\r?\n\r?\n/.exec(buffer))) {
@@ -127,8 +130,11 @@ export async function readResponseStream(response, { onDelta, signal } = {}) {
   }
 }
 
-export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, timeoutMs = 120_000, catalogTtlMs = 60_000 } = {}) {
+export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, timeoutMs = 120_000, inactivityTimeoutMs = timeoutMs, totalTimeoutMs = 600_000, catalogTtlMs = 60_000 } = {}) {
   if (!auth) throw new Error('Inference requires the account authentication service.');
+  for (const duration of [inactivityTimeoutMs, totalTimeoutMs]) {
+    if (!Number.isFinite(duration) || duration <= 0 || duration > 2_147_483_647) throw new Error('Inference timeouts must be finite positive durations.');
+  }
   const accounts = new Map();
   const requestModel = Symbol('chatgptModel');
   const endpoint = new URL(baseUrl);
@@ -141,39 +147,55 @@ export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, ti
     if (!accounts.has(id)) {
       // Bound inactive preference/catalog state. No credentials are stored here.
       if (accounts.size >= 1000) accounts.delete(accounts.keys().next().value);
-      accounts.set(id, { models: [], selected: null, fetchedAt: 0 });
+      accounts.set(id, { models: [], selected: null, preferred: null, preferenceLoaded: false, fetchedAt: 0 });
     }
     return accounts.get(id);
   }
   async function request(req, pathname, options, consume) {
     const controller = new AbortController();
     const abort = () => controller.abort();
+    let timeoutKind;
+    const timeout = kind => { timeoutKind ??= kind; abort(); };
     const signals = [req.inferenceSignal, req.auth?.signal].filter(Boolean);
     const externalSignal = signals.length ? AbortSignal.any(signals) : undefined;
     externalSignal?.addEventListener('abort', abort, { once: true });
     if (externalSignal?.aborted) abort();
-    const timer = setTimeout(abort, timeoutMs);
-    timer.unref?.();
+    let inactivityTimer;
+    const activity = () => {
+      clearTimeout(inactivityTimer);
+      if (!controller.signal.aborted) {
+        inactivityTimer = setTimeout(() => timeout('inactivity'), inactivityTimeoutMs);
+        inactivityTimer.unref?.();
+      }
+    };
+    const totalTimer = setTimeout(() => timeout('total'), totalTimeoutMs);
+    totalTimer.unref?.();
+    activity();
     try {
       const token = await auth.getAccessToken(req.auth);
+      controller.signal.throwIfAborted();
       const response = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/${pathname}`, {
         ...options,
         headers: { accept: 'application/json', ...options?.headers, authorization: `Bearer ${token}` },
         redirect: 'error',
         signal: controller.signal,
       });
+      activity();
       if (!response.ok) {
         let body;
         try { body = await response.json(); } catch {}
         throw upstreamError(response.status, body, response.headers.get('x-request-id') || response.headers.get('openai-request-id'));
       }
-      return await consume(response, controller.signal);
+      const result = await consume(response, controller.signal, activity);
+      controller.signal.throwIfAborted();
+      return result;
     } catch (error) {
-      if (controller.signal.aborted) throw new InferenceError(externalSignal?.aborted ? 'The request was cancelled.' : 'ChatGPT took too long to respond. Please try again.', externalSignal?.aborted ? 499 : 504, externalSignal?.aborted ? 'request_cancelled' : 'inference_timeout');
+      if (controller.signal.aborted) throw new InferenceError(externalSignal?.aborted ? 'The request was cancelled.' : timeoutKind === 'total' ? 'ChatGPT took too long to finish. Try a smaller request or another model.' : 'ChatGPT stopped responding. Please try again.', externalSignal?.aborted ? 499 : 504, externalSignal?.aborted ? 'request_cancelled' : 'inference_timeout');
       if (error instanceof InferenceError || error.status) throw error;
       throw new InferenceError('Could not connect to ChatGPT. Please try again later.', 503, 'upstream_unavailable');
     } finally {
-      clearTimeout(timer);
+      clearTimeout(inactivityTimer);
+      clearTimeout(totalTimer);
       externalSignal?.removeEventListener('abort', abort);
     }
   }
@@ -181,6 +203,12 @@ export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, ti
     const entry = state(req);
     // Validate the session even on a cached catalog hit (logout/expiry/consent).
     await auth.getAccessToken(req.auth);
+    if (!entry.preferenceLoaded && auth.getModelPreference) {
+      const preferred = await auth.getModelPreference(req.auth);
+      // A concurrent lookup must not overwrite a preference already loaded or
+      // explicitly saved by another request for the same registration.
+      if (!entry.preferenceLoaded) { entry.preferred = preferred; entry.preferenceLoaded = true; }
+    }
     if (!force && entry.models.length && Date.now() - entry.fetchedAt < catalogTtlMs) return entry;
     // Each cold lookup belongs to its own request/session. Sharing an in-flight
     // lookup would let a closing tab or logging-out session cancel other users
@@ -192,7 +220,8 @@ export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, ti
         const models = body.models.filter(model => model.visibility === 'list' && typeof model.slug === 'string' && /^[\w.:-]{1,150}$/.test(model.slug)).filter(model => !seen.has(model.slug) && seen.add(model.slug)).map(model => ({ id: model.slug, name: typeof model.display_name === 'string' ? model.display_name.slice(0,150) : model.slug }));
         if (!models.length) throw new InferenceError('No models are available for this ChatGPT account.', 403, 'no_models_available');
         entry.models = models;
-        if (!models.some(model => model.id === entry.selected)) entry.selected = models[0].id;
+        if (models.some(model => model.id === entry.preferred)) entry.selected = entry.preferred;
+        else if (!models.some(model => model.id === entry.selected)) entry.selected = models[0].id;
         entry.fetchedAt = Date.now();
       });
     return entry;
@@ -212,6 +241,10 @@ export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, ti
     async selectModel(req, model) {
       const entry = await loadModels(req, true);
       if (!entry.models.some(item => item.id === model)) throw new InferenceError('Choose a model available to your ChatGPT account.', 400, 'invalid_model');
+      if (auth.setModelPreference) {
+        await auth.setModelPreference(req.auth, model);
+        entry.preferred = model;
+      }
       entry.selected = model;
       return model;
     },
@@ -223,7 +256,7 @@ export function createInference({ auth, fetchImpl = fetch, baseUrl = API_URL, ti
       const body = { model, input: [{ role: 'user', content: user }], store: false, stream: true };
       if (system) body.instructions = system;
       if (jsonSchema) body.text = { format: { type: 'json_schema', name: /^[a-zA-Z0-9_-]{1,64}$/.test(schemaName || '') ? schemaName : 'lesson', strict: true, schema: schemaForResponses(jsonSchema) } };
-      return request(req, 'responses', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(body) }, (response, signal) => readResponseStream(response, { onDelta, signal }));
+      return request(req, 'responses', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(body) }, (response, signal, onActivity) => readResponseStream(response, { onDelta, onActivity, signal }));
     },
   };
 }

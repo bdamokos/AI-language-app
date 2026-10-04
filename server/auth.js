@@ -396,6 +396,18 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
     });
   }
 
+  async function modelPreference(auth, model) {
+    if (closed || !local || !auth?.sessionId) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+    if (model !== undefined && (typeof model !== 'string' || !/^[\w.:-]{1,150}$/.test(model))) throw error(400, 'invalid_model', 'Choose an available ChatGPT model.');
+    return locked(`registration:${auth.clientId}`, async () => {
+      const session = await load(auth.sessionId);
+      if (closed || !session?.user || session.accountId !== auth.accountId || auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+      const profile = localProfile(session.accountId);
+      if (model !== undefined) await profiles.put({ ...profile, modelPreference: model });
+      return model ?? profile.modelPreference ?? null;
+    });
+  }
+
   function attachRoutes(app) {
     app.get('/api/auth/session', guard, handle(async (req, res) => {
       const { session } = await ensureSession(req, res);
@@ -482,7 +494,7 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
               if (signInSignal.aborted || closed) await cancelSignIn();
               if (previous?.credentials?.refreshToken && previous.credentials.refreshToken !== fresh.credentials.refreshToken && !await revoke(previous.credentials.refreshToken, issuedClientId)) fresh.revocationUnconfirmed = true;
               if (signInSignal.aborted || closed) await cancelSignIn();
-              committedProfile = await profiles.put({ accountId, issuer, clientId: issuedClientId, subject: identity.sub, user: fresh.user, credentials: fresh.credentials, idToken: fresh.idToken, revocationUnconfirmed: fresh.revocationUnconfirmed, generation: fresh.profileGeneration }, pendingProfileId);
+              committedProfile = await profiles.put({ accountId, issuer, clientId: issuedClientId, subject: identity.sub, user: fresh.user, credentials: fresh.credentials, idToken: fresh.idToken, revocationUnconfirmed: fresh.revocationUnconfirmed, generation: fresh.profileGeneration, ...(previous?.modelPreference ? { modelPreference: previous.modelPreference } : {}) }, pendingProfileId);
             }
             const freshId = random();
             await writeSession(freshId, fresh);
@@ -541,5 +553,5 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
     await profiles?.flush();
     controllers.clear();
   }
-  return { attachRoutes, middleware, requireCsrf, guard, getAccessToken, configured, mode, close };
+  return { attachRoutes, middleware, requireCsrf, guard, getAccessToken, configured, mode, close, ...(local ? { getModelPreference: auth => modelPreference(auth), setModelPreference: modelPreference } : {}) };
 }

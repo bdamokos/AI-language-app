@@ -15,7 +15,7 @@ Open **http://127.0.0.1:3210**, choose **Continue with ChatGPT**, and allow Lang
 
 Keep the terminal open while using the app; press Ctrl+C to stop. After the first build, `npm run start:local` starts it again. Re-run `npm run local` after updating the source. The local entrypoint ignores hosted `.env`, `HOST`, `APP_ORIGIN`, OAuth client settings, and proxy settings. It always binds to `127.0.0.1`; do not expose it through a tunnel, reverse proxy, or shared host.
 
-Accounts and lessons survive restarts in your operating system's private application-data directory:
+Saved accounts, model preferences, and generated-content caches survive restarts in your operating system's private application-data directory:
 
 | System | Data directory |
 | --- | --- |
@@ -26,6 +26,8 @@ Accounts and lessons survive restarts in your operating system's private applica
 Credentials stay in encrypted files under `auth/`, with an owner-only encryption key alongside them; lessons stay under `cache/` in separate account directories. Protect this whole directory as credentials, including backups. Filesystem permissions on Windows also depend on your user's profile-directory ACLs. Tokens are never saved in browser storage. The app does not use another program's ChatGPT credentials.
 
 Local mode is intended for your own trusted computer and OS session. Loopback HTTP cookies are shared across ports, so other local services and users on that computer are part of the trust boundary.
+
+Select a model in account settings; an explicit choice is saved for that local registration. Models shown are those available to the signed-in account. ChatGPT-plan access currently excludes image generation.
 
 Choose a saved account to sign in again, or **Add another ChatGPT account**. Each registration stays separate, including registrations sharing an email address. Signing out stops requests, attempts remote revocation, and removes that account's local tokens while retaining its registration for a later sign-in. You can also disconnect the app in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage).
 

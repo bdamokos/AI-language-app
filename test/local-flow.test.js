@@ -169,6 +169,20 @@ test('two registrations for the same identity keep separate model choice and cac
   assert.equal(f.provider.stats.requests.length, 2);
   assert.notEqual(f.provider.stats.requests[0].clientId, f.provider.stats.requests[1].clientId);
   assert.equal(second.accounts.length, 2);
+
+  await f.restart();
+  client.setOrigin(f.runtime.origin);
+  assert.equal((await (await client.request('/api/models')).json()).selectedModel, 'fixture-model');
+  await client.login('alice', first.user.id);
+  assert.equal((await (await client.request('/api/models')).json()).selectedModel, 'fixture-alternative', 'the explicit preference belongs to the saved registration across restart and reauthorization');
+  assert.equal((await client.request('/api/auth/logout', { method: 'POST' })).status, 200);
+  await client.login('alice', first.user.id);
+  await f.restart();
+  client.setOrigin(f.runtime.origin);
+  assert.equal((await (await client.request('/api/models')).json()).selectedModel, 'fixture-alternative', 'logout clears grants but retains the local preference');
+  const vault = path.join(f.dataDir, 'auth', 'local-profiles.vault');
+  assert.equal((await fs.stat(vault)).mode & 0o777, 0o600);
+  assert.doesNotMatch(await fs.readFile(vault, 'utf8'), /fixture-alternative|modelPreference/);
 });
 
 test('local token refresh after restart uses the registration issued ID without a client secret', { timeout: 30_000 }, async t => {

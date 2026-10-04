@@ -13,13 +13,32 @@ import { scoreClozeMixed, generateClozeMixed } from './exercises/ClozeMixedExerc
 import { generateExplanation, generateExplanationStream } from './exercises/ExplanationComponent.jsx';
 import { generateGuidedDialogues } from './exercises/GuidedDialogueExercise.jsx';
 import { generateWritingPrompts } from './exercises/WritingPromptExercise.jsx';
-import { generateReading } from './exercises/ReadingExercise.jsx';
-import { generateRewriting } from './exercises/RewritingExercise.jsx';
+import { generateReading, scoreReading } from './exercises/ReadingExercise.jsx';
+import { generateRewriting, scoreRewriting } from './exercises/RewritingExercise.jsx';
 import { normalizeText as normalizeTextUtil } from './exercises/utils.js';
-import { generateErrorBundles } from './exercises/ErrorBundleExercise.jsx';
+import { generateErrorBundles, scoreErrorBundle } from './exercises/ErrorBundleExercise.jsx';
 import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
 import useBaseText from './hooks/useBaseText.js';
+import { createChapterPool } from './utils/chapterPool.js';
+
+export function collectWrongExercises(lesson, values, strictAccents = true) {
+  const eq = (a, b) => normalizeTextUtil(a, strictAccents) === normalizeTextUtil(b, strictAccents);
+  const sections = [
+    ['fib', 'fill_in_blanks', (item, value) => scoreFIB(item, value || {}, eq)],
+    ['mcq', 'multiple_choice', scoreMCQ],
+    ['cloze', 'cloze_passages', (item, value) => scoreCloze(item, value || {}, eq)],
+    ['clozeMix', 'cloze_with_mixed_options', (item, value) => scoreClozeMixed(item, value || {}, eq)],
+    ['reading', 'reading_comprehension', (item, value) => scoreReading(item, value || {})],
+    ['rewrite', 'rewriting', (item, value) => scoreRewriting(item, value || '', eq)],
+    ['error', 'error_bundles', (item, value, index) => scoreErrorBundle(item, value, eq, strictAccents, index)],
+  ];
+  return sections.flatMap(([type, field, score]) => (lesson?.[field] || []).flatMap((item, index) => {
+    const userAnswer = values?.[`lesson:${type}:${index}`];
+    const result = score(item, userAnswer, index);
+    return result.correct < result.total ? [{ type, index, item, userAnswer: userAnswer ?? null }] : [];
+  }));
+}
 
 const AIPracticeApp = ({ onNewLesson }) => {
   // Language and level context
@@ -60,30 +79,38 @@ const AIPracticeApp = ({ onNewLesson }) => {
   const [rewritingCount, setRewritingCount] = useState(5);
   const [errorBundleCount, setErrorBundleCount] = useState(4);
   const { fetchBaseText } = useBaseText();
-  const [readingBaseText, setReadingBaseText] = useState(null);
-  const [readingChapterCursor, setReadingChapterCursor] = useState(0);
-  const [errorBundleBaseText, setErrorBundleBaseText] = useState(null);
-  const [errorBundleChapterCursor, setErrorBundleChapterCursor] = useState(0);
+  const chapterPool = useRef(null);
+  if (!chapterPool.current) chapterPool.current = createChapterPool(fetchBaseText);
+  useEffect(() => () => chapterPool.current.reset(), []);
+  const [generationStage, setGenerationStage] = useState({});
 
-  // Reservation cursors to avoid parallel overlap
-  const readingCursorRef = useRef(0);
-  const errorBundleCursorRef = useRef(0);
-
-  // Helpers to reserve chapters BEFORE starting generation
-  const reserveNextReadingChapter = (chaptersLen) => {
-    const current = readingCursorRef.current;
-    if (current >= chaptersLen) return -1;
-    readingCursorRef.current = current + 1;
-    setReadingChapterCursor(readingCursorRef.current);
-    return current;
+  const resetLessonWork = () => {
+    chapterPool.current.reset();
+    setGenerationStage({});
+    setErrorMsg('');
+    setLoadingLesson(false); setLoadingExplOnly(false); setLoadingFibOnly(false);
+    setLoadingMcqOnly(false); setLoadingClozeOnly(false); setLoadingClozeMixOnly(false);
+    setLoadingDialogueOnly(false); setLoadingWritingOnly(false); setLoadingReadingOnly(false);
+    setLoadingErrorBundlesOnly(false); setLoadingRewritingOnly(false);
+    setLoadingExplanation({}); setLoadingRecommendation(false);
   };
 
-  const reserveNextErrorBundleChapter = (chaptersLen) => {
-    const current = errorBundleCursorRef.current;
-    if (current >= chaptersLen) return -1;
-    errorBundleCursorRef.current = current + 1;
-    setErrorBundleChapterCursor(errorBundleCursorRef.current);
-    return current;
+  const generateFromChapters = async (type, count, batchSize, generate, excludeIds = []) => {
+    const signal = chapterPool.current.signal;
+    try {
+      return await chapterPool.current.run({
+        context: { topic, language: languageContext?.language || 'es', level: languageContext?.level || 'B1', challengeMode: !!languageContext?.challengeMode },
+        count, batchSize, excludeIds,
+        generate: (amount, context) => generate(topic, amount, context),
+        onStage: stage => { if (!signal.aborted) setGenerationStage(previous => ({ ...previous, [type]: stage })); }
+      });
+    } catch (error) {
+      if (!signal.aborted && error.partialItems?.length) {
+        setErrorMsg(`Generated ${error.partialItems.length} of ${count} exercises. ${error.message}`);
+        return { items: error.partialItems };
+      }
+      throw error;
+    }
   };
 
   // Onboarding / tour state
@@ -222,6 +249,8 @@ const AIPracticeApp = ({ onNewLesson }) => {
 
   // Handle language and level selection
   const handleLanguageLevelStart = async (context) => {
+    resetLessonWork();
+    const signal = chapterPool.current.signal;
     setLanguageContext(context);
     setTopic(context.topic || '');
     
@@ -250,24 +279,27 @@ const AIPracticeApp = ({ onNewLesson }) => {
       });
       setOrchestratorValues({});
       try {
-        const final = await generateExplanationStream(context.topic, context, (evt) => {
+        const final = await generateExplanationStream(context.topic, { ...context, signal }, (evt) => {
+          if (signal.aborted) return;
           if (evt?.type === 'delta' || evt?.type === 'prefill') {
             setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${context.topic}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
           }
         });
-        setLesson(prev => prev ? ({ ...prev, explanation: final }) : prev);
+        if (!signal.aborted) setLesson(prev => prev ? ({ ...prev, explanation: final }) : prev);
       } catch (error) {
+        if (signal.aborted) return;
         console.error('Error generating explanation:', error);
         setErrorMsg(error.message || 'Error generating explanation. Please try again.');
         setLesson(prev => prev ? ({ ...prev, explanation: { ...prev.explanation, title: 'Explanation unavailable' } }) : prev);
       } finally {
-        setLoadingLesson(false);
+        if (!signal.aborted) setLoadingLesson(false);
       }
     }
   };
 
   // Reset to language selection
   const resetToLanguageSelection = () => {
+    resetLessonWork();
     if (onNewLesson) { onNewLesson(); return; }
     setLanguageContext(null);
     setTopic('');
@@ -280,13 +312,6 @@ const AIPracticeApp = ({ onNewLesson }) => {
     setShowContext({});
     setLesson(null);
     setOrchestratorValues({});
-    setReadingBaseText(null);
-    setReadingChapterCursor(0);
-    setErrorBundleBaseText(null);
-    setErrorBundleChapterCursor(0);
-    // Reset reservation cursors
-    readingCursorRef.current = 0;
-    errorBundleCursorRef.current = 0;
   };
 
   const insertAccent = (accent) => {
@@ -412,7 +437,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
             onClick={generateFIBOnly}
             disabled={loadingFibOnly || !topic.trim()}
             className="flex-1 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm"
-          >{loadingFibOnly ? 'Generating...' : `Add FIB (${exerciseCount})`}</button>
+          >{loadingFibOnly ? (generationStage.fib || 'Generating…') : `Add FIB (${exerciseCount})`}</button>
           <input type="number" min={1} max={20} value={exerciseCount} onChange={e => setExerciseCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
         </div>
 
@@ -430,7 +455,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
             onClick={generateClozeOnly}
             disabled={loadingClozeOnly || !topic.trim()}
             className="flex-1 bg-amber-600 text-white py-2 px-4 rounded hover:bg-amber-700 text-sm"
-          >{loadingClozeOnly ? 'Generating...' : `Add Cloze (${clozeCount})`}</button>
+          >{loadingClozeOnly ? (generationStage.cloze || 'Generating…') : `Add Cloze (${clozeCount})`}</button>
           <input type="number" min={1} max={10} value={clozeCount} onChange={e => setClozeCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
         </div>
 
@@ -439,7 +464,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
             onClick={generateClozeMixOnly}
             disabled={loadingClozeMixOnly || !topic.trim()}
             className="flex-1 bg-fuchsia-600 text-white py-2 px-4 rounded hover:bg-fuchsia-700 text-sm"
-          >{loadingClozeMixOnly ? 'Generating...' : `Add Cloze-Mixed (${clozeMixCount})`}</button>
+          >{loadingClozeMixOnly ? (generationStage.clozeMixed || 'Generating…') : `Add Cloze-Mixed (${clozeMixCount})`}</button>
           <input type="number" min={1} max={10} value={clozeMixCount} onChange={e => setClozeMixCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
         </div>
 
@@ -466,7 +491,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
             onClick={generateReadingOnly}
             disabled={loadingReadingOnly || !topic.trim()}
             className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded hover:bg-emerald-700 text-sm"
-          >{loadingReadingOnly ? 'Generating...' : `Generate Reading Passage (${readingCount})`}</button>
+          >{loadingReadingOnly ? (generationStage.reading || 'Generating…') : `Generate Reading Passage (${readingCount})`}</button>
           <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
         </div>
 
@@ -475,7 +500,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
             onClick={generateRewritingOnly}
             disabled={loadingRewritingOnly || !topic.trim()}
             className="flex-1 bg-cyan-600 text-white py-2 px-4 rounded hover:bg-cyan-700 text-sm"
-          >{loadingRewritingOnly ? 'Generating...' : `Add Rewriting (${rewritingCount})`}</button>
+          >{loadingRewritingOnly ? (generationStage.rewriting || 'Generating…') : `Add Rewriting (${rewritingCount})`}</button>
           <input type="number" min={1} max={20} value={rewritingCount} onChange={e => setRewritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
         </div>
 
@@ -484,7 +509,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
             onClick={generateErrorBundlesOnly}
             disabled={loadingErrorBundlesOnly || !topic.trim()}
             className="flex-1 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 text-sm"
-          >{loadingErrorBundlesOnly ? 'Generating...' : `Add Error Bundles (${errorBundleCount})`}</button>
+          >{loadingErrorBundlesOnly ? (generationStage.errorBundle || 'Generating…') : `Add Error Bundles (${errorBundleCount})`}</button>
           <input type="number" min={2} max={12} value={errorBundleCount} onChange={e => setErrorBundleCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
         </div>
       </div>
@@ -520,6 +545,9 @@ const AIPracticeApp = ({ onNewLesson }) => {
   const generateLessonContent = async (t) => {
     const topicToUse = (typeof t === 'string' && t.trim()) ? t.trim() : String(topic || '').trim();
     if (!topicToUse) return;
+    resetLessonWork();
+    const signal = chapterPool.current.signal;
+    setRecommendation(null);
     setLoadingLesson(true);
     setErrorMsg('');
     // Ensure newly generated lesson starts unchecked
@@ -539,18 +567,20 @@ const AIPracticeApp = ({ onNewLesson }) => {
         error_bundles_shared_context: ''
       });
       setOrchestratorValues({});
-      const final = await generateExplanationStream(topicToUse, languageContext, (evt) => {
+      const final = await generateExplanationStream(topicToUse, { ...languageContext, signal }, (evt) => {
+        if (signal.aborted) return;
         if (evt?.type === 'delta' || evt?.type === 'prefill') {
           setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${topicToUse}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
         }
       });
-      setLesson(prev => prev ? ({ ...prev, explanation: final }) : prev);
+      if (!signal.aborted) setLesson(prev => prev ? ({ ...prev, explanation: final }) : prev);
     } catch (error) {
+      if (signal.aborted) return;
       console.error('Error generating lesson (explanation):', error);
       setErrorMsg(error.message || 'Error generating lesson. Please try again.');
       setLesson(prev => prev ? ({ ...prev, explanation: { ...prev.explanation, title: 'Explanation unavailable' } }) : prev);
     } finally {
-      setLoadingLesson(false);
+      if (!signal.aborted) setLoadingLesson(false);
     }
   };
 
@@ -599,222 +629,88 @@ const AIPracticeApp = ({ onNewLesson }) => {
 
   const generateExplanationOnly = async () => {
     if (!topic.trim()) return;
+    const signal = chapterPool.current.signal;
     setLoadingExplOnly(true);
     setErrorMsg('');
     try {
       // Start streaming into lesson shell
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, explanation: { title: `Generating “${topic}”...`, content_markdown: '' } });
-      const final = await generateExplanationStream(topic, languageContext, (evt) => {
+      const final = await generateExplanationStream(topic, { ...languageContext, signal }, (evt) => {
+        if (signal.aborted) return;
         if (evt?.type === 'delta' || evt?.type === 'prefill') {
           setLesson(prev => prev ? ({ ...prev, explanation: evt.explanation || { title: evt.title || prev.explanation?.title || `Generating “${topic}”...`, content_markdown: (prev.explanation?.content_markdown || '') + (evt.text || '') } }) : prev);
         }
       });
-      mergeLesson({ topic, explanation: final });
+      if (!signal.aborted) mergeLesson({ topic, explanation: final });
     } catch (e) {
+      if (signal.aborted) return;
       setErrorMsg(e.message || 'Failed to generate explanation');
       setLesson(prev => prev ? ({ ...prev, explanation: { ...prev.explanation, title: 'Explanation unavailable' } }) : prev);
     }
-    finally { setLoadingExplOnly(false); }
+    finally { if (!signal.aborted) setLoadingExplOnly(false); }
   };
 
   const generateFIBOnly = async () => {
     if (!topic.trim()) return;
-    setLoadingFibOnly(true);
-    setErrorMsg('');
+    const signal = chapterPool.current.signal;
+    setLoadingFibOnly(true); setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter; if exhausted, fetch a new base text
-      let base = readingBaseText;
-      if (!base) {
-        base = await fetchBaseText({
-          topic,
-          language: languageContext?.language || 'es',
-          level: languageContext?.level || 'B1',
-          challengeMode: !!languageContext?.challengeMode
-        });
-        if (base) setReadingBaseText(base);
-        setReadingChapterCursor(0);
-        readingCursorRef.current = 0;
-      }
-      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
-      const desired = Math.max(1, Math.min(20, Number(exerciseCount)));
-      const collected = [];
-      if (base && chapters.length > 0) {
-        let remaining = desired;
-        let attempts = 0;
-        while (remaining > 0 && attempts < desired) {
-          attempts += 1;
-          let nextIndex = reserveNextReadingChapter(chapters.length);
-          if (nextIndex < 0) {
-            // Exhausted chapters for current base text; fetch a new one and reset cursor
-            const excludeIds = [base.id].filter(Boolean);
-            const newBase = await fetchBaseText({
-              topic,
-              language: languageContext?.language || 'es',
-              level: languageContext?.level || 'B1',
-              challengeMode: !!languageContext?.challengeMode,
-              excludeIds
-            });
-            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
-            base = newBase;
-            setReadingBaseText(newBase);
-            setReadingChapterCursor(0);
-            readingCursorRef.current = 0;
-            chapters = newBase.chapters;
-            nextIndex = reserveNextReadingChapter(chapters.length);
-            if (nextIndex < 0) break;
-          }
-          const chapter = chapters[nextIndex];
-          const batchSize = Math.min(remaining, 10); // Request up to 10 exercises per chapter
-          const resp = await generateFIB(topic, batchSize, { ...languageContext, baseText: base, chapter });
-          if (!Array.isArray(resp?.items) || resp.items.length === 0) {
-            throw new Error('No fill-in-the-blank exercises were returned. Please try again.');
-          }
-          const batch = resp.items.slice(0, remaining);
-          collected.push(...batch);
-          remaining -= batch.length;
-        }
-      }
-      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
-      const items = collected;
-      // Add creation timestamp to each exercise
-      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
+      const data = await generateFromChapters('fib', Math.max(1, Math.min(20, Math.floor(Number(exerciseCount)) || 1)), 10, generateFIB);
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, fill_in_blanks: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate FIB'); }
-    finally { setLoadingFibOnly(false); }
+      mergeLesson({ topic, fill_in_blanks: data.items.map(item => ({ ...item, createdAt: Date.now() })) });
+    } catch (error) { if (signal.aborted) return; setErrorMsg(error.message || 'Failed to generate FIB'); }
+    finally { if (!signal.aborted) setLoadingFibOnly(false); }
   };
 
   const generateMCQOnly = async () => {
     if (!topic.trim()) return;
+    const signal = chapterPool.current.signal;
     setLoadingMcqOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateMCQ(topic, Number(mcqCount), languageContext);
+      const data = await generateMCQ(topic, Number(mcqCount), { ...languageContext, signal });
       // Add creation timestamp to each exercise
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, multiple_choice: timestampedItems });
-      } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate MCQ'); }
-    finally { setLoadingMcqOnly(false); }
+    } catch (e) { if (signal.aborted) return; console.error(e); setErrorMsg(e.message || 'Failed to generate MCQ'); }
+    finally { if (!signal.aborted) setLoadingMcqOnly(false); }
   };
 
   const generateClozeOnly = async () => {
     if (!topic.trim()) return;
-    setLoadingClozeOnly(true);
-    setErrorMsg('');
+    const signal = chapterPool.current.signal;
+    setLoadingClozeOnly(true); setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter; if exhausted, fetch a new base text
-      let base = readingBaseText;
-      if (!base) {
-        base = await fetchBaseText({
-          topic,
-          language: languageContext?.language || 'es',
-          level: languageContext?.level || 'B1',
-          challengeMode: !!languageContext?.challengeMode
-        });
-        if (base) setReadingBaseText(base);
-        setReadingChapterCursor(0);
-        readingCursorRef.current = 0;
-      }
-      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
-      const desired = Math.max(1, Math.min(10, Number(clozeCount)));
-      const collected = [];
-      if (base && chapters.length > 0) {
-        for (let i = 0; i < desired; i++) {
-          let index = reserveNextReadingChapter(chapters.length);
-          if (index < 0) {
-            const excludeIds = [base.id].filter(Boolean);
-            const newBase = await fetchBaseText({
-              topic,
-              language: languageContext?.language || 'es',
-              level: languageContext?.level || 'B1',
-              challengeMode: !!languageContext?.challengeMode,
-              excludeIds
-            });
-            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
-            base = newBase;
-            setReadingBaseText(newBase);
-            setReadingChapterCursor(0);
-            readingCursorRef.current = 0;
-            chapters = newBase.chapters;
-            index = reserveNextReadingChapter(chapters.length);
-            if (index < 0) break;
-          }
-          const chapter = chapters[index];
-          const resp = await generateCloze(topic, { ...languageContext, baseText: base, chapter });
-          if (resp?.items?.[0]) collected.push(resp.items[0]);
-        }
-      }
-      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
-      const items = collected;
-      // Add creation timestamp to each exercise
-      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
+      const data = await generateFromChapters('cloze', Math.max(1, Math.min(10, Math.floor(Number(clozeCount)) || 1)), 1,
+        (currentTopic, _count, context) => generateCloze(currentTopic, context));
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, cloze_passages: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate cloze'); }
-    finally { setLoadingClozeOnly(false); }
+      mergeLesson({ topic, cloze_passages: data.items.map(item => ({ ...item, createdAt: Date.now() })) });
+    } catch (error) { if (signal.aborted) return; setErrorMsg(error.message || 'Failed to generate cloze'); }
+    finally { if (!signal.aborted) setLoadingClozeOnly(false); }
   };
 
   const generateClozeMixOnly = async () => {
     if (!topic.trim()) return;
-    setLoadingClozeMixOnly(true);
-    setErrorMsg('');
+    const signal = chapterPool.current.signal;
+    setLoadingClozeMixOnly(true); setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter; if exhausted, fetch a new base text
-      let base = readingBaseText;
-      if (!base) {
-        base = await fetchBaseText({
-          topic,
-          language: languageContext?.language || 'es',
-          level: languageContext?.level || 'B1',
-          challengeMode: !!languageContext?.challengeMode
-        });
-        if (base) setReadingBaseText(base);
-        setReadingChapterCursor(0);
-        readingCursorRef.current = 0;
-      }
-      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
-      const desired = Math.max(1, Math.min(10, Number(clozeMixCount)));
-      const collected = [];
-      if (base && chapters.length > 0) {
-        for (let i = 0; i < desired; i++) {
-          let index = reserveNextReadingChapter(chapters.length);
-          if (index < 0) {
-            const excludeIds = [base.id].filter(Boolean);
-            const newBase = await fetchBaseText({
-              topic,
-              language: languageContext?.language || 'es',
-              level: languageContext?.level || 'B1',
-              challengeMode: !!languageContext?.challengeMode,
-              excludeIds
-            });
-            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
-            base = newBase;
-            setReadingBaseText(newBase);
-            setReadingChapterCursor(0);
-            readingCursorRef.current = 0;
-            chapters = newBase.chapters;
-            index = reserveNextReadingChapter(chapters.length);
-            if (index < 0) break;
-          }
-          const chapter = chapters[index];
-          const resp = await generateClozeMixed(topic, { ...languageContext, baseText: base, chapter });
-          if (resp?.items?.[0]) collected.push(resp.items[0]);
-        }
-      }
-      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
-      const items = collected;
-      // Add creation timestamp to each exercise
-      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
+      const data = await generateFromChapters('clozeMixed', Math.max(1, Math.min(10, Math.floor(Number(clozeMixCount)) || 1)), 1,
+        (currentTopic, _count, context) => generateClozeMixed(currentTopic, context));
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, cloze_with_mixed_options: timestampedItems });
-      } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate cloze-mixed'); }
-    finally { setLoadingClozeMixOnly(false); }
+      mergeLesson({ topic, cloze_with_mixed_options: data.items.map(item => ({ ...item, createdAt: Date.now() })) });
+    } catch (error) { if (signal.aborted) return; setErrorMsg(error.message || 'Failed to generate cloze-mixed'); }
+    finally { if (!signal.aborted) setLoadingClozeMixOnly(false); }
   };
 
   const generateDialogueOnly = async () => {
     if (!topic.trim()) return;
+    const signal = chapterPool.current.signal;
     setLoadingDialogueOnly(true);
     setErrorMsg('');
     try {
@@ -850,7 +746,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
           try {
             // Try to fetch the base text content from cache
             console.log('Attempting to fetch base text content for ID:', selectedChapter.base_text_id);
-            const baseTextResponse = await apiFetch(`/api/base-text-content/${selectedChapter.base_text_id}`);
+            const baseTextResponse = await apiFetch(`/api/base-text-content/${selectedChapter.base_text_id}`, { signal });
             console.log('Base text response status:', baseTextResponse.status);
 
             if (baseTextResponse.ok) {
@@ -893,6 +789,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
               inspirationContext = selectedChapter;
             }
           } catch (error) {
+            if (signal.aborted) return;
             console.warn('Could not fetch base text content for inspiration:', error);
             // Fall back to metadata-only context if content fetch fails
             inspirationContext = selectedChapter;
@@ -900,80 +797,48 @@ const AIPracticeApp = ({ onNewLesson }) => {
         }
       }
 
+      if (signal.aborted) return;
       console.log('Final inspirationContext being passed to generateGuidedDialogues:', inspirationContext);
-      const data = await generateGuidedDialogues(topic, Number(dialogueCount), languageContext, inspirationContext);
+      const data = await generateGuidedDialogues(topic, Number(dialogueCount), { ...languageContext, signal }, inspirationContext);
       // Add creation timestamp to each exercise
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, guided_dialogues: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate guided dialogues'); }
-    finally { setLoadingDialogueOnly(false); }
+    } catch (e) { if (signal.aborted) return; console.error(e); setErrorMsg(e.message || 'Failed to generate guided dialogues'); }
+    finally { if (!signal.aborted) setLoadingDialogueOnly(false); }
   };
 
   const generateWritingOnly = async () => {
     if (!topic.trim()) return;
+    const signal = chapterPool.current.signal;
     setLoadingWritingOnly(true);
     setErrorMsg('');
     try {
-      const data = await generateWritingPrompts(topic, Number(writingCount), languageContext);
+      const data = await generateWritingPrompts(topic, Number(writingCount), { ...languageContext, signal });
       // Add creation timestamp to each exercise
       const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
       mergeLesson({ topic, writing_prompts: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate writing prompts'); }
-    finally { setLoadingWritingOnly(false); }
+    } catch (e) { if (signal.aborted) return; console.error(e); setErrorMsg(e.message || 'Failed to generate writing prompts'); }
+    finally { if (!signal.aborted) setLoadingWritingOnly(false); }
   };
 
   const [loadingReadingOnly, setLoadingReadingOnly] = useState(false);
   const generateReadingOnly = async () => {
     if (!topic.trim()) return;
-    setLoadingReadingOnly(true);
-    setErrorMsg('');
+    const signal = chapterPool.current.signal;
+    setLoadingReadingOnly(true); setErrorMsg('');
     try {
-      // Try to use base-text-aware generation when possible
-      let data;
-      try {
-        // Reuse an existing base text if available; otherwise create/select a new one
-        let base = readingBaseText;
-        // Avoid creating multiple readings from the same base text: if this base text already
-        // has a reading in the current lesson, fetch a different base text excluding used ones.
-        const usedReadingBaseTextIds = Array.isArray(lesson?.reading_comprehension)
-          ? lesson.reading_comprehension
-              .map(it => it?.base_text_info?.base_text_id || it?.base_text_id)
-              .filter(Boolean)
-          : [];
-        if (!base || (base && usedReadingBaseTextIds.includes(base.id))) {
-          base = await fetchBaseText({
-            topic,
-            language: languageContext?.language || 'es',
-            level: languageContext?.level || 'B1',
-            challengeMode: !!languageContext?.challengeMode,
-            excludeIds: usedReadingBaseTextIds
-          });
-          if (base) setReadingBaseText(base);
-          setReadingChapterCursor(0);
-          readingCursorRef.current = 0;
-        }
-        const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
-        if (base && chapters.length > 0) {
-          const index = reserveNextReadingChapter(chapters.length);
-          if (index >= 0) {
-            const chapter = chapters[index];
-            data = await generateReading(topic, Number(readingCount), { ...languageContext, baseText: base, chapter });
-          }
-        }
-      } catch {
-        // Fallback to non-base-text generation
-      }
-      if (!data) {
-        data = await generateReading(topic, Number(readingCount), languageContext);
-      }
-      // Add creation timestamp to each exercise
-      const timestampedItems = (data.items || []).map(item => ({ ...item, createdAt: Date.now() }));
+      const usedReadingBaseTextIds = (lesson?.reading_comprehension || [])
+        .map(item => item?.base_text_info?.base_text_id || item?.base_text_id).filter(Boolean);
+      const data = await generateFromChapters('reading', Math.max(1, Math.min(5, Math.floor(Number(readingCount)) || 1)), 1, generateReading, usedReadingBaseTextIds);
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, reading_comprehension: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate reading comprehension'); }
-    finally { setLoadingReadingOnly(false); }
+      mergeLesson({ topic, reading_comprehension: data.items.map(item => ({ ...item, createdAt: Date.now() })) });
+    } catch (error) { if (signal.aborted) return; setErrorMsg(error.message || 'Failed to generate reading comprehension'); }
+    finally { if (!signal.aborted) setLoadingReadingOnly(false); }
   };
 
   const handleAnswerChange = (key, value) => {
@@ -988,121 +853,29 @@ const AIPracticeApp = ({ onNewLesson }) => {
   const [loadingRewritingOnly, setLoadingRewritingOnly] = useState(false);
   const generateErrorBundlesOnly = async () => {
     if (!topic.trim()) return;
-    setLoadingErrorBundlesOnly(true);
-    setErrorMsg('');
+    const signal = chapterPool.current.signal;
+    setLoadingErrorBundlesOnly(true); setErrorMsg('');
     try {
-      // Always fetch a base text - the endpoint handles generation if none exist
-      let base = errorBundleBaseText;
-      if (!base) {
-        base = await fetchBaseText({
-          topic,
-          language: languageContext?.language || 'es',
-          level: languageContext?.level || 'B1',
-          challengeMode: !!languageContext?.challengeMode
-        });
-        // fetchBaseText will either return an existing suitable base text or generate a new one
-        // If it throws an error, we let it bubble up
-        setErrorBundleBaseText(base);
-        setErrorBundleChapterCursor(0);
-        errorBundleCursorRef.current = 0;
-      }
-
-      const chapters = Array.isArray(base?.chapters) ? base.chapters : [];
-      const desired = Math.max(2, Math.min(12, Number(errorBundleCount)));
-      const collected = [];
-
-      if (base && chapters.length > 0) {
-        let remaining = desired;
-        let attempts = 0;
-        while (remaining > 0 && attempts < desired) {
-          attempts += 1;
-          const nextIndex = reserveNextErrorBundleChapter(chapters.length);
-          if (nextIndex < 0) break;
-          const chapter = chapters[nextIndex];
-          const batchSize = Math.min(remaining, 5); // Request up to 5 exercises per chapter
-          const resp = await generateErrorBundles(topic, batchSize, { ...languageContext, baseText: base, chapter });
-          if (!Array.isArray(resp?.items) || resp.items.length === 0) {
-            throw new Error('No error bundles were returned. Please try again.');
-          }
-          const batch = resp.items.slice(0, remaining);
-          collected.push(...batch);
-          remaining -= batch.length;
-        }
-      }
-
-      if (!collected.length) throw new Error('No exercises were returned. Please try again.');
-      const items = collected;
-      // Add creation timestamp to each exercise
-      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
+      const count = Math.max(2, Math.min(12, Math.floor(Number(errorBundleCount)) || 2));
+      const data = await generateFromChapters('errorBundle', count, count, generateErrorBundles);
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, error_bundles: timestampedItems, error_bundles_shared_context: '' });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate error bundles'); }
-    finally { setLoadingErrorBundlesOnly(false); }
+      mergeLesson({ topic, error_bundles: data.items.map(item => ({ ...item, createdAt: Date.now() })), error_bundles_shared_context: '' });
+    } catch (error) { if (signal.aborted) return; setErrorMsg(error.message || 'Failed to generate error bundles'); }
+    finally { if (!signal.aborted) setLoadingErrorBundlesOnly(false); }
   };
 
   const generateRewritingOnly = async () => {
     if (!topic.trim()) return;
-    setLoadingRewritingOnly(true);
-    setErrorMsg('');
+    const signal = chapterPool.current.signal;
+    setLoadingRewritingOnly(true); setErrorMsg('');
     try {
-      // Ensure we have a base text and chapter; reuse readingBaseText orchestration for isolated exercises
-      let base = readingBaseText;
-      if (!base) {
-        base = await fetchBaseText({
-          topic,
-          language: languageContext?.language || 'es',
-          level: languageContext?.level || 'B1',
-          challengeMode: !!languageContext?.challengeMode
-        });
-        if (base) setReadingBaseText(base);
-        setReadingChapterCursor(0);
-        readingCursorRef.current = 0;
-      }
-      let chapters = Array.isArray(base?.chapters) ? base.chapters : [];
-      const desired = Math.max(1, Math.min(20, Number(rewritingCount)));
-      const collected = [];
-      if (base && chapters.length > 0) {
-        let remaining = desired;
-        let attempts = 0;
-        while (remaining > 0 && attempts < desired) {
-          attempts += 1;
-          let nextIndex = reserveNextReadingChapter(chapters.length);
-          if (nextIndex < 0) {
-            const excludeIds = [base.id].filter(Boolean);
-            const newBase = await fetchBaseText({
-              topic,
-              language: languageContext?.language || 'es',
-              level: languageContext?.level || 'B1',
-              challengeMode: !!languageContext?.challengeMode,
-              excludeIds
-            });
-            if (!newBase || !Array.isArray(newBase.chapters) || newBase.chapters.length === 0) break;
-            base = newBase;
-            setReadingBaseText(newBase);
-            setReadingChapterCursor(0);
-            readingCursorRef.current = 0;
-            chapters = newBase.chapters;
-            nextIndex = reserveNextReadingChapter(chapters.length);
-            if (nextIndex < 0) break;
-          }
-          const chapter = chapters[nextIndex];
-          const batchSize = Math.min(remaining, 10);
-          const resp = await generateRewriting(topic, batchSize, { ...languageContext, baseText: base, chapter });
-          if (!Array.isArray(resp?.items) || resp.items.length === 0) {
-            throw new Error('No rewriting exercises were returned. Please try again.');
-          }
-          const batch = resp.items.slice(0, remaining);
-          collected.push(...batch);
-          remaining -= batch.length;
-        }
-      }
-      if (!collected.length) throw new Error('No rewriting exercises were returned. Please try again.');
-      const items = collected;
-      const timestampedItems = items.map(item => ({ ...item, createdAt: Date.now() }));
+      const data = await generateFromChapters('rewriting', Math.max(1, Math.min(20, Math.floor(Number(rewritingCount)) || 1)), 10, generateRewriting);
+      if (signal.aborted) return;
       if (!lesson) setLesson(ensureLessonSkeleton());
-      mergeLesson({ topic, rewriting: timestampedItems });
-    } catch (e) { console.error(e); setErrorMsg(e.message || 'Failed to generate rewriting'); }
-    finally { setLoadingRewritingOnly(false); }
+      mergeLesson({ topic, rewriting: data.items.map(item => ({ ...item, createdAt: Date.now() })) });
+    } catch (error) { if (signal.aborted) return; setErrorMsg(error.message || 'Failed to generate rewriting'); }
+    finally { if (!signal.aborted) setLoadingRewritingOnly(false); }
   };
 
   const checkAnswers = () => {
@@ -1179,6 +952,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
   };
 
   const requestExplanation = async (index) => {
+    const signal = chapterPool.current.signal;
     if (explanations[index]) return;
     setLoadingExplanation({ ...loadingExplanation, [index]: true });
     const exercise = exercises[index];
@@ -1186,51 +960,36 @@ const AIPracticeApp = ({ onNewLesson }) => {
     try {
       const response = await apiFetch('/api/explain', {
         method: 'POST',
+        signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, exercise, userAnswer })
       });
       const data = await response.json();
+      if (signal.aborted) return;
       setExplanations({
         ...explanations,
         [index]: data.explanation
       });
     } catch (error) {
+      if (signal.aborted) return;
       console.error('Error getting explanation:', error);
       setExplanations({
         ...explanations,
         [index]: 'Error loading explanation. Please try again.'
       });
     } finally {
-      setLoadingExplanation({ ...loadingExplanation, [index]: false });
+      if (!signal.aborted) setLoadingExplanation({ ...loadingExplanation, [index]: false });
     }
   };
 
   const generateRecommendation = async () => {
+    const signal = chapterPool.current.signal;
     setLoadingRecommendation(true);
     const score = getScore();
     const percentage = score.total > 0 ? (score.correct / score.total) * 100 : 0;
-    const wrongExercises = [];
-    if (lesson) {
-      const eq = (a, b) => normalizeText(a) === normalizeText(b);
-      const collect = (type, items) => {
-        items.forEach((item, idx) => {
-          const key = `lesson:${type}:${idx}`;
-          const val = orchestratorValues[key];
-          let s = { correct: 0, total: 0 };
-          if (type === 'fib') s = scoreFIB(item, val || {}, eq);
-          if (type === 'mcq') s = scoreMCQ(item, val);
-          if (type === 'cloze') s = scoreCloze(item, val || {}, eq);
-          if (type === 'clozeMix') s = scoreClozeMixed(item, val || {}, eq);
-          if (s.correct < s.total) {
-            wrongExercises.push({ type, index: idx, item, userAnswer: val });
-          }
-        });
-      };
-      if (Array.isArray(lesson.fill_in_blanks)) collect('fib', lesson.fill_in_blanks);
-      if (Array.isArray(lesson.multiple_choice)) collect('mcq', lesson.multiple_choice);
-      if (Array.isArray(lesson.cloze_passages)) collect('cloze', lesson.cloze_passages);
-      if (Array.isArray(lesson.cloze_with_mixed_options)) collect('clozeMix', lesson.cloze_with_mixed_options);
-    } else {
+    // Diagnostics use the same item scorers and answer keys as Check Answers.
+    const wrongExercises = lesson ? collectWrongExercises(lesson, orchestratorValues, strictAccents) : [];
+    if (!lesson) {
       exercises.forEach((exercise, index) => {
         if (!isExerciseCorrect(index)) {
           wrongExercises.push({
@@ -1244,15 +1003,18 @@ const AIPracticeApp = ({ onNewLesson }) => {
     try {
       const response = await apiFetch('/api/recommend', {
         method: 'POST',
+        signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, score, percentage, wrongExercises })
       });
       const data = await response.json();
+      if (signal.aborted) return;
       setRecommendation(data);
     } catch (error) {
+      if (signal.aborted) return;
       setErrorMsg(error.message || 'Could not get an AI recommendation. Please try again.');
     } finally {
-      setLoadingRecommendation(false);
+      if (!signal.aborted) setLoadingRecommendation(false);
     }
   };
 
@@ -1266,6 +1028,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
   };
 
   const reset = () => {
+    resetLessonWork();
     setTopic('');
     setExercises([]);
     setUserAnswers({});
@@ -1276,13 +1039,6 @@ const AIPracticeApp = ({ onNewLesson }) => {
     setShowContext({});
     setLesson(null);
     setOrchestratorValues({});
-    setReadingBaseText(null);
-    setReadingChapterCursor(0);
-    setErrorBundleBaseText(null);
-    setErrorBundleChapterCursor(0);
-    // Reset reservation cursors
-    readingCursorRef.current = 0;
-    errorBundleCursorRef.current = 0;
   };
 
   const score = getScore();
@@ -1657,4 +1413,3 @@ const AIPracticeApp = ({ onNewLesson }) => {
 };
 
 export default AIPracticeApp;
-

@@ -149,3 +149,90 @@ test('one cancelled cold catalog lookup does not cancel another same-account req
   pending[1].resolve(Response.json({ models: [{ slug: 'model', visibility: 'list' }] }));
   assert.equal((await second).selectedModel, 'model');
 });
+
+function timedInference(t, { inactivityTimeoutMs = 80, totalTimeoutMs = 800, frames, intervalMs = 20 } = {}) {
+  let cancelled = false, timer;
+  const encoder = new TextEncoder();
+  t.after(() => clearInterval(timer));
+  const inference = createInference({
+    auth: { getAccessToken: async () => 'fixture-token' }, inactivityTimeoutMs, totalTimeoutMs,
+    fetchImpl: async url => {
+      if (url.endsWith('/models')) return Response.json({ models: [{ slug: 'model', visibility: 'list' }] });
+      return new Response(new ReadableStream({
+        start(controller) {
+          let index = 0;
+          controller.enqueue(encoder.encode(event({ type: 'response.created' })));
+          if (!frames) return;
+          timer = setInterval(() => {
+            const frame = frames(index++);
+            if (frame === null) { clearInterval(timer); controller.close(); }
+            else controller.enqueue(encoder.encode(frame));
+          }, intervalMs);
+        },
+        cancel() { cancelled = true; clearInterval(timer); },
+      }), { headers: { 'content-type': 'text/event-stream' } });
+    },
+  });
+  return { inference, get cancelled() { return cancelled; } };
+}
+
+test('stream activity extends the idle deadline before visible output without extending the total deadline', async t => {
+  const fixture = timedInference(t, { frames: index => index < 8 ? ': provider heartbeat\n\n' : event(complete('Finished after continued activity')) });
+  assert.equal(await fixture.inference.generate({ auth: { accountId: 'a' } }, { user: 'Practice' }), 'Finished after continued activity');
+  assert.equal(fixture.cancelled, true, 'reader must close after the terminal event');
+});
+
+test('a stream that becomes genuinely idle times out and releases its reader', async t => {
+  const keepAlive = setInterval(() => {}, 100);
+  t.after(() => clearInterval(keepAlive));
+  const fixture = timedInference(t);
+  await assert.rejects(fixture.inference.generate({ auth: { accountId: 'a' } }, { user: 'Practice' }), error => error.code === 'inference_timeout' && error.status === 504 && /stopped responding/.test(error.message));
+  assert.equal(fixture.cancelled, true);
+});
+
+test('endless active streams still hit the absolute total deadline', async t => {
+  const fixture = timedInference(t, { totalTimeoutMs: 160, frames: () => ': provider heartbeat\n\n' });
+  await assert.rejects(fixture.inference.generate({ auth: { accountId: 'a' } }, { user: 'Practice' }), error => error.code === 'inference_timeout' && error.status === 504 && /too long to finish/.test(error.message));
+  assert.equal(fixture.cancelled, true);
+});
+
+test('caller cancellation still interrupts a progressing stream', async t => {
+  const fixture = timedInference(t, { frames: () => event({ type: 'response.output_text.delta', delta: 'partial' }) });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60);
+  t.after(() => clearTimeout(timer));
+  await assert.rejects(fixture.inference.generate({ auth: { accountId: 'a' }, inferenceSignal: controller.signal }, { user: 'Practice' }), { status: 499, code: 'request_cancelled' });
+  assert.equal(fixture.cancelled, true);
+});
+
+test('local model preference survives adapter restart and falls back when the catalog removes it', async () => {
+  const preferences = new Map(), writes = [];
+  let models = ['first', 'chosen'];
+  const auth = {
+    getAccessToken: async () => 'fixture-token',
+    getModelPreference: async ({ accountId }) => preferences.get(accountId) ?? null,
+    setModelPreference: async ({ accountId }, model) => { writes.push([accountId, model]); preferences.set(accountId, model); },
+  };
+  const create = () => createInference({ auth, catalogTtlMs: 0, fetchImpl: async () => Response.json({ models: models.map(slug => ({ slug, visibility: 'list' })) }) });
+  const req = accountId => ({ auth: { accountId } });
+  let inference = create();
+  await inference.selectModel(req('alice'), 'chosen');
+  inference = create();
+  assert.equal(await inference.getModel(req('alice')), 'chosen');
+  assert.equal(await inference.getModel(req('bob')), 'first');
+  models = ['first'];
+  assert.equal(await inference.getModel(req('alice')), 'first');
+  await assert.rejects(inference.selectModel(req('alice'), 'chosen'), { code: 'invalid_model' });
+  assert.deepEqual(writes, [['alice', 'chosen']], 'catalog fallback must not overwrite the explicit preference');
+  models.push('chosen');
+  assert.equal(await inference.getModel(req('alice')), 'chosen');
+});
+
+test('failed preference persistence does not report or apply a saved model', async () => {
+  const inference = createInference({
+    auth: { getAccessToken: async () => 'fixture-token', getModelPreference: async () => null, setModelPreference: async () => { throw new Error('Storage failed'); } },
+    fetchImpl: async () => Response.json({ models: ['first', 'chosen'].map(slug => ({ slug, visibility: 'list' })) }),
+  });
+  await assert.rejects(inference.selectModel({ auth: { accountId: 'a' } }, 'chosen'), /Storage failed/);
+  assert.equal(await inference.getModel({ auth: { accountId: 'a' } }), 'first');
+});

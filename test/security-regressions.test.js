@@ -61,6 +61,7 @@ async function fixture(t, { rateLimitMax = 120, authRateLimitMax = 120, loginRat
       if (options.schemaName === 'base_text') return JSON.stringify({ title: `${req.auth.accountId} story`, chapters: [{ chapter_number: 1, title: 'At home', content: 'A short practice text.' }] });
       if (options.schemaName === 'explanation') return JSON.stringify({ explanation: `${req.auth.accountId} feedback` });
       if (options.schemaName === 'recommendation') return JSON.stringify({ recommendation: 'Past tense', reasoning: 'Practice a related skill.' });
+      if (options.schemaName === 'reading_from_base_text') return JSON.stringify({ items: Array.from({ length: options.jsonSchema.properties.items.minItems }, (_, index) => ({ title: `Reading ${index + 1}`, passage: options.user })) });
       return JSON.stringify({ items: [{ sentence: `${req.auth.accountId} _____ aquí.`, answer: 'está' }] });
     },
   };
@@ -164,6 +165,26 @@ test('exercise generation, persistence and base-text lookup cannot cross account
   assert.equal((await request(`/api/base-text-content/${generated.id}`)).status, 200);
   assert.equal((await request(`/api/base-text-content/${generated.id}`, { account: 'bob' })).status, 404);
   assert.equal((await request('/api/persist-exercise', { body: { type: '__proto__', items: [{}] } })).status, 400);
+});
+
+test('reading cache honors the chapter prompt and requested count', async t => {
+  const { request, calls } = await fixture(t);
+  const body = (chapter, count) => ({
+    user: `Create exactly ${count} reading sets. Chapter ${chapter}: source passage ${chapter}.`,
+    schemaName: 'reading_from_base_text',
+    metadata: { language: 'es', level: 'B1', topic: 'Present tense', baseTextId: 'same-book', chapterNumber: chapter, count },
+    jsonSchema: { type: 'object', properties: { items: { type: 'array', minItems: count, maxItems: count, items: { type: 'object' } } } },
+  });
+  const first = await (await request('/api/generate', { body: body(1, 1) })).json();
+  assert.equal(first.items.length, 1);
+  const second = await (await request('/api/generate', { body: body(2, 2) })).json();
+  assert.equal(second.items.length, 2);
+  assert.ok(second.items.every(item => item.passage.includes('Chapter 2:')));
+  assert.equal(calls.length, 2, 'a different source chapter must generate its own questions');
+  const cached = await (await request('/api/generate', { body: body(2, 2) })).json();
+  assert.equal(cached.items.length, 2);
+  assert.ok(cached.items.every(item => item.passage.includes('Chapter 2:')));
+  assert.equal(calls.length, 2, 'the same prompt can still reuse its saved exercises');
 });
 
 test('settings change only account models and requests enforce CSRF/input/rate limits', async t => {

@@ -223,38 +223,20 @@ export function scoreReading(item, value) {
  * Generate Reading Comprehension exercises - base text aware version
  */
 export async function generateReading(topic, count = 1, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
-  // Check if we have a base text chapter context
-  if (languageContext.chapter) {
-    return generateReadingFromBaseText(topic, count, languageContext);
+  const requestedCount = Number(count);
+  if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 10) {
+    throw new Error('Choose between 1 and 10 reading sets.');
   }
-  // Single-call path
-  if (count === 1) {
-    return generateSingleReading(topic, null, languageContext);
+  const result = languageContext.chapter
+    ? await generateReadingFromBaseText(topic, requestedCount, languageContext)
+    : await generateStandaloneReading(topic, requestedCount, languageContext);
+  if (!Array.isArray(result?.items) || result.items.length !== requestedCount || result.items.some(item => !item || typeof item.passage !== 'string' || !item.passage.trim())) {
+    throw new Error(`ChatGPT did not return ${requestedCount} complete reading ${requestedCount === 1 ? 'set' : 'sets'}. Please generate them again.`);
   }
-
-  // Multi-call path: sequential requests similar to Cloze/ClozeMixed
-  const allItems = [];
-  const errors = [];
-  for (let i = 0; i < count; i++) {
-    try {
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      const result = await generateSingleReading(topic, i + 1, languageContext);
-      if (result && Array.isArray(result.items)) {
-        allItems.push(...result.items);
-      }
-    } catch (e) {
-      errors.push({ index: i + 1, error: e.message });
-    }
-  }
-  if (allItems.length === 0) {
-    throw new Error(`Failed to generate any reading passages. Errors: ${errors.map(e => `#${e.index}: ${e.error}`).join('; ')}`);
-  }
-  return { items: allItems };
+  return result;
 }
 
-async function generateSingleReading(topic, passageNumber = null, languageContext = { language: 'es', level: 'B1', challengeMode: false }) {
+async function generateStandaloneReading(topic, count, languageContext) {
   const languageName = languageContext.language;
   const level = languageContext.level;
   const challengeMode = languageContext.challengeMode;
@@ -274,41 +256,28 @@ async function generateSingleReading(topic, passageNumber = null, languageContex
 
   const lengthTarget = levelToLength(level);
   const maxNewWords = challengeMode ? 8 : 5;
-  const passageContext = passageNumber ? ` (Set ${passageNumber})` : '';
-
-  const system = `You are a language pedagogy assistant that generates reading comprehension passages with supporting materials.
-
-Requirements:
-- Title: ≤ 60 characters
-- Use natural, real-world language
-- Provide an image_prompt (short, descriptive, no text overlays)
-- Glossary: 3–8 terms (term, part of speech, definition, optional translation, example sentence in target language)
-- True/False: 3–5 statements answerable directly from the passage
-- Comprehension questions: 2–4 with concise model answers
-- Productive prompts: 1–2 with short model answers
-- Opinion questions: exactly 3 with model answers for agree/disagree/neutral
-- Keep content age-appropriate and culturally relevant
-- Return ONLY fields that match the provided JSON schema (no extra text)`;
+  const system = `Create reading comprehension sets in the target language, matching the JSON schema and CEFR level.
+Use distinct, natural passages relevant to the topic. Ground factual questions and answers in each passage.
+Include the glossary and question types specified by the schema, with concise model answers and agree/disagree/neutral answers for opinion questions.
+Keep image prompts descriptive, without text overlays.`;
 
   const suggestion = pickRandomTopicSuggestion({ ensureNotEqualTo: topic });
   const topicLine = formatTopicSuggestionForPrompt(suggestion, { prefix: 'Unless the topic relates to specific vocabulary, you may use the following topic suggestion for variety' });
 
-  const user = `Task: Create exactly 1 reading comprehension set${passageContext}.
+  const user = `Task: Create exactly ${count} reading comprehension sets.
 Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging; allow more complex syntax and subordinate clauses)' : ''}
 Topic: ${topic}
 Passage length target: ${lengthTarget}
 Max new vocabulary terms: ${maxNewWords}
 
-${topicLine}
-
-Return STRICT JSON only per schema.`;
+${topicLine}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', minItems: 1, maxItems: 1, items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string', maxLength: 60 },
@@ -376,13 +345,14 @@ Return STRICT JSON only per schema.`;
 
   const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
       user,
       jsonSchema: schema,
       schemaName: 'reading_list',
-      metadata: { language: languageName, level, challengeMode, topic }
+      metadata: { language: languageName, level, challengeMode, topic, count }
     })
   });
 
@@ -407,20 +377,12 @@ async function generateReadingFromBaseText(topic, count = 1, languageContext) {
     throw new Error('No base text chapter provided for reading comprehension');
   }
 
-  const system = `You are creating reading comprehension exercises based on a provided text passage.
+  const system = `Create reading comprehension sets in the target language, matching the JSON schema and CEFR level.
+Use the supplied passage unchanged. Ground factual questions and answers in it, without invented facts.
+Include passage vocabulary and the question types specified by the schema, with concise model answers and agree/disagree/neutral answers for opinion questions.
+When several sets are requested, vary the questions. Keep image prompts descriptive, without text overlays.`;
 
-Requirements:
-- Create an appropriate title (≤ 60 characters) reflecting the chapter content
-- Generate an image_prompt that captures the scene/mood of the specific chapter
-- Identify 4–6 key vocabulary terms from the passage (POS, definition, translation, example)
-- Extract 4–5 TRUE/FALSE statements verifiable directly from the text
-- Create 3–4 comprehension questions with concise model answers
-- Provide 1–2 productive prompts with short model answers
-- Create exactly 3 opinion questions with agree/disagree/neutral model answers
-- Use ONLY the provided passage; do not invent facts
-- Return ONLY fields that match the provided JSON schema (no extra text)`;
-
-  const user = `Task: Create exactly 1 reading comprehension set based on a provided passage.
+  const user = `Task: Create exactly ${count} reading comprehension sets based on the provided passage.
 Target Language: ${languageName}
 Target Level: ${level}${challengeMode ? ' (slightly challenging analysis)' : ''}
 Topic: ${topic}
@@ -429,15 +391,13 @@ Source: ${baseText?.title || 'Unknown'}
 
 **Chapter: ${chapter.title}**
 **Passage:**
-${chapter.passage}
-
-Return STRICT JSON only per schema.`;
+${chapter.passage}`;
 
   const schema = {
     type: 'object', additionalProperties: false,
     properties: {
       items: {
-        type: 'array', minItems: 1, maxItems: 1, items: {
+        type: 'array', minItems: count, maxItems: count, items: {
           type: 'object', additionalProperties: false,
           properties: {
             title: { type: 'string', maxLength: 60 },
@@ -515,6 +475,7 @@ Return STRICT JSON only per schema.`;
 
   const response = await apiFetch('/api/generate', {
     method: 'POST',
+    signal: languageContext.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system,
@@ -526,6 +487,7 @@ Return STRICT JSON only per schema.`;
         level, 
         challengeMode, 
         topic,
+        count,
         baseTextId: baseText?.id,
         chapterNumber: chapter?.number,
         chapterTitle: chapter?.title
@@ -540,16 +502,16 @@ Return STRICT JSON only per schema.`;
   const result = await response.json();
   
   // Add base text metadata to the result
-  if (result.items && result.items[0]) {
-    result.items[0].base_text_info = {
+  for (const item of result?.items || []) {
+    if (!item || typeof item !== 'object') continue;
+    item.base_text_info = {
       base_text_id: baseText?.id,
       chapter_number: chapter?.number, 
       chapter_title: chapter?.title
     };
     // Ensure we use the original passage
-    result.items[0].passage = chapter.passage;
+    item.passage = chapter.passage;
   }
 
   return result;
 }
-
