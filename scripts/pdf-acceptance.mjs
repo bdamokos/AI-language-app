@@ -1,7 +1,7 @@
 // Render the app's actual nested PDF document from saved educational outputs.
 // Usage: node scripts/pdf-acceptance.mjs INPUT_DIRECTORY OUTPUT_DIRECTORY
 // Add --allow-partial only for a diagnostic document with incomplete coverage.
-// This checks PDF generation, content and links; it does not test browser download.
+// This checks PDF generation, content and page bounds; it does not test browser download.
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -97,9 +97,31 @@ try {
     assert.ok(text.includes(heading), `PDF is missing section: ${heading}`);
   }
   assert.ok(!text.includes('\uFFFD'), 'PDF contains undecodable replacement characters');
+  // Check the rendered positions, rather than assuming that successful PDF
+  // generation means long answer blanks fit. Page styles use 40-point margins.
+  const bounds = execFileSync('pdftotext', ['-bbox-layout', pdfPath, '-'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  const overflow = [];
+  let pageNumber = 0;
+  for (const page of bounds.matchAll(/<page width="([\d.]+)" height="([\d.]+)">([\s\S]*?)<\/page>/g)) {
+    pageNumber++;
+    for (const word of page[3].matchAll(/<word xMin="([\d.-]+)" yMin="([\d.-]+)" xMax="([\d.-]+)" yMax="([\d.-]+)">([\s\S]*?)<\/word>/g)) {
+      if (Number(word[1]) < 39 || Number(word[3]) > Number(page[1]) - 39) {
+        overflow.push({ page: pageNumber, xMin: Number(word[1]), xMax: Number(word[3]), text: word[5].slice(0, 40) });
+      }
+    }
+  }
+  assert.equal(pageNumber, loaded.getPageCount(), 'Every PDF page needs a bounds check');
+  assert.deepEqual(overflow, [], 'PDF text extends into the page margins');
+  const normalizedText = text.replace(/-\s*\n\s*/g, '').replace(/\s+/g, '');
+  for (const answer of [
+    ...(lesson.rewriting || []).map(item => item.answer),
+    ...(lesson.guided_dialogues || []).flatMap(item => item.turns.map(turn => turn.text))
+  ]) {
+    assert.ok(normalizedText.includes(answer.replace(/\s+/g, '')), 'A full rewriting or dialogue model answer is missing');
+  }
   const report = {
     pdfPath, sourceHash, pages: loaded.getPageCount(), bytes: bytes.length,
-    included, missing, textCharacters: text.length,
+    included, missing, textCharacters: text.length, textOverflow: overflow,
     scope: 'Actual PDF document rendered offline; browser download and image loading are not exercised.'
   };
   await writeFile(join(outputDirectory, 'pdf-report.json'), JSON.stringify(report, null, 2));

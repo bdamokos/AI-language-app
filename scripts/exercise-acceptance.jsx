@@ -175,7 +175,7 @@ export function validateExerciseItem(type, item) {
       nonempty(sentence.text, 'Error bundle sentence'); nonempty(sentence.rationale, 'Error bundle rationale');
       if (!sentence.correct) nonempty(sentence.fix, 'Error bundle correction');
     });
-    assert.equal(new Set(item.sentences.map(sentence => normalizeText(sentence.text, true))).size,
+    assert.equal(new Set(item.sentences.map(sentence => sentence.text.normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase())).size,
       4, 'Error bundle sentences must be distinct');
     correctValue = item.sentences.findIndex(sentence => sentence.correct);
     incorrectValue = item.sentences.findIndex(sentence => !sentence.correct);

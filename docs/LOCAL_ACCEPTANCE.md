@@ -1,6 +1,6 @@
 # Local ChatGPT acceptance
 
-Live verification on 4 October 2026 used the app's own authorized ChatGPT connection, GPT-5.6-Sol, Spanish B1, and the topic `pluscuamperfect`. The test used the actual frontend generators, API routes, Responses stream parser, exercise renderers, and scoring functions. An isolated, capability-protected loopback transport kept test caches separate from the user's lesson. No mock provider responses were used for these results.
+Live verification on 4 October 2026 used the app's own authorized ChatGPT connection, GPT-5.6-Sol, Spanish B1, and the user-entered topic `pluscuamperfect` (recorded verbatim; the standard Spanish term is `pluscuamperfecto`). The test used the actual frontend generators, API routes, Responses stream parser, exercise renderers, and scoring functions. An isolated, capability-protected loopback transport kept test caches separate from the user's lesson. No mock provider responses were used for these results.
 
 | Flow | Requested output | Result | Time |
 | --- | --- | --- | --- |
@@ -22,7 +22,17 @@ Each scored exercise was checked with its correct answer and an incorrect answer
 
 An earlier cold FIB run with GPT-6-Astra also produced 10 valid items in 94.7 seconds. Model latency varies. Live checks cover the listed language, level, counts, and models; they are not a guarantee of every possible model output.
 
-The regression suite passes 129 tests, including authentication, account isolation, refresh/logout, shutdown cancellation, stream inactivity and total deadlines, persisted model selection, chapter failure/retry behavior, exact counts, cache context, and invalid answer structures. Production dependency audit: zero known advisories. Existing development-tool advisories are separate from this result.
+The regression suite passes 133 tests, including authentication, account isolation, refresh/logout, shutdown cancellation, stream inactivity and total deadlines, persisted model selection, chapter failure/retry behavior, exact counts, cache context, invalid answer structures, tutorial dismissal, and PDF export. Production dependency audit: zero known advisories. Existing development-tool advisories are separate from this result.
+
+## Browser and PDF checks
+
+A separate browser regression preview replayed the saved live outputs through the actual lesson component. It was labelled as recorded verification and had no account credentials or inference access. FIB rendered ten editable blanks; nine correct answers scored 9/10, then correcting the last answer scored 10/10. The PDF button produced an application/pdf download without an alert.
+
+Tutorial Skip removed the dialog and overlay immediately and saved dismissal. Reloading, starting a lesson, and resetting to language selection did not reopen it. Help explicitly reopened it; Close removed it again. Automated ReactDOM/Joyride checks also cover Finish and timer races.
+
+The full saved lesson exported to a 25-page PDF containing all nine exercise families and complete answer keys. Text extraction, page-bound checks, and visual inspection found no horizontal overflow. Regression coverage includes long answer lines, narrow table cells, the first Markdown table row, and a pagination loop triggered by a wrapping block's bottom margin.
+
+Safari sign-in and live explanation rendering were confirmed earlier in the session; its native automation window subsequently became unavailable. The final tutorial and input-interaction checks used the collaborative browser preview, not a fresh Safari authentication run.
 
 ## Reusable checks
 

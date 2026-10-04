@@ -212,11 +212,13 @@ test('both cloze formats make one request and retain six answerable blanks at th
 });
 
 test('cloze rejects insufficient blanks, hidden text blanks and ambiguous answers without retrying', async t => {
-  const outputs = [unifiedCloze(0), unifiedCloze(5), unifiedCloze(), unifiedCloze()];
+  const outputs = [unifiedCloze(0), unifiedCloze(5), unifiedCloze(), unifiedCloze(), unifiedCloze(), unifiedCloze()];
   outputs[2].items[0].segments[0].content = 'Ana _____ llegado.';
   outputs[3].items[0].segments[1].distractors[0] = 'había';
+  outputs[4].items[0].segments[1].distractors[0] = ' HABÍA ';
+  outputs[5].items[0].segments[1].distractors[0] = 'habi\u0301a';
   const calls = generatorTransport(t, () => Response.json(outputs.shift()));
-  for (let index = 0; index < 4; index++) {
+  for (let index = 0; index < 6; index++) {
     await assert.rejects(generators.generateCloze('pluscuamperfecto', context), /cloze/);
     assert.equal(calls.length, index + 1);
   }

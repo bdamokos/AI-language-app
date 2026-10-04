@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { BookOpen, Send, Check, X, RefreshCw, HelpCircle, Lightbulb, Info, ChevronRight, Globe, GraduationCap } from 'lucide-react';
-import Joyride, { STATUS } from 'react-joyride';
+import Joyride from 'react-joyride';
 import { schemaVersions } from '../shared/schemaVersions.js';
 import Orchestrator, { scoreLesson, generateLesson } from './exercises/Orchestrator.jsx';
 import { scoreFIB, generateFIB } from './exercises/FIBExercise.jsx';
@@ -21,6 +21,7 @@ import LanguageLevelSelector from './LanguageLevelSelector.jsx';
 import PDFExport from './components/PDFExport.jsx';
 import useBaseText from './hooks/useBaseText.js';
 import { createChapterPool } from './utils/chapterPool.js';
+import useOnboardingTour from './hooks/useOnboardingTour.js';
 
 export function collectWrongExercises(lesson, values, strictAccents = true) {
   const eq = (a, b) => normalizeTextUtil(a, strictAccents) === normalizeTextUtil(b, strictAccents);
@@ -114,29 +115,12 @@ const AIPracticeApp = ({ onNewLesson }) => {
   };
 
   // Onboarding / tour state
-  const [isPreTourRunning, setIsPreTourRunning] = useState(false);
-  const [isPostTourRunning, setIsPostTourRunning] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
-  const ONBOARDING_VERSION = String(schemaVersions?.onboarding ?? 1);
-  const ONBOARDING_COOKIE_NAME = 'onboarding_version';
-
-  const getCookie = (name) => {
-    if (typeof document === 'undefined') return undefined;
-    const pair = document.cookie.split('; ').find(row => row.startsWith(name + '='));
-    return pair ? decodeURIComponent(pair.split('=')[1]) : undefined;
-  };
-  const setCookie = (name, value, days = 365) => {
-    if (typeof document === 'undefined') return;
-    const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
-    document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
-  };
-
-  const hasSeenOnboarding = () => {
-    const v = getCookie(ONBOARDING_COOKIE_NAME);
-    // Support legacy string format like 'v1'
-    if (v && v.startsWith('v')) return v.substring(1) === ONBOARDING_VERSION;
-    return v === ONBOARDING_VERSION;
-  };
+  const onboarding = useOnboardingTour({
+    version: schemaVersions?.onboarding ?? 1,
+    phase: languageContext ? 'post' : 'pre',
+    ready: !languageContext || Boolean(lesson?.explanation?.content_markdown && !loadingLesson && !loadingExplOnly),
+  });
 
   const preTourSteps = [
     {
@@ -171,7 +155,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
     },
     {
       target: '#start-lesson-button',
-      content: 'All set! Click here to generate your lesson and explanation. The tutorial will continue on the lesson page. \n \n Please be aware that the AI may create gibberish or plausible sounding but incorrect content. Please check the explanation and exercises carefully.',
+      content: 'All set! Click here to generate your lesson and explanation. You can reopen the tutorial from Help after your lesson starts. \n \n Please be aware that the AI may create gibberish or plausible sounding but incorrect content. Please check the explanation and exercises carefully.',
       placement: 'top'
     }
   ];
@@ -198,46 +182,6 @@ const AIPracticeApp = ({ onNewLesson }) => {
       placement: 'center'
     }
   ];
-
-  useEffect(() => {
-    // Auto-start pre-tour on language selection screen
-    if (!languageContext && !hasSeenOnboarding()) {
-      const t = setTimeout(() => setIsPreTourRunning(true), 300);
-      return () => clearTimeout(t);
-    }
-  }, [languageContext]);
-
-  useEffect(() => {
-    // Stop pre-tour if we left the selection page
-    if (languageContext && isPreTourRunning) {
-      setIsPreTourRunning(false);
-    }
-  }, [languageContext, isPreTourRunning]);
-
-  useEffect(() => {
-    // Auto-start post-tour once explanation is present, only if user has not seen this version
-    if (lesson?.explanation?.content_markdown && !loadingLesson && !loadingExplOnly && !hasSeenOnboarding()) {
-      const t = setTimeout(() => setIsPostTourRunning(true), 300);
-      return () => clearTimeout(t);
-    }
-  }, [lesson, loadingLesson, loadingExplOnly]);
-
-  const handlePostJoyrideCallback = (data) => {
-    const { status } = data;
-    if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
-      // Store as plain number string to simplify future comparisons
-      setCookie(ONBOARDING_COOKIE_NAME, ONBOARDING_VERSION, 365);
-      setIsPostTourRunning(false);
-    }
-  };
-
-  const handlePreJoyrideCallback = (data) => {
-    const { status } = data;
-    // Allow manual control if needed later; for now simply stop when user finishes or skips
-    if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
-      setIsPreTourRunning(false);
-    }
-  };
 
   const normalizeText = (text) => normalizeTextUtil(text, strictAccents);
 
@@ -1046,36 +990,36 @@ const AIPracticeApp = ({ onNewLesson }) => {
   return (
     <div className="w-full min-w-0 max-w-4xl mx-auto p-4 sm:p-6 bg-white rounded-lg shadow-lg">
       {/* Pre-lesson tour (language selection) */}
-      {!languageContext && (
+      {!languageContext && onboarding.activeTour === 'pre' && (
         <Joyride
-          steps={preTourSteps}
-          run={isPreTourRunning}
+          key={`pre:${onboarding.runId}`}
+          steps={preTourSteps.map(step => ({ ...step, disableBeacon: true }))}
+          run
           continuous
           showSkipButton
           showProgress
-          disableBeacon
           disableScrolling={false}
           scrollToFirstStep
           locale={{ last: 'Finish' }}
           spotlightPadding={8}
-          callback={handlePreJoyrideCallback}
+          callback={onboarding.onCallback}
         />
       )}
 
       {/* Post-lesson tour (in-lesson/exercises) */}
-      {languageContext && (
+      {languageContext && onboarding.activeTour === 'post' && (
         <Joyride
-          steps={postTourSteps}
-          run={isPostTourRunning}
+          key={`post:${onboarding.runId}`}
+          steps={postTourSteps.map(step => ({ ...step, disableBeacon: true }))}
+          run
           continuous
           showSkipButton
           showProgress
-          disableBeacon
           disableScrolling={false}
           scrollToFirstStep
           locale={{ last: 'Finish' }}
           spotlightPadding={8}
-          callback={handlePostJoyrideCallback}
+          callback={onboarding.onCallback}
         />
       )}
 
@@ -1111,11 +1055,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
               <button
                 onClick={() => {
                   setIsHelpOpen(false);
-                  if (!languageContext) {
-                    setIsPreTourRunning(true);
-                  } else {
-                    setIsPostTourRunning(true);
-                  }
+                  onboarding.start();
                 }}
                 className="px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
               >

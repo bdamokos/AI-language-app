@@ -14,6 +14,8 @@ Font.register({
   ]
 });
 
+const wrapBlankRuns = (value) => String(value).replace(/_{13,}/g, blank => blank.match(/.{1,12}/g).join(' '));
+
 // PDF Styles
 const styles = StyleSheet.create({
   page: {
@@ -134,6 +136,10 @@ const styles = StyleSheet.create({
   },
   block: {
     padding: 10,
+    // Include trailing space in the splittable box. A bottom margin can make
+    // React-PDF move a nearly full continuation to the next page indefinitely.
+    marginBottom: 0,
+    paddingBottom: 35,
     borderRadius: 6
   },
   anchorTag: {
@@ -198,7 +204,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       
       // Collect images from global store (set by exercise components)
       if (window.globalImageStore) {
-        console.log('[PDF] Global image store contents:', window.globalImageStore);
         Object.assign(images, window.globalImageStore);
       }
 
@@ -227,7 +232,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         });
       }
 
-      console.log('[PDF] Collected images:', images);
       setCollectedImages(images);
     };
 
@@ -255,7 +259,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           reader.readAsDataURL(blob);
         });
       } catch (e) {
-        console.log('[PDF] Failed to fetch image for data URI:', url, e);
         return null;
       }
     };
@@ -448,7 +451,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       if (tableRows.length > 0) {
         // Render table
         const headerRow = tableRows[0];
-        const dataRows = tableRows.slice(2); // Skip header and separator row
+        const dataRows = tableRows.slice(1); // Separator rows were already filtered while parsing.
         
         elements.push(
           <View key={`table-${elements.length}`} style={{
@@ -468,7 +471,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                   borderRight: cellIdx < headerRow.length - 1 ? '1 solid #d1d5db' : 'none'
                 }}>
                   <Text style={[styles.text, { fontWeight: 'bold', fontSize: 11 }]}>
-                    {cell.trim()}
+                    {wrapBlankRuns(cell.trim())}
                   </Text>
                 </View>
               ))}
@@ -487,7 +490,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                     borderRight: cellIdx < row.length - 1 ? '1 solid #e5e7eb' : 'none'
                   }}>
                     <Text style={[styles.text, { fontSize: 10 }]}>
-                      {cell.trim()}
+                      {wrapBlankRuns(cell.trim())}
                     </Text>
                   </View>
                 ))}
@@ -508,7 +511,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
           isHeaderRow = true;
         }
         
-        const cells = line.split('|').map(cell => cell.trim()).filter(cell => cell);
+        const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
         
         // Skip separator rows (contain only dashes and pipes)
         if (!line.match(/^\s*\|?\s*:?-+:?\s*\|/)) {
@@ -594,11 +597,21 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     return elements;
   };
 
-  // Helper to build a blank string proportional to expected answer length
+  // Keep proportional inline blanks breakable inside narrow columns.
   const buildBlank = (expected = '', factor = 2.7) => {
     const len = Math.max(8, Math.round(String(expected || '').length * factor));
-    return Array(len).fill('_').join('');
+    return wrapBlankRuns('_'.repeat(len));
   };
+
+  // A sentence answer uses the available column width, including when indented
+  // after a dialogue speaker. More text adds lines instead of widening the page.
+  const renderAnswerLines = (expected = '', minimum = 1) => (
+    <View style={{ width: '100%' }}>
+      {Array.from({ length: Math.max(minimum, Math.ceil(String(expected).length / 60)) }, (_, index) => (
+        <View key={index} style={{ height: 20, borderBottom: '0.5 solid #6b7280', marginBottom: 3 }} />
+      ))}
+    </View>
+  );
 
   // Helper function to render FIB blanks proportional to expected answers
   const renderBlanks = (text, answers = []) => {
@@ -619,7 +632,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         const expected = Array.isArray(answers) && answers.length > 0 ? (answers[i] || answers[0] || '') : '';
         const underscores = buildBlank(expected);
         elements.push(
-          <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> {underscores}</Text>
+          <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier', maxWidth: '100%' }]}> {underscores}</Text>
         );
       }
     }
@@ -651,11 +664,9 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
   // Helper function to render Cloze Mixed with inline options and footnotes
   const renderClozeMixedWithOptions = (item) => {
     if (!item?.passage) {
-      console.log('[PDF] ClozeMixed item has no passage:', item);
       return { elements: [], footnotes: [] };
     }
 
-    console.log('[PDF] Rendering ClozeMixed item:', item);
     
     const parts = item.passage.split('_____');
     const blanks = Array.isArray(item.blanks) ? item.blanks : [];
@@ -663,7 +674,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     const footnotes = [];
     let footnoteCounter = 1;
 
-    console.log('[PDF] ClozeMixed parts:', parts.length - 1, 'blanks:', blanks.length);
 
     for (let i = 0; i < parts.length; i++) {
       // Add text part
@@ -678,7 +688,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       // Add options inline instead of blank
       if (i < parts.length - 1) {
         const blank = blanks.find(b => b.index === i) || { options: [], hint: '' };
-        console.log(`[PDF] Blank ${i}:`, blank);
         
         if (blank.options && blank.options.length > 0) {
           const optionsText = `[${blank.options.join(' / ')}]`;
@@ -712,7 +721,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       }
     }
 
-    console.log('[PDF] ClozeMixed elements generated:', elements.length, 'footnotes:', footnotes.length);
     return { elements, footnotes };
   };
 
@@ -752,7 +760,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         }
         
         elements.push(
-          <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier' }]}> 
+          <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier', maxWidth: '100%' }]}>
             {underscores}
             {footnoteNumber && (
               <Text style={[styles.inlineText, { fontSize: 9 }]}>[{footnoteNumber}]</Text>
@@ -1081,10 +1089,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
 
   // Helper function to render an image with proper error handling
   const renderImage = (imageData, caption) => {
-    console.log('[PDF] Attempting to render image:', imageData);
     
     if (!imageData?.data?.[0]) {
-      console.log('[PDF] No image data found');
       return null;
     }
 
@@ -1092,10 +1098,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
     // Prefer embedded data URIs first to avoid remote fetch/CORS issues
     const imageSource = image.imageDataURI || image.imageBase64Data || image.url || image.imageURL;
     
-    console.log('[PDF] Image source:', imageSource);
     
     if (!imageSource) {
-      console.log('[PDF] No valid image source found');
       return null;
     }
 
@@ -1448,13 +1452,13 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           const isHiddenTurn = hiddenSpeaker && turn.speaker === hiddenSpeaker;
                           const shouldShowTurn = !isHiddenTurn || (firstHiddenIdx !== -1 && ti === firstHiddenIdx);
                           return (
-                            <View key={`dlg-${blockIdx}-${i}-${ti}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 }}>
+                            <View key={`dlg-${blockIdx}-${i}-${ti}`} style={{ flexDirection: 'row', marginBottom: 2 }}>
                               <Text style={[styles.inlineText, { fontWeight: 'bold', marginRight: 6 }]}>{(turn.speaker || '—') + ':'}</Text>
-                              {shouldShowTurn ? (
-                                <Text style={styles.inlineText}>{turn.text}</Text>
-                              ) : (
-                                <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> {buildBlank(turn.text || '', 1.5)}</Text>
-                              )}
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                {shouldShowTurn ? (
+                                  <Text style={styles.inlineText}>{turn.text}</Text>
+                                ) : renderAnswerLines(turn.text)}
+                              </View>
                             </View>
                           );
                         })}
@@ -1510,12 +1514,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                       {item.original && (
                         <Text style={styles.text}>Original: {item.original}</Text>
                       )}
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> {buildBlank(item.answer || '', 1.5)}
-                        {hintNumber && (
-                          <Text style={[styles.inlineText, { fontSize: 9 }]}>[{hintNumber}]</Text>
-                        )}
-                      </Text>
-                      <Text style={[styles.inlineText, { fontFamily: 'Courier' }]}> {buildBlank(item.answer || '', 1.5)}</Text>
+                      {hintNumber && <Text style={[styles.inlineText, { fontSize: 9 }]}>Hint [{hintNumber}]</Text>}
+                      {renderAnswerLines(item.answer, 2)}
                       {item.context && (
                         <Text style={styles.context}>Context: {item.context}</Text>
                       )}
@@ -1869,8 +1869,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
 
     setIsGenerating(true);
     try {
-      console.log('[PDF] Starting PDF generation with lesson:', lesson);
-      console.log('[PDF] ClozeMixed items:', lesson.cloze_with_mixed_options);
       // Refresh collected images from the global store right before rendering
       const latest = { ...(window.globalImageStore || {}) };
       if (lesson.cloze_passages) {
@@ -1899,8 +1897,6 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('PDF generation failed with error:', error);
-      console.error('Error stack:', error.stack);
-      console.error('Lesson data:', lesson);
       
       // More user-friendly error message
       const errorMsg = error.message || 'Unknown error occurred during PDF generation';

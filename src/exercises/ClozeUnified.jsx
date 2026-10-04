@@ -380,6 +380,7 @@ export function validateUnifiedClozeItem(item) {
   }
   const invalid = () => { throw new Error('ChatGPT returned a cloze blank with missing or ambiguous answers. Please generate it again.'); };
   const text = value => typeof value === 'string' && value.trim().length > 0;
+  const answerKey = value => value.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
   const isFlat = item.segments.every(segment => segment && typeof segment === 'object' && !('type' in segment));
   let blankCount = 0;
   for (const segment of item.segments) {
@@ -388,14 +389,14 @@ export function validateUnifiedClozeItem(item) {
       if (typeof segment.content !== 'string' || /_{3,}/.test(segment.content)) invalid();
     } else if (segment.type === 'blank') {
       const options = [segment.solution, ...(Array.isArray(segment.distractors) ? segment.distractors : [])];
-      if (options.length < 4 || options.some(value => !text(value)) || new Set(options.map(value => value.trim())).size !== options.length) invalid();
+      if (options.length < 4 || options.some(value => !text(value)) || new Set(options.map(answerKey)).size !== options.length) invalid();
       blankCount += 1;
     } else if (isFlat && Array.isArray(segment.options)) {
       // Previously saved stepwise exercises use one flat segment per sentence.
       if (typeof segment.preceding_text !== 'string' || typeof segment.succeeding_text !== 'string' || /_{3,}/.test(segment.preceding_text + segment.succeeding_text)) invalid();
       if (segment.options.length) {
         const options = segment.options;
-        if (options.length < 3 || options.some(option => !text(option?.text)) || options.filter(option => option.correct === true).length !== 1 || new Set(options.map(option => option.text.trim())).size !== options.length) invalid();
+        if (options.length < 3 || options.some(option => !text(option?.text)) || options.filter(option => option.correct === true).length !== 1 || new Set(options.map(option => answerKey(option.text))).size !== options.length) invalid();
         blankCount += 1;
       }
     } else invalid();
