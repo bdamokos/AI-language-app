@@ -14,7 +14,10 @@
     "preview:fixture": "npm run build && node scripts/preview-fixture.js",
     "local": "npm run build && node server/local.js",
     "start:local": "node server/local.js",
-    "preview:local-fixture": "npm run build && node scripts/preview-fixture.js --local"
+    "preview:local-fixture": "npm run build && node scripts/preview-fixture.js --local",
+    "start:hosted": "NODE_ENV=production node server/hosted.js",
+    "dev:hosted": "concurrently -k -n frontend,backend -c blue,green \"vite --config vite.hosted.config.js\" \"nodemon server/hosted.js\"",
+    "preview:hosted-fixture": "npm run build && node scripts/preview-fixture.js --hosted"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.3.0",
