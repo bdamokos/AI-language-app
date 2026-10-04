@@ -2,11 +2,42 @@
 
 Language practice with grammar explanations, reading passages, and interactive exercises. Each learner signs in with ChatGPT and authorizes requests against their own eligible ChatGPT plan.
 
-## Hosted sign-in prerequisite
+## Run on your own computer
+
+Requires Node.js 22.12 or newer. From this checkout:
+
+```sh
+npm ci
+npm run local
+```
+
+Open **http://127.0.0.1:3210**, choose **Continue with ChatGPT**, and allow Language AI App to use your ChatGPT plan. Choose a language, level, and topic to start a lesson. Your account's eligibility and usage limits apply. This uses OpenAI's [self-service registration for local open-source clients](https://developers.openai.com/siwc/token-sharing-open-source/sign-in); no website approval, API key, or OpenRouter subscription is needed. OpenAI's preview may still be unavailable to a particular account, workspace, or region.
+
+Keep the terminal open while using the app; press Ctrl+C to stop. After the first build, `npm run start:local` starts it again. Re-run `npm run local` after updating the source. The local entrypoint ignores hosted `.env`, `HOST`, `APP_ORIGIN`, OAuth client settings, and proxy settings. It always binds to `127.0.0.1`; do not expose it through a tunnel, reverse proxy, or shared host.
+
+Accounts and lessons survive restarts in your operating system's private application-data directory:
+
+| System | Data directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/Language AI App` |
+| Windows | `%LOCALAPPDATA%\Language AI App` |
+| Linux | `$XDG_DATA_HOME/language-ai-app`, or `~/.local/share/language-ai-app` |
+
+Credentials stay in encrypted files under `auth/`, with an owner-only encryption key alongside them; lessons stay under `cache/` in separate account directories. Protect this whole directory as credentials, including backups. Filesystem permissions on Windows also depend on your user's profile-directory ACLs. Tokens are never saved in browser storage. The app does not use another program's ChatGPT credentials.
+
+Local mode is intended for your own trusted computer and OS session. Loopback HTTP cookies are shared across ports, so other local services and users on that computer are part of the trust boundary.
+
+Choose a saved account to sign in again, or **Add another ChatGPT account**. Each registration stays separate, including registrations sharing an email address. Signing out stops requests, attempts remote revocation, and removes that account's local tokens while retaining its registration for a later sign-in. You can also disconnect the app in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage).
+
+Optional settings are `LANGUAGE_AI_PORT` (default `3210`) and `LANGUAGE_AI_DATA_DIR` (default above). Keep the same data directory to reuse your host identifier and registrations. A different loopback port is allowed on later launches; always open the exact `127.0.0.1` address printed in the terminal.
+
+Only one process can use a data directory at a time. A second launch refuses to start. After an abrupt crash, inspect `runtime.lock/owner.json` inside the data directory and verify that its process has stopped before removing the `runtime.lock` directory. The app never steals this lock after a timeout, including when a computer sleeps.
+
+## Hosted website
 
 OpenAI must approve the website for **Sign in with ChatGPT and ChatGPT plan usage**. [Apply for access](https://openai.com/form/sign-in-with-chatgpt-interest/) and register the exact callback URL, normally `https://YOUR_DOMAIN/api/auth/callback`.
 
-An identity-only client cannot run inference. The open-source dynamic registration flow uses a local loopback callback and is not a substitute for approval of a shared hosted website. This app uses the registered hosted flow, with no shared provider key or automatic billing fallback. Until a client is configured, the site shows a setup message and refuses generation requests.
+An identity-only client cannot run inference. The open-source dynamic registration flow uses a local loopback callback and is not a substitute for approval of a shared hosted website. The hosted `npm start` entrypoint uses the registered hosted flow, with no shared provider key or automatic billing fallback. Until a client is configured, the site shows a setup message and refuses generation requests.
 
 See the official [website sign-in guide](https://developers.openai.com/siwc/website), [ChatGPT plan usage guide](https://developers.openai.com/siwc/token-sharing-open-source), and [Responses limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). Hosted plan scopes and eligibility must be provisioned for the registered client by OpenAI.
 
@@ -31,6 +62,8 @@ npm test
 The tests use local signed OAuth and Responses fixtures. They exercise PKCE, ID-token validation, account isolation, streaming failures, cache concurrency, and the application API without using a real account or charging inference. Passing them does not establish OpenAI approval or live account eligibility.
 
 For an interactive demonstration, run `npm run preview:fixture` and open `http://127.0.0.1:3001`. Its separate local authorization page offers two test accounts and simulated lessons. This entrypoint is excluded from the production image.
+
+Use `npm run preview:local-fixture` at `http://127.0.0.1:3002` to exercise local registration and the saved-account picker with the same simulated provider. Both previews use temporary data, separate from your real accounts; neither proves live ChatGPT eligibility.
 
 ## Production
 

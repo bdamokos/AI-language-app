@@ -8,6 +8,7 @@ import test from 'node:test';
 import express from 'express';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { createAuth } from '../server/auth.js';
+import { createLocalProfileStore } from '../server/local-profile-store.js';
 
 const issuer = 'https://identity.example.test';
 const scope = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
@@ -27,7 +28,7 @@ async function harness(t, options = {}) {
   const url = `http://127.0.0.1:${server.address().port}`;
   const config = { appOrigin: url, clientId: 'oaiapp_test', clientSecret: '', tokenAuthMethod: 'none', authDir: path.join(dir, 'auth'), cacheDir: path.join(dir, 'cache'), ...options.config };
   const makeToken = async context => {
-    const claims = { iss: issuer, aud: config.clientId, sub: context.subject ?? 'alice', nonce: context.nonce, iat: Math.floor(state.now / 1000), exp: Math.floor(state.now / 1000) + 3600, name: 'Learner', email: 'learner@example.test', ...context.claims };
+    const claims = { iss: issuer, aud: context.clientId ?? config.clientId, sub: context.subject ?? 'alice', nonce: context.nonce, iat: Math.floor(state.now / 1000), exp: Math.floor(state.now / 1000) + 3600, name: 'Learner', email: 'learner@example.test', ...context.claims };
     return new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'key-1' }).sign(context.badSignature ? invalidKeys.privateKey : privateKey);
   };
   const makeTokens = async context => {
@@ -48,7 +49,8 @@ async function harness(t, options = {}) {
     if (pathname === '/token') {
       const body = new URLSearchParams(init.body);
       state.exchanges.push({ body, headers: init.headers });
-      assert.equal(body.get('client_id'), config.clientId);
+      if (config.mode !== 'local') assert.equal(body.get('client_id'), config.clientId);
+      else { assert.notEqual(body.get('client_id'), 'dynamic_agent_client'); assert.equal(init.headers.authorization, undefined); assert.equal(body.has('client_secret'), false); }
       if (body.get('grant_type') === 'refresh_token') {
         state.refreshes++;
         await state.refreshWait;
@@ -56,6 +58,7 @@ async function harness(t, options = {}) {
         if (state.refreshError) return json({ error: state.refreshError }, state.refreshErrorStatus ?? 400);
         const context = issuedRefresh.get(body.get('refresh_token'));
         if (!context) return json({ error: 'invalid_grant' }, 400);
+        if (config.mode === 'local') assert.equal(body.get('client_id'), context.clientId);
         assert.equal(body.get('resource'), 'https://api.openai.com/v1');
         assert.equal(body.has('scope'), false);
         issuedRefresh.delete(body.get('refresh_token'));
@@ -64,6 +67,8 @@ async function harness(t, options = {}) {
       const context = codes.get(body.get('code'));
       codes.delete(body.get('code'));
       if (!context) return json({ error: 'invalid_grant' }, 400);
+      if (state.codeError) return json({ error: state.codeError }, 400);
+      if (config.mode === 'local') assert.equal(body.get('client_id'), context.clientId);
       assert.equal(createHash('sha256').update(body.get('code_verifier')).digest('base64url'), context.challenge);
       assert.equal(body.get('redirect_uri'), `${config.appOrigin}/api/auth/callback`);
       await state.exchangeWait;
@@ -75,7 +80,8 @@ async function harness(t, options = {}) {
       state.revokedToken = body.get('token');
       state.revokedTokens.push(state.revokedToken);
       assert.equal(body.get('token_type_hint'), 'refresh_token');
-      assert.equal(body.get('client_id'), config.clientId);
+      if (config.mode !== 'local') assert.equal(body.get('client_id'), config.clientId);
+      else if (issuedRefresh.has(body.get('token'))) assert.equal(body.get('client_id'), issuedRefresh.get(body.get('token')).clientId);
       if (state.revokeFailure) return new Response('', { status: 503 });
       issuedRefresh.delete(body.get('token'));
       return new Response('', { status: 200 });
@@ -124,8 +130,10 @@ async function harness(t, options = {}) {
         const { authorization } = await this.start(loginBody);
         assert.ok(authorization);
         const code = `code-${codes.size}-${state.sequence}`;
-        codes.set(code, { nonce: authorization.searchParams.get('nonce'), challenge: authorization.searchParams.get('code_challenge'), ...context });
-        const callback = `/api/auth/callback?code=${code}&state=${authorization.searchParams.get('state')}`;
+        const dynamic = authorization.searchParams.get('client_id') === 'dynamic_agent_client';
+        const issuedClientId = dynamic ? context.issuedClientId ?? `oaiapp_local_${state.sequence}` : authorization.searchParams.get('client_id');
+        codes.set(code, { nonce: authorization.searchParams.get('nonce'), challenge: authorization.searchParams.get('code_challenge'), clientId: issuedClientId, ...context });
+        const callback = `/api/auth/callback?code=${code}&state=${authorization.searchParams.get('state')}${dynamic && !context.omitIssuedClientId ? `&client_id=${encodeURIComponent(issuedClientId)}` : ''}${context.callbackClientId ? `&client_id=${encodeURIComponent(context.callbackClientId)}` : ''}`;
         const response = await this.request(callback);
         return { response, callback, authorization };
       }
@@ -523,4 +531,180 @@ test('private credentials cannot be placed under a public cache directory', asyn
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'language-auth-path-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   await assert.rejects(createAuth({ config: { authDir: path.join(directory, 'credentials'), cacheDir: directory } }), /outside CACHE_DIR/);
+});
+
+test('local dynamic registration requires an issued client ID and validates its token audience', async t => {
+  for (const context of [
+    { omitIssuedClientId: true },
+    { issuedClientId: 'dynamic_agent_client' },
+    { issuedClientId: 'oaiapp_local_test', claims: { aud: 'dynamic_agent_client' } },
+    { issuedClientId: 'oaiapp_local_test', claims: { nonce: 'wrong' } }
+  ]) {
+    await t.test(JSON.stringify(context), async t => {
+      const h = await harness(t, { config: { mode: 'local', clientSecret: 'must-never-be-sent', tokenAuthMethod: 'client_secret_basic' } });
+      const browser = h.browser();
+      const { response, authorization } = await browser.login(context);
+      assert.match(response.headers.get('location'), /auth=error$/);
+      assert.equal(authorization.searchParams.get('client_id'), 'dynamic_agent_client');
+      assert.equal(authorization.searchParams.get('agent_name_hint'), 'Language AI App');
+      assert.match(authorization.searchParams.get('ext_agent_host_id'), /^urn:uuid:/);
+      assert.equal((await browser.status()).data.authenticated, false);
+      if (context.omitIssuedClientId || context.issuedClientId === 'dynamic_agent_client') assert.equal(h.state.exchanges.length, 0);
+    });
+  }
+});
+
+test('an incomplete local registration is retained for explicit retry without exposing an authenticated profile', async t => {
+  const h = await harness(t, { config: { mode: 'local' }, state: { codeError: 'invalid_grant' } });
+  const browser = h.browser();
+  const attempted = await browser.login({ issuedClientId: 'oaiapp_recover_registration' });
+  assert.match(attempted.response.headers.get('location'), /auth=error$/);
+  const pending = (await browser.status()).data;
+  assert.equal(pending.authenticated, false);
+  assert.equal(pending.accounts.length, 1);
+  assert.equal(pending.accounts[0].pending, true);
+  assert.equal(pending.accounts[0].connected, false);
+  assert.equal((await browser.request('/api/token')).status, 401);
+  const selected = await browser.start({ accountId: pending.accounts[0].id });
+  assert.equal(selected.authorization.searchParams.get('client_id'), 'oaiapp_recover_registration');
+  assert.equal(selected.authorization.searchParams.has('agent_name_hint'), false);
+  assert.equal(selected.authorization.searchParams.has('id_token_hint'), false);
+  assert.equal(selected.authorization.searchParams.get('ext_agent_host_id'), attempted.authorization.searchParams.get('ext_agent_host_id'));
+  h.state.codeError = null;
+  const retried = await browser.login({}, { accountId: pending.accounts[0].id });
+  assert.match(retried.response.headers.get('location'), /auth=success$/);
+  const connected = (await browser.status()).data;
+  assert.equal(connected.accounts.length, 1);
+  assert.equal(connected.accounts[0].pending, false);
+  assert.equal(connected.accounts[0].id, connected.user.id);
+  assert.match(connected.accounts[0].label, /account 1$/);
+});
+
+test('local saved registration checks returning client and subject without disturbing the active account', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.login({ issuedClientId: 'oaiapp_saved', subject: 'alice' });
+  const account = (await browser.status()).data.user.id;
+  const exchanges = h.state.exchanges.length;
+  const swappedClient = await browser.login({ callbackClientId: 'oaiapp_wrong' }, { accountId: account });
+  assert.match(swappedClient.response.headers.get('location'), /auth=error$/);
+  assert.equal(h.state.exchanges.length, exchanges);
+  const swappedSubject = await browser.login({ subject: 'bob' }, { accountId: account });
+  assert.match(swappedSubject.response.headers.get('location'), /auth=error$/);
+  assert.equal((await browser.status()).data.user.id, account);
+  assert.deepEqual(await (await browser.request('/api/token')).json(), { token: 'access-1' });
+  const newRegistration = await browser.start();
+  assert.equal(newRegistration.authorization.searchParams.get('client_id'), 'dynamic_agent_client');
+});
+
+test('local credentials outlive a browser session, stay encrypted, and require OAuth to reactivate', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  const signIn = await browser.login({ issuedClientId: 'oaiapp_persistent' });
+  const initial = (await browser.status()).data;
+  const cookie = browser.cookie;
+  assert.match(cookie, /^language_local_[a-f0-9]{16}=/);
+  const vault = await fs.readFile(path.join(h.config.authDir, 'local-profiles.vault'), 'utf8');
+  for (const secret of ['access-1', 'refresh-1', 'oaiapp_persistent', 'learner@example.test']) assert.equal(vault.includes(secret), false);
+  assert.equal((await fs.stat(path.join(h.config.authDir, 'local-profiles.vault'))).mode & 0o777, 0o600);
+  h.state.now += 8 * 60 * 60 * 1000 + 1;
+  const expired = (await browser.status()).data;
+  assert.equal(expired.authenticated, false);
+  assert.equal(expired.accounts[0].id, initial.user.id);
+  assert.equal(expired.accounts[0].connected, true);
+  assert.equal((await browser.request('/api/token')).status, 401);
+  const returning = await browser.start({ accountId: initial.user.id });
+  assert.equal(returning.authorization.searchParams.get('ext_agent_host_id'), signIn.authorization.searchParams.get('ext_agent_host_id'));
+  assert.equal(returning.authorization.searchParams.get('client_id'), 'oaiapp_persistent');
+  assert.ok(returning.authorization.searchParams.get('id_token_hint'));
+});
+
+test('local identity-only consent selects the saved registration while Add another remains a new registration', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.login({ issuedClientId: 'oaiapp_identity', identityOnly: true });
+  const account = (await browser.status()).data.user.id;
+  assert.equal((await browser.request('/api/token')).status, 403);
+  const consent = await browser.start({ enableInference: true, accountId: account });
+  assert.equal(consent.authorization.searchParams.get('client_id'), 'oaiapp_identity');
+  assert.equal(consent.authorization.searchParams.get('prompt'), 'consent');
+  const addAnother = await browser.start({ enableInference: true });
+  assert.equal(addAnother.authorization.searchParams.get('client_id'), 'dynamic_agent_client');
+  assert.equal(addAnother.authorization.searchParams.has('prompt'), false);
+});
+
+test('local refresh is serialized per registration and shutdown drains rotation before another process can resume', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.login({ issuedClientId: 'oaiapp_refresh' });
+  await browser.request('/api/protected');
+  const originalAuth = h.state.lastAuth;
+  h.state.now += 3_550_000;
+  const requests = await Promise.all(Array.from({ length: 6 }, () => browser.request('/api/token')));
+  assert.deepEqual(await Promise.all(requests.map(response => response.json())), Array(6).fill({ token: 'access-2' }));
+  assert.equal(h.state.refreshes, 1);
+  h.state.now += 3_550_000;
+  let finishRefresh;
+  h.state.refreshWait = new Promise(resolve => { finishRefresh = resolve; });
+  const refreshing = browser.request('/api/token');
+  while (h.state.refreshes < 2) await new Promise(resolve => setTimeout(resolve, 5));
+  let closed = false;
+  const closing = h.auth.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  assert.equal(originalAuth.signal.aborted, true);
+  finishRefresh();
+  assert.equal((await refreshing).status, 401);
+  await closing;
+  assert.equal((await browser.request('/api/auth/session')).status, 503);
+  const resumed = await createAuth({ config: h.config, issuer, fetch: h.fetchImpl, now: () => h.state.now });
+  assert.equal(await resumed.getAccessToken({ ...originalAuth, signal: undefined }), 'access-3');
+  await resumed.close();
+});
+
+test('local auth rejects non-literal loopback origins and corrupt profile state never silently resets the host identity', async t => {
+  for (const appOrigin of ['http://localhost:3000', 'https://127.0.0.1:3000', 'http://0.0.0.0:3000', 'http://127.0.0.1']) await assert.rejects(createAuth({ config: { mode: 'local', appOrigin } }), /127\.0\.0\.1/);
+  const h = await harness(t, { config: { mode: 'local' } });
+  await h.browser().login({ issuedClientId: 'oaiapp_corrupt_store' });
+  await h.auth.close();
+  await fs.writeFile(path.join(h.config.authDir, 'local-profiles.vault'), '{truncated');
+  await assert.rejects(createAuth({ config: h.config, issuer, fetch: h.fetchImpl }), /profiles could not be read/);
+  assert.equal(await fs.readFile(path.join(h.config.authDir, 'local-profiles.vault'), 'utf8'), '{truncated');
+});
+
+test('logout during a local profile commit clears the owned grant and retains an unconfirmed-revocation warning', { timeout: 10_000 }, async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.login({ issuedClientId: 'oaiapp_commit_race' });
+  const accountId = (await browser.status()).data.user.id;
+  await browser.request('/api/protected');
+  const signal = h.state.lastAuth.signal;
+  const originalRename = fs.rename;
+  const vaultPath = path.join(await fs.realpath(h.config.authDir), 'local-profiles.vault');
+  let releaseCommit, commitStarted;
+  const commitGate = new Promise(resolve => { releaseCommit = resolve; });
+  const staged = new Promise(resolve => { commitStarted = resolve; });
+  let blockNextVaultWrite = true;
+  fs.rename = async (source, target) => {
+    if (blockNextVaultWrite && target === vaultPath) {
+      blockNextVaultWrite = false;
+      commitStarted();
+      await commitGate;
+    }
+    return originalRename(source, target);
+  };
+  t.after(() => { fs.rename = originalRename; releaseCommit(); });
+  h.state.revokeFailure = true;
+  const signIn = browser.login({}, { accountId });
+  await staged;
+  const aborted = new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  const logout = browser.request('/api/auth/logout', { method: 'POST' });
+  await aborted;
+  releaseCommit();
+  assert.match((await signIn).response.headers.get('location'), /auth=error$/);
+  assert.deepEqual(await (await logout).json(), { ok: true, revocationConfirmed: false });
+  const status = (await browser.status()).data;
+  assert.equal(status.authenticated, false);
+  assert.equal(status.accounts.length, 1);
+  assert.equal(status.accounts[0].connected, false);
+  await h.auth.close();
+  const saved = (await createLocalProfileStore(h.config.authDir)).get(accountId);
+  assert.equal(saved.credentials, null);
+  assert.equal(saved.idToken, null);
+  assert.equal(saved.revocationUnconfirmed, true);
 });

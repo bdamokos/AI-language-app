@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLocalJWKSet, jwtVerify } from 'jose';
+import { createLocalProfileStore } from './local-profile-store.js';
 
 const OPENAI_ISSUER = 'https://auth.openai.com';
 const RESOURCE = 'https://api.openai.com/v1';
@@ -17,7 +18,6 @@ const safeEqual = (a, b) => {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 };
 const error = (status, code, message) => Object.assign(new Error(message), { status, httpStatus: status, code });
-const wrap = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const within = (parent, child) => child === parent || child.startsWith(`${parent}${path.sep}`);
 const isLoopback = url => ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
 class InvalidSessionData extends Error {}
@@ -109,23 +109,39 @@ async function createStore(authDir, cacheDir) {
 
 /** Explicit dependency injection supports protocol tests without a runtime auth bypass. */
 export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fetch, issuer = OPENAI_ISSUER, now = Date.now } = {}) {
+  const mode = config.mode ?? 'hosted';
+  if (!['hosted', 'local'].includes(mode)) throw new Error('Unsupported authentication mode.');
+  const local = mode === 'local';
+  if (local && (!config.appOrigin || !/^http:\/\/127\.0\.0\.1:\d+$/.test(config.appOrigin))) throw new Error('Local authentication requires an explicit http://127.0.0.1:<port> origin.');
   const appOrigin = validatedUrl(config.appOrigin ?? process.env.APP_ORIGIN ?? `http://127.0.0.1:${process.env.NODE_ENV === 'production' ? '3000' : '5173'}`, 'APP_ORIGIN', true).origin;
-  const redirect = validatedUrl(config.redirectUri ?? (process.env.OPENAI_REDIRECT_URI?.trim() || `${appOrigin}/api/auth/callback`), 'OPENAI_REDIRECT_URI');
+  const redirect = validatedUrl(config.redirectUri ?? ((!local && process.env.OPENAI_REDIRECT_URI?.trim()) || `${appOrigin}/api/auth/callback`), 'OPENAI_REDIRECT_URI');
   if (redirect.origin !== appOrigin || redirect.pathname !== '/api/auth/callback') throw new Error('OPENAI_REDIRECT_URI must use APP_ORIGIN and /api/auth/callback.');
   const issuerUrl = validatedUrl(issuer, 'Issuer', true);
   issuer = issuerUrl.origin;
-  const clientId = config.clientId ?? process.env.OPENAI_CLIENT_ID ?? '';
-  const clientSecret = config.clientSecret ?? process.env.OPENAI_CLIENT_SECRET ?? '';
-  const tokenAuthMethod = config.tokenAuthMethod ?? process.env.OPENAI_TOKEN_AUTH_METHOD ?? (clientSecret ? 'client_secret_basic' : 'none');
+  const clientId = local ? 'dynamic_agent_client' : config.clientId ?? process.env.OPENAI_CLIENT_ID ?? '';
+  const clientSecret = local ? '' : config.clientSecret ?? process.env.OPENAI_CLIENT_SECRET ?? '';
+  const tokenAuthMethod = local ? 'none' : config.tokenAuthMethod ?? process.env.OPENAI_TOKEN_AUTH_METHOD ?? (clientSecret ? 'client_secret_basic' : 'none');
   if (!['none', 'client_secret_basic'].includes(tokenAuthMethod)) throw new Error('OPENAI_TOKEN_AUTH_METHOD must be none or client_secret_basic.');
   if (tokenAuthMethod === 'none' && clientSecret) throw new Error('A public OAuth client must not use OPENAI_CLIENT_SECRET.');
-  const configured = Boolean(clientId && clientId !== 'dynamic_agent_client' && (tokenAuthMethod !== 'client_secret_basic' || clientSecret));
+  const configured = local || Boolean(clientId && clientId !== 'dynamic_agent_client' && (tokenAuthMethod !== 'client_secret_basic' || clientSecret));
   const configurationError = !configured ? 'The operator must configure an approved OpenAI website client with ChatGPT plan access.' : null;
   const secureCookie = new URL(appOrigin).protocol === 'https:';
-  const cookieName = secureCookie ? '__Host-language_session' : 'language_session';
-  const store = await createStore(config.authDir ?? process.env.AUTH_DIR ?? path.resolve('.auth'), config.cacheDir ?? process.env.CACHE_DIR ?? path.resolve('.cache'));
+  const authDir = config.authDir ?? process.env.AUTH_DIR ?? path.resolve('.auth');
+  const store = await createStore(authDir, config.cacheDir ?? process.env.CACHE_DIR ?? path.resolve('.cache'));
+  const profiles = local ? await createLocalProfileStore(authDir) : null;
+  const cookieName = local ? `language_local_${digest(`${await fs.realpath(authDir)}\0${appOrigin}`).slice(0, 16)}` : secureCookie ? '__Host-language_session' : 'language_session';
   const locks = new Map();
   const controllers = new Map();
+  const operations = new Set();
+  let closed = false;
+  const handle = handler => (req, res, next) => {
+    const pending = Promise.resolve().then(() => {
+      if (closed) throw error(503, 'auth_closed', 'The local application is shutting down.');
+      return handler(req, res, next);
+    });
+    operations.add(pending);
+    pending.catch(next).finally(() => operations.delete(pending));
+  };
   let lastMaintenance = now();
   let maintenancePending;
   await store.prune(now());
@@ -139,10 +155,14 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
     locks.set(id, current);
     try { return await current; } finally { if (locks.get(id) === current) locks.delete(id); }
   }
-  const controller = (id, expiresAt) => {
-    if (!controllers.has(id)) controllers.set(id, { value: new AbortController(), expiresAt });
+  const controller = (id, expiresAt, accountId) => {
+    if (!controllers.has(id)) controllers.set(id, { value: new AbortController(), expiresAt, accountId });
     return controllers.get(id).value;
   };
+  function abortProfile(accountId) {
+    for (const [id, item] of controllers) if (item.accountId === accountId) { item.value.abort(); controllers.delete(id); }
+  }
+  const localProfile = id => { const profile = profiles?.get(id); return profile?.issuer === issuer ? profile : null; };
   async function maintain() {
     if (maintenancePending) return maintenancePending;
     if (now() - lastMaintenance < 5 * 60 * 1000) return;
@@ -161,8 +181,24 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
   async function load(id) {
     if (!id || !/^[A-Za-z0-9_-]{43}$/.test(id)) return null;
     const session = await store.read(id);
-    if (session && (session.expiresAt <= now() || (session.user && (session.issuer !== issuer || session.clientId !== clientId)))) { await drop(id); return null; }
+    if (session && (session.expiresAt <= now() || (local && (session.mode !== 'local' || session.appOrigin !== appOrigin)) || (session.user && (session.issuer !== issuer || (!local && session.clientId !== clientId))))) { await drop(id); return null; }
+    if (local && session?.user) {
+      const profile = localProfile(session.accountId);
+      if (!profile?.user || profile.generation !== session.profileGeneration) { await drop(id); return null; }
+      session.credentials = profile.credentials;
+      session.idToken = profile.idToken;
+      session.revocationUnconfirmed = Boolean(session.revocationUnconfirmed || profile.revocationUnconfirmed);
+    }
     return session;
+  }
+  async function writeSession(id, session, saveCredentials = false) {
+    if (!local) return store.write(id, session);
+    if (saveCredentials && session.accountId) {
+      const profile = localProfile(session.accountId);
+      if (profile && profile.generation === session.profileGeneration) await profiles.put({ ...profile, credentials: session.credentials, idToken: session.idToken, revocationUnconfirmed: session.revocationUnconfirmed });
+    }
+    const { credentials: ignoredCredentials, idToken: ignoredToken, ...browserSession } = session;
+    await store.write(id, browserSession);
   }
   const sessionId = req => {
     const matches = String(req.headers.cookie ?? '').split(';').map(value => value.trim()).filter(value => value.startsWith(`${cookieName}=`));
@@ -171,7 +207,7 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
   function setCookie(res, id) {
     res.setHeader('Set-Cookie', `${cookieName}=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${secureCookie ? '; Secure' : ''}`);
   }
-  function newSession() { return { csrfToken: random(), expiresAt: now() + SESSION_TTL, user: null, accountId: null }; }
+  function newSession() { return { csrfToken: random(), expiresAt: now() + SESSION_TTL, user: null, accountId: null, ...(local ? { mode, appOrigin } : {}) }; }
   async function ensureSession(req, res) {
     await maintain();
     let id = sessionId(req);
@@ -221,30 +257,31 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
     keyCache = { value, expiresAt: now() + 5 * 60 * 1000 };
     return value;
   }
-  async function verifyIdentity(idToken, expectedNonce, expectedSubject) {
+  async function verifyIdentity(idToken, expectedNonce, expectedSubject, expectedClientId = clientId) {
     if (typeof idToken !== 'string' || idToken.length > 32_768) throw error(401, 'invalid_identity', 'ChatGPT sign-in could not be verified.');
-    const options = { issuer, audience: clientId, algorithms: ['RS256', 'ES256'], requiredClaims: ['sub', 'exp', 'iat'], clockTolerance: 5, currentDate: new Date(now()) };
+    const options = { issuer, audience: expectedClientId, algorithms: ['RS256', 'ES256'], requiredClaims: ['sub', 'exp', 'iat'], clockTolerance: 5, currentDate: new Date(now()) };
     let result;
     try {
       try { result = await jwtVerify(idToken, await keySet(), options); }
       catch (e) { if (e.code !== 'ERR_JWKS_NO_MATCHING_KEY') throw e; result = await jwtVerify(idToken, await keySet(true), options); }
     } catch (e) { if (e.status === 503) throw e; throw error(401, 'invalid_identity', 'ChatGPT sign-in could not be verified.'); }
     const identity = result.payload;
-    if (typeof identity.sub !== 'string' || !identity.sub || identity.sub.length > 1024 || identity.iat > now() / 1000 + 5 || (expectedNonce !== undefined && !safeEqual(identity.nonce, expectedNonce)) || (expectedSubject && identity.sub !== expectedSubject) || (identity.azp !== undefined && identity.azp !== clientId) || (Array.isArray(identity.aud) && identity.aud.length > 1 && identity.azp !== clientId)) {
+    if (typeof identity.sub !== 'string' || !identity.sub || identity.sub.length > 1024 || identity.iat > now() / 1000 + 5 || (expectedNonce !== undefined && !safeEqual(identity.nonce, expectedNonce)) || (expectedSubject && identity.sub !== expectedSubject) || (identity.azp !== undefined && identity.azp !== expectedClientId) || (Array.isArray(identity.aud) && identity.aud.length > 1 && identity.azp !== expectedClientId)) {
       throw error(401, 'invalid_identity', 'ChatGPT sign-in could not be verified.');
     }
     return identity;
   }
-  function tokenHeaders() {
+  function tokenHeaders(requestClientId = clientId) {
     const headers = { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' };
     if (tokenAuthMethod === 'client_secret_basic') {
       const encode = value => new URLSearchParams({ value }).toString().slice(6);
-      headers.authorization = `Basic ${Buffer.from(`${encode(clientId)}:${encode(clientSecret)}`).toString('base64')}`;
+      headers.authorization = `Basic ${Buffer.from(`${encode(requestClientId)}:${encode(clientSecret)}`).toString('base64')}`;
     }
     return headers;
   }
-  async function exchange(body) {
-    const response = await remote((await metadata()).token_endpoint, { method: 'POST', headers: tokenHeaders(), body: new URLSearchParams({ client_id: clientId, ...body }) });
+  async function exchange(body, requestClientId = clientId) {
+    if (requestClientId === 'dynamic_agent_client') throw error(401, 'invalid_callback', 'ChatGPT registration did not return an issued client ID.');
+    const response = await remote((await metadata()).token_endpoint, { method: 'POST', headers: tokenHeaders(requestClientId), body: new URLSearchParams({ client_id: requestClientId, ...body }) });
     const tokens = await readResponse(response);
     if (!response.ok) {
       const terminal = response.status < 500 && ['invalid_grant', 'invalid_token', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'].includes(tokens.error);
@@ -253,14 +290,14 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
     }
     return tokens;
   }
-  async function revoke(refreshToken) {
+  async function revoke(refreshToken, requestClientId = clientId) {
     if (!refreshToken) return true;
     try {
       const endpoint = (await metadata()).revocation_endpoint;
       if (!endpoint) return false;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const response = await remote(endpoint, { method: 'POST', headers: tokenHeaders(), body: new URLSearchParams({ token: refreshToken, token_type_hint: 'refresh_token', client_id: clientId }) });
+          const response = await remote(endpoint, { method: 'POST', headers: tokenHeaders(requestClientId), body: new URLSearchParams({ token: refreshToken, token_type_hint: 'refresh_token', client_id: requestClientId }) });
           if (response.status === 200) return true;
           if (response.status < 500) return false;
         } catch { /* Retry a transient revocation failure once. */ }
@@ -281,48 +318,55 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
   function guard(req, res, next) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    if (req.headers.host !== new URL(appOrigin).host || (req.headers.origin && req.headers.origin !== appOrigin)) return res.status(403).json({ code: 'untrusted_origin', error: 'This request did not come from the application.' });
+    if (closed) return res.status(503).json({ code: 'auth_closed', error: 'The application is shutting down.' });
+    if (req.headers.host !== new URL(appOrigin).host || (req.headers.origin && req.headers.origin !== appOrigin) || (local && (Object.keys(req.headers).some(name => name === 'forwarded' || name.startsWith('x-forwarded-')) || !['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)))) return res.status(403).json({ code: 'untrusted_origin', error: 'This request did not come from the application.' });
     next();
   }
-  const requireCsrf = wrap(async (req, res, next) => {
+  const requireCsrf = handle(async (req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     const session = await load(sessionId(req));
     if (req.headers.origin !== appOrigin || req.headers['sec-fetch-site'] === 'cross-site' || !session || !safeEqual(req.headers['x-csrf-token'], session.csrfToken)) return res.status(403).json({ code: 'csrf_failed', error: 'Refresh the page and try again.' });
     next();
   });
-  const middleware = wrap(async (req, res, next) => {
+  const middleware = handle(async (req, res, next) => {
     await maintain();
     const id = sessionId(req);
     const session = await load(id);
     if (!configured || !session?.user) return res.status(401).json({ code: 'sign_in_required', error: 'Sign in with ChatGPT to continue.' });
-    req.auth = { sessionId: id, accountId: session.accountId, user: session.user, inferenceEnabled: inferenceEnabled(session), signal: controller(id, session.expiresAt).signal };
+    req.auth = { sessionId: id, accountId: session.accountId, clientId: session.clientId, user: session.user, inferenceEnabled: inferenceEnabled(session), signal: controller(id, session.expiresAt, session.accountId).signal };
     next();
   });
 
   async function getAccessToken(auth) {
-    if (!configured || !auth?.sessionId) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
-    return locked(auth.sessionId, async () => {
+    if (closed || !configured || !auth?.sessionId) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+    return locked(local ? `registration:${auth.clientId}` : auth.sessionId, async () => {
       const session = await load(auth.sessionId);
       if (!session?.user || session.accountId !== auth.accountId || auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
       const clearInvalidIdentity = async () => {
+        if (local) {
+          const profile = localProfile(session.accountId);
+          if (profile) await profiles.put({ ...profile, credentials: null, idToken: null, generation: random() });
+          abortProfile(session.accountId);
+        }
         delete session.credentials; session.user = null; session.accountId = null;
         controllers.get(auth.sessionId)?.value.abort(); controllers.delete(auth.sessionId);
-        await store.write(auth.sessionId, session);
+        await writeSession(auth.sessionId, session, true);
       };
       if (session.credentials?.pendingIdentityToken) {
-        try { await verifyIdentity(session.credentials.pendingIdentityToken, undefined, session.subject); }
+        try { await verifyIdentity(session.credentials.pendingIdentityToken, undefined, session.subject, session.clientId); }
         catch (e) { if (e.status === 401) await clearInvalidIdentity(); throw e; }
         session.credentials.expiresAt = session.credentials.pendingExpiresAt;
+        if (local) session.idToken = session.credentials.pendingIdentityToken;
         delete session.credentials.pendingIdentityToken;
         delete session.credentials.pendingExpiresAt;
-        await store.write(auth.sessionId, session);
-        if (auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+        await writeSession(auth.sessionId, session, true);
+        if (closed || auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
       }
       if (!inferenceEnabled(session)) throw error(403, 'inference_not_enabled', 'Allow this app to use your ChatGPT plan to continue.');
       if (session.credentials.expiresAt > now() + 60_000) return session.credentials.accessToken;
       if (!session.credentials.refreshToken) throw error(401, 'session_expired', 'Your ChatGPT connection expired. Please sign in again.');
       let tokens;
-      try { tokens = await exchange({ grant_type: 'refresh_token', refresh_token: session.credentials.refreshToken, resource: RESOURCE }); }
+      try { tokens = await exchange({ grant_type: 'refresh_token', refresh_token: session.credentials.refreshToken, resource: RESOURCE }, session.clientId); }
       catch (e) {
         if (e.terminal) {
           await clearInvalidIdentity();
@@ -332,50 +376,54 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
       if (!tokens.access_token) throw error(503, 'auth_unavailable', 'ChatGPT returned invalid credentials. Please try again.');
       const updated = credentials(tokens, session.credentials);
       if (tokens.id_token) {
-        try { await verifyIdentity(tokens.id_token, undefined, session.subject); }
+        try { await verifyIdentity(tokens.id_token, undefined, session.subject, session.clientId); }
         catch (e) {
           if (e.status === 503) {
             // Rotation already happened at the issuer. Retain that grant but
             // quarantine it until the new identity token is verified.
             session.credentials = { ...updated, expiresAt: 0, pendingIdentityToken: tokens.id_token, pendingExpiresAt: updated.expiresAt };
-            await store.write(auth.sessionId, session);
+            await writeSession(auth.sessionId, session, true);
           } else if (e.status === 401) await clearInvalidIdentity();
           throw e;
         }
       }
       session.credentials = updated;
-      await store.write(auth.sessionId, session);
-      if (auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
+      if (local && tokens.id_token) session.idToken = tokens.id_token;
+      await writeSession(auth.sessionId, session, true);
+      if (closed || auth.signal?.aborted) throw error(401, 'sign_in_required', 'Sign in with ChatGPT to continue.');
       if (!inferenceEnabled(session)) throw error(403, 'inference_not_enabled', 'Allow this app to use your ChatGPT plan to continue.');
       return updated.accessToken;
     });
   }
 
   function attachRoutes(app) {
-    app.get('/api/auth/session', guard, wrap(async (req, res) => {
+    app.get('/api/auth/session', guard, handle(async (req, res) => {
       const { session } = await ensureSession(req, res);
-      res.json({ authenticated: Boolean(configured && session.user), configured, mode: 'hosted', user: configured ? session.user : null, inferenceEnabled: configured && inferenceEnabled(session), csrfToken: session.csrfToken, accounts: session.user && configured ? [{ id: session.accountId, label: session.user.email || session.user.name || 'ChatGPT account', connected: true }] : [], ...(configurationError ? { error: configurationError } : {}) });
+      const accounts = local ? profiles.list().filter(profile => profile.issuer === issuer).sort((a, b) => a.number - b.number).map(profile => ({ id: profile.accountId, label: `${profile.user?.name || profile.user?.email || 'Finish connecting ChatGPT'} · account ${profile.number}`, name: profile.user?.name ?? null, email: profile.user?.email ?? null, connected: Boolean(profile.idToken), pending: !profile.subject })) : session.user && configured ? [{ id: session.accountId, label: session.user.email || session.user.name || 'ChatGPT account', connected: true }] : [];
+      res.json({ authenticated: Boolean(configured && session.user), configured, mode, user: configured ? session.user : null, inferenceEnabled: configured && inferenceEnabled(session), csrfToken: session.csrfToken, accounts, ...(configurationError ? { error: configurationError } : {}) });
     }));
-    app.post('/api/auth/login', guard, requireCsrf, wrap(async (req, res) => {
+    app.post('/api/auth/login', guard, requireCsrf, handle(async (req, res) => {
       if (!configured) return res.status(503).json({ code: 'auth_not_configured', error: configurationError });
       const id = sessionId(req);
       await locked(id, async () => {
         const session = await load(id);
         if (!session) throw error(403, 'csrf_failed', 'Refresh the page and try again.');
         const selectedAccount = req.body?.accountId;
-        if (selectedAccount && selectedAccount !== session.accountId) throw error(400, 'invalid_account', 'Sign in to select another ChatGPT account.');
+        const selectedProfile = local && selectedAccount ? localProfile(selectedAccount) : null;
+        if (selectedAccount && (local ? !selectedProfile : selectedAccount !== session.accountId)) throw error(400, 'invalid_account', 'Sign in to select another ChatGPT account.');
         const enableInference = req.body?.enableInference !== false;
-        const consentRecovery = req.body?.enableInference === true && session.user && !inferenceEnabled(session);
-        const transaction = { state: random(), nonce: random(), verifier: crypto.randomBytes(48).toString('base64url'), expiresAt: now() + TRANSACTION_TTL, subject: selectedAccount || consentRecovery ? session.subject : null };
+        const consentRecovery = req.body?.enableInference === true && session.user && !inferenceEnabled(session) && (!local || selectedAccount === session.accountId);
+        const requestClientId = local ? selectedProfile?.clientId ?? 'dynamic_agent_client' : clientId;
+        const transaction = { state: random(), nonce: random(), verifier: crypto.randomBytes(48).toString('base64url'), expiresAt: now() + TRANSACTION_TTL, subject: local ? selectedProfile?.subject ?? null : selectedAccount || consentRecovery ? session.subject : null, clientId: requestClientId, selectedAccountId: selectedProfile?.accountId ?? null };
         const url = new URL((await metadata()).authorization_endpoint);
-        url.search = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: redirect.href, scope: `${IDENTITY_SCOPES}${enableInference ? ` ${PLAN_SCOPES}` : ''}`, state: transaction.state, nonce: transaction.nonce, code_challenge_method: 'S256', code_challenge: crypto.createHash('sha256').update(transaction.verifier).digest('base64url'), ...(enableInference ? { resource: RESOURCE } : {}), ...(consentRecovery ? { prompt: 'consent' } : !selectedAccount && session.user ? { prompt: 'select_account' } : {}) }).toString();
+        url.search = new URLSearchParams({ client_id: requestClientId, response_type: 'code', redirect_uri: redirect.href, scope: `${IDENTITY_SCOPES}${enableInference ? ` ${PLAN_SCOPES}` : ''}`, state: transaction.state, nonce: transaction.nonce, code_challenge_method: 'S256', code_challenge: crypto.createHash('sha256').update(transaction.verifier).digest('base64url'), ...(local || enableInference ? { resource: RESOURCE } : {}), ...(consentRecovery ? { prompt: 'consent' } : !local && !selectedAccount && session.user ? { prompt: 'select_account' } : {}), ...(local ? { ext_agent_host_id: profiles.hostId, ...(requestClientId === 'dynamic_agent_client' ? { agent_name_hint: 'Language AI App' } : {}), ...(selectedProfile?.idToken ? { id_token_hint: selectedProfile.idToken } : {}), ...(selectedProfile?.user?.email ? { login_hint: selectedProfile.user.email } : {}) } : {}) }).toString();
         transaction.enableInference = enableInference;
         session.transaction = transaction;
-        await store.write(id, session);
+        await writeSession(id, session);
         res.json({ url: url.href });
       });
     }));
-    app.get('/api/auth/callback', guard, wrap(async (req, res) => {
+    app.get('/api/auth/callback', guard, handle(async (req, res) => {
       const id = sessionId(req);
       const finish = outcome => res.redirect(302, `${appOrigin}/?auth=${outcome}`);
       if (!configured || !id) return finish('error');
@@ -383,54 +431,99 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
         await locked(id, async () => {
           const session = await load(id);
           const transaction = session?.transaction;
-          if (session?.transaction) { delete session.transaction; await store.write(id, session); }
-          if (!transaction || transaction.expiresAt <= now() || !safeEqual(req.query.state, transaction.state) || req.query.error || typeof req.query.code !== 'string' || !req.query.code || (req.query.client_id !== undefined && req.query.client_id !== clientId)) throw error(401, 'invalid_callback', 'ChatGPT sign-in could not be verified.');
-          const signInSignal = controller(id, session.expiresAt).signal;
-          const tokens = await exchange({ grant_type: 'authorization_code', code: req.query.code, code_verifier: transaction.verifier, redirect_uri: redirect.href, ...(transaction.enableInference ? { resource: RESOURCE } : {}) });
-          const identity = await verifyIdentity(tokens.id_token, transaction.nonce, transaction.subject);
-          const cancelSignIn = async () => {
-            if (!await revoke(tokens.refresh_token)) {
-              session.revocationUnconfirmed = true;
-              await store.write(id, session);
+          if (session?.transaction) { delete session.transaction; await writeSession(id, session); }
+          if (!transaction || transaction.expiresAt <= now() || !safeEqual(req.query.state, transaction.state) || req.query.error || typeof req.query.code !== 'string' || !req.query.code) throw error(401, 'invalid_callback', 'ChatGPT sign-in could not be verified.');
+          let issuedClientId = transaction.clientId ?? clientId;
+          if (local && issuedClientId === 'dynamic_agent_client') {
+            if (typeof req.query.client_id !== 'string' || !/^[A-Za-z0-9_-]{1,255}$/.test(req.query.client_id) || req.query.client_id === 'dynamic_agent_client') throw error(401, 'invalid_callback', 'ChatGPT registration did not return an issued client ID.');
+            issuedClientId = req.query.client_id;
+          } else if (req.query.client_id !== undefined && req.query.client_id !== issuedClientId) throw error(401, 'invalid_callback', 'ChatGPT sign-in could not be verified.');
+          await locked(local ? `registration:${issuedClientId}` : `callback:${id}`, async () => {
+            let pendingProfileId = transaction.selectedAccountId;
+            if (local && transaction.clientId === 'dynamic_agent_client') {
+              pendingProfileId = digest(`${issuer}\0${issuedClientId}\0pending`);
+              if (!localProfile(pendingProfileId)) await profiles.put({ accountId: pendingProfileId, issuer, clientId: issuedClientId, subject: null, user: null, credentials: null, idToken: null, generation: random() });
             }
-            throw error(401, 'sign_in_cancelled', 'Sign-in was cancelled.');
-          };
-          if (signInSignal.aborted) await cancelSignIn();
-          const accountId = digest(`${issuer}\0${clientId}\0${identity.sub}`);
-          const fresh = newSession();
-          fresh.accountId = accountId;
-          fresh.subject = identity.sub;
-          fresh.issuer = issuer;
-          fresh.clientId = clientId;
-          fresh.user = { id: accountId, name: typeof identity.name === 'string' ? identity.name : null, email: typeof identity.email === 'string' ? identity.email : null };
-          fresh.credentials = credentials(tokens);
-          fresh.revocationUnconfirmed = Boolean(session.revocationUnconfirmed);
-          const freshId = random();
-          await store.write(freshId, fresh);
-          if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
-          const previousRefreshToken = session.credentials?.refreshToken;
-          if (previousRefreshToken && previousRefreshToken !== fresh.credentials.refreshToken) {
-            if (!await revoke(previousRefreshToken)) {
-              fresh.revocationUnconfirmed = true;
-              await store.write(freshId, fresh);
-              session.revocationUnconfirmed = true;
-              await store.write(id, session);
+            const signInSignal = controller(id, session.expiresAt).signal;
+            const tokens = await exchange({ grant_type: 'authorization_code', code: req.query.code, code_verifier: transaction.verifier, redirect_uri: redirect.href, ...(local || transaction.enableInference ? { resource: RESOURCE } : {}) }, issuedClientId);
+            const identity = await verifyIdentity(tokens.id_token, transaction.nonce, transaction.subject, issuedClientId);
+            let committedProfile;
+            const cancelSignIn = async () => {
+              const confirmed = await revoke(tokens.refresh_token, issuedClientId);
+              if (local && committedProfile) {
+                const current = localProfile(committedProfile.accountId);
+                if (current?.generation === committedProfile.generation) await profiles.put({ ...current, credentials: null, idToken: null, generation: random(), revocationUnconfirmed: Boolean(current.revocationUnconfirmed || !confirmed) });
+                if (session.accountId === committedProfile.accountId) {
+                  // Keep the browser-bound warning reachable by a queued logout,
+                  // even though replacing this registration invalidated its old session.
+                  session.user = null; session.accountId = null;
+                  delete session.credentials; delete session.idToken;
+                }
+              }
+              session.revocationUnconfirmed = Boolean(session.revocationUnconfirmed || !confirmed);
+              await writeSession(id, session);
+              throw error(401, 'sign_in_cancelled', 'Sign-in was cancelled.');
+            };
+            if (signInSignal.aborted) await cancelSignIn();
+            const accountId = digest(`${issuer}\0${issuedClientId}\0${identity.sub}`);
+            const fresh = newSession();
+            fresh.accountId = accountId;
+            fresh.subject = identity.sub;
+            fresh.issuer = issuer;
+            fresh.clientId = issuedClientId;
+            fresh.user = { id: accountId, name: typeof identity.name === 'string' ? identity.name : null, email: typeof identity.email === 'string' ? identity.email : null };
+            fresh.credentials = credentials(tokens);
+            fresh.revocationUnconfirmed = Boolean(session.revocationUnconfirmed);
+            if (local) {
+              const previous = localProfile(accountId);
+              fresh.revocationUnconfirmed = Boolean(previous?.revocationUnconfirmed);
+              fresh.profileGeneration = random();
+              fresh.idToken = tokens.id_token;
+              if (signInSignal.aborted || closed) await cancelSignIn();
+              if (previous?.credentials?.refreshToken && previous.credentials.refreshToken !== fresh.credentials.refreshToken && !await revoke(previous.credentials.refreshToken, issuedClientId)) fresh.revocationUnconfirmed = true;
+              if (signInSignal.aborted || closed) await cancelSignIn();
+              committedProfile = await profiles.put({ accountId, issuer, clientId: issuedClientId, subject: identity.sub, user: fresh.user, credentials: fresh.credentials, idToken: fresh.idToken, revocationUnconfirmed: fresh.revocationUnconfirmed, generation: fresh.profileGeneration }, pendingProfileId);
             }
+            const freshId = random();
+            await writeSession(freshId, fresh);
             if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
-          }
-          await drop(id);
-          setCookie(res, freshId);
+            const previousRefreshToken = session.credentials?.refreshToken;
+            if (!local && previousRefreshToken && previousRefreshToken !== fresh.credentials.refreshToken) {
+              if (!await revoke(previousRefreshToken)) {
+                fresh.revocationUnconfirmed = true;
+                await store.write(freshId, fresh);
+                session.revocationUnconfirmed = true;
+                await store.write(id, session);
+              }
+              if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
+            }
+            if (local) abortProfile(accountId);
+            await drop(id);
+            setCookie(res, freshId);
+          });
         });
         return finish('success');
       } catch { return finish('error'); }
     }));
-    app.post('/api/auth/logout', guard, requireCsrf, wrap(async (req, res) => {
+    app.post('/api/auth/logout', guard, requireCsrf, handle(async (req, res) => {
       const id = sessionId(req);
       // Abort current work before waiting behind a token refresh.
       controllers.get(id)?.value.abort();
       let revocationConfirmed = true;
       await locked(id, async () => {
         const session = await load(id);
+        if (local && session?.accountId) {
+          abortProfile(session.accountId);
+          await locked(`registration:${session.clientId}`, async () => {
+            const profile = localProfile(session.accountId);
+            if (profile) {
+              revocationConfirmed = await revoke(profile.credentials?.refreshToken, profile.clientId) && !profile.revocationUnconfirmed && !session.revocationUnconfirmed;
+              await profiles.put({ ...profile, credentials: null, idToken: null, generation: random(), revocationUnconfirmed: !revocationConfirmed });
+            }
+            await drop(id);
+          });
+          return;
+        }
         const refreshToken = session?.credentials?.refreshToken;
         await drop(id);
         revocationConfirmed = await revoke(refreshToken) && !session?.revocationUnconfirmed;
@@ -441,5 +534,12 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
       res.json({ ok: true, revocationConfirmed });
     }));
   }
-  return { attachRoutes, middleware, requireCsrf, guard, getAccessToken, configured, mode: 'hosted' };
+  async function close() {
+    closed = true;
+    for (const item of controllers.values()) item.value.abort();
+    while (operations.size || locks.size) await Promise.allSettled([...operations, ...locks.values()]);
+    await profiles?.flush();
+    controllers.clear();
+  }
+  return { attachRoutes, middleware, requireCsrf, guard, getAccessToken, configured, mode, close };
 }

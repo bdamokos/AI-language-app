@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 // Serialize whole read-modify-write transactions, with reentrant nested calls.
 // Each hosted instance owns its cache volume; do not share it between processes.
 const cacheTransactions = new Map();
+const cacheInitializations = new Map();
 const activeTransaction = new AsyncLocalStorage();
 async function withLayoutLock(layout, operation) {
   const key = path.resolve(layout.explanationsDir);
@@ -26,6 +27,24 @@ export function getCacheDir(envCacheDir, fallbackDir) {
 }
 
 export async function ensureCacheLayout(cacheDir) {
+  const key = path.resolve(cacheDir);
+  if (cacheInitializations.has(key)) return cacheInitializations.get(key);
+  const pending = initializeCacheLayout(key);
+  cacheInitializations.set(key, pending);
+  try { return await pending; }
+  finally { if (cacheInitializations.get(key) === pending) cacheInitializations.delete(key); }
+}
+
+// Call after aborting requests, before releasing a local runtime's process lock.
+// Aborted layouts cannot start another write transaction after this drain.
+export async function drainCacheWrites(cacheDir) {
+  const root = path.resolve(cacheDir);
+  const pending = () => [...cacheInitializations, ...cacheTransactions]
+    .filter(([key]) => key === root || key.startsWith(`${root}${path.sep}`)).map(([, value]) => value);
+  for (let active = pending(); active.length; active = pending()) await Promise.allSettled(active);
+}
+
+async function initializeCacheLayout(cacheDir) {
   const explanationsDir = path.join(cacheDir, 'explanations');
   const explanationItemsDir = path.join(explanationsDir, 'items');
   const exercisesDir = path.join(cacheDir, 'exercises');

@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { apiFetch } from './utils/api.js';
+import SavedAccounts from './SavedAccounts.jsx';
 
-export default function SettingsPanel({ session, onLogout, busy }) {
+export default function SettingsPanel({ session, onLogout, onConnect, busy, connecting = false, disconnecting = false }) {
   const [models, setModels] = useState([]);
   const [model, setModel] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const localMode = session.mode === 'local';
+  const accounts = localMode && Array.isArray(session.accounts) ? session.accounts : [];
+  const activeAccount = accounts.find(account => account.id === session.user?.id);
 
   useEffect(() => {
     let active = true;
@@ -39,10 +43,17 @@ export default function SettingsPanel({ session, onLogout, busy }) {
     <section aria-label="Account settings" className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
       <div>
         <h2 className="font-semibold text-gray-900">Your ChatGPT account</h2>
-        <p className="text-sm text-gray-600 break-words">{session.user?.email || session.user?.name || 'Connected'}</p>
+        <p className="text-sm text-gray-600 break-words">{activeAccount?.label || session.user?.email || session.user?.name || 'Connected'}</p>
       </div>
       <p className="text-sm text-gray-600">Lessons use your ChatGPT plan. Your plan’s limits apply.</p>
       <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer" className="inline-block text-sm text-blue-700 underline">View ChatGPT usage</a>
+      {localMode && (
+        <div className="space-y-3 border-t pt-4">
+          <SavedAccounts accounts={accounts} activeAccountId={session.user?.id} onConnect={onConnect} busy={busy} connecting={connecting} />
+          <button type="button" onClick={() => onConnect()} disabled={busy} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50">Add another ChatGPT account</button>
+          <p className="text-xs text-gray-500">Confirm your choice in ChatGPT to change accounts.</p>
+        </div>
+      )}
       {session.inferenceEnabled && (
         <form onSubmit={saveModel} className="space-y-2 border-t pt-4">
           <label htmlFor="inference-model" className="block text-sm font-medium text-gray-800">Lesson model</label>
@@ -58,8 +69,8 @@ export default function SettingsPanel({ session, onLogout, busy }) {
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
       <p className="text-xs text-gray-500">Image generation is unavailable with this connection.</p>
       <div className="border-t pt-4">
-        <button type="button" onClick={onLogout} disabled={busy} className="text-sm rounded-md border border-gray-300 px-3 py-2 hover:bg-gray-50 disabled:opacity-50">{busy ? 'Disconnecting…' : 'Disconnect ChatGPT'}</button>
-        <p className="mt-2 text-xs text-gray-500">Disconnecting ends this session and clears the current lesson from this browser.</p>
+        <button type="button" onClick={onLogout} disabled={busy} className="text-sm rounded-md border border-gray-300 px-3 py-2 hover:bg-gray-50 disabled:opacity-50">{disconnecting ? 'Disconnecting…' : 'Disconnect ChatGPT'}</button>
+        <p className="mt-2 text-xs text-gray-500">{localMode ? 'Disconnecting ends this session and clears this lesson. The account stays in your saved list.' : 'Disconnecting ends this session and clears the current lesson from this browser.'}</p>
       </div>
     </section>
   );

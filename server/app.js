@@ -290,7 +290,7 @@ app.post('/api/generate', async (req, res) => {
                 const maxSeen = Number(process.env.COOKIE_MAX_SEEN_PER_TYPE || 50);
                 const merged = Array.from(new Set([...seenList, ...prefixes])).slice(-maxSeen);
                 const cookieVal = encodeURIComponent(merged.join(','));
-                res.append('Set-Cookie', `${cookieName}=${cookieVal}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${production ? "; Secure" : ""}`);
+                res.append('Set-Cookie', `${cookieName}=${cookieVal}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${production && auth.mode !== 'local' ? "; Secure" : ""}`);
               } catch {}
               return res.json({ items: [{ ...rec.content, exerciseSha: foundSha }] });
             }
@@ -362,7 +362,7 @@ app.post('/api/generate', async (req, res) => {
         const maxSeen = Number(process.env.COOKIE_MAX_SEEN_PER_TYPE || 50);
         const merged = Array.from(new Set([...seenList, ...prefixes])).slice(-maxSeen);
         const cookieVal = encodeURIComponent(merged.join(','));
-        res.append('Set-Cookie', `${cookieName}=${cookieVal}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${production ? "; Secure" : ""}`);
+        res.append('Set-Cookie', `${cookieName}=${cookieVal}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${production && auth.mode !== 'local' ? "; Secure" : ""}`);
       } catch {}
 
       const itemsWithIds = resultItems.map((it, i) => ({ ...it, exerciseSha: resultShas[i] }));
