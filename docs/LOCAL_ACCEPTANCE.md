@@ -22,7 +22,7 @@ Each scored exercise was checked with its correct answer and an incorrect answer
 
 An earlier cold FIB run with GPT-6-Astra also produced 10 valid items in 94.7 seconds. Model latency varies. Live checks cover the listed language, level, counts, and models; they are not a guarantee of every possible model output.
 
-The regression suite passes 133 tests, including authentication, account isolation, refresh/logout, shutdown cancellation, stream inactivity and total deadlines, persisted model selection, chapter failure/retry behavior, exact counts, cache context, invalid answer structures, tutorial dismissal, and PDF export. Production dependency audit: zero known advisories. Existing development-tool advisories are separate from this result.
+The regression suite passes 134 tests, including authentication, account isolation, refresh/logout, shutdown cancellation, stream inactivity and total deadlines, persisted model selection, chapter failure/retry behavior, exact counts, cache context, invalid answer structures, tutorial dismissal, and PDF export. Production dependency audit: zero known advisories. Existing development-tool advisories are separate from this result.
 
 ## Browser and PDF checks
 
@@ -30,7 +30,7 @@ A separate browser regression preview replayed the saved live outputs through th
 
 Tutorial Skip removed the dialog and overlay immediately and saved dismissal. Reloading, starting a lesson, and resetting to language selection did not reopen it. Help explicitly reopened it; Close removed it again. Automated ReactDOM/Joyride checks also cover Finish and timer races.
 
-The full saved lesson exported to a 25-page PDF containing all nine exercise families and complete answer keys. Text extraction, page-bound checks, and visual inspection found no horizontal overflow. Regression coverage includes long answer lines, narrow table cells, the first Markdown table row, and a pagination loop triggered by a wrapping block's bottom margin.
+The full saved lesson exported to a 25-page PDF containing all nine exercise families and complete answer keys. Text extraction, page-bound checks, and visual inspection found no horizontal or vertical text overflow. Adding vertical checks exposed a context line extending into the bottom margin; moving its padding to a container fixed its pagination. Regression coverage includes long answer lines, narrow table cells, the first Markdown table row, and a pagination loop triggered by a wrapping block's bottom margin.
 
 Safari sign-in and live explanation rendering were confirmed earlier in the session; its native automation window subsequently became unavailable. The final tutorial and input-interaction checks used the collaborative browser preview, not a fresh Safari authentication run.
 

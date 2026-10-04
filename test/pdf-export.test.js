@@ -7,7 +7,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const hasPoppler = !spawnSync('pdftotext', ['-v']).error;
+const poppler = spawnSync('pdftotext', ['-v'], { encoding: 'utf8', timeout: 5000 });
+if (poppler.error && poppler.error.code !== 'ENOENT') throw poppler.error;
+const hasPoppler = poppler.error?.code !== 'ENOENT';
+if (hasPoppler && poppler.status !== 0) {
+  throw new Error(`pdftotext version check failed (status ${poppler.status}, signal ${poppler.signal}): ${poppler.stderr}`);
+}
 
 test('PDF preserves table rows and full solutions while fitting long answer spaces', {
   skip: hasPoppler ? false : 'PDF integration requires Poppler pdftotext',
@@ -38,4 +43,26 @@ test('PDF preserves table rows and full solutions while fitting long answer spac
   const text = await readFile(join(output, 'language-practice-acceptance.txt'), 'utf8');
   assert.match(text, /Primera fila/);
   assert.match(text, /Tercera columna/);
+});
+
+test('PDF paginates padded context text without crossing the bottom margin', {
+  skip: hasPoppler ? false : 'PDF integration requires Poppler pdftotext',
+  timeout: 65000
+}, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), 'language-pdf-context-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const input = join(temporary, 'input'), output = join(temporary, 'output');
+  await mkdir(input);
+  // Eight saved educational items place the final context at a page break.
+  // The original padded Text put its baseline inside the bottom page margin.
+  const fixture = await readFile(join(root, 'test-support/pdf-context-page-break.json'), 'utf8');
+  await writeFile(join(input, 'fib.json'), fixture);
+  execFileSync(process.execPath, ['scripts/pdf-acceptance.mjs', input, output, '--allow-partial'], {
+    cwd: root, timeout: 60000, killSignal: 'SIGKILL', stdio: 'pipe'
+  });
+  const report = JSON.parse(await readFile(join(output, 'pdf-report.json'), 'utf8'));
+  assert.deepEqual(report.textOverflow, []);
+  assert.ok(report.pages >= 3 && report.pages < 8, 'The context should paginate within a finite document');
+  const text = await readFile(join(output, 'language-practice-acceptance.txt'), 'utf8');
+  assert.ok(text.includes(JSON.parse(fixture).items.at(-1).context), 'The final context must remain visible');
 });

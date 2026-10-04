@@ -105,8 +105,11 @@ try {
   for (const page of bounds.matchAll(/<page width="([\d.]+)" height="([\d.]+)">([\s\S]*?)<\/page>/g)) {
     pageNumber++;
     for (const word of page[3].matchAll(/<word xMin="([\d.-]+)" yMin="([\d.-]+)" xMax="([\d.-]+)" yMax="([\d.-]+)">([\s\S]*?)<\/word>/g)) {
-      if (Number(word[1]) < 39 || Number(word[3]) > Number(page[1]) - 39) {
-        overflow.push({ page: pageNumber, xMin: Number(word[1]), xMax: Number(word[3]), text: word[5].slice(0, 40) });
+      const xMin = Number(word[1]), yMin = Number(word[2]);
+      const xMax = Number(word[3]), yMax = Number(word[4]);
+      if (xMin < 39 || xMax > Number(page[1]) - 39 ||
+          yMin < 39 || yMax > Number(page[2]) - 39) {
+        overflow.push({ page: pageNumber, xMin, yMin, xMax, yMax, text: word[5].slice(0, 40) });
       }
     }
   }

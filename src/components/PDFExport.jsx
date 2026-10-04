@@ -14,6 +14,9 @@ Font.register({
   ]
 });
 
+// Padding belongs to the container so pagination counts it around the text.
+const PaddedText = ({ style, children }) => <View style={style}><Text>{children}</Text></View>;
+
 const wrapBlankRuns = (value) => String(value).replace(/_{13,}/g, blank => blank.match(/.{1,12}/g).join(' '));
 
 // PDF Styles
@@ -1280,7 +1283,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           {renderBlanks(item.sentence, item.answers || [])}
                         </View>
                       </View>
-                      {item.context && <Text style={styles.context}>Context: {item.context}</Text>}
+                      {item.context && <PaddedText style={styles.context}>Context: {item.context}</PaddedText>}
                     </View>
                   );
                 }
@@ -1313,7 +1316,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           Exercise {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
-                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      {item.studentInstructions && <PaddedText style={styles.instructions}>{item.studentInstructions}</PaddedText>}
                       <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{elements}</View>
                       {renderFootnotes(footnotes)}
                       {getImageByKey(`cloze:${idx}`) && (
@@ -1333,7 +1336,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           Exercise {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
-                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      {item.studentInstructions && <PaddedText style={styles.instructions}>{item.studentInstructions}</PaddedText>}
                       <View style={{ flexDirection: 'row', gap: 15 }}>
                         <View style={{ flex: 1 }}>
                           <View style={{ marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{elements}</View>
@@ -1444,9 +1447,9 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
                       {item.conversationContext && (
-                        <Text style={styles.context}>Conversation Context: {item.conversationContext}</Text>
+                        <PaddedText style={styles.context}>Conversation Context: {item.conversationContext}</PaddedText>
                       )}
-                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      {item.studentInstructions && <PaddedText style={styles.instructions}>{item.studentInstructions}</PaddedText>}
                       <View style={{ gap: 4 }}>
                         {turns.map((turn, ti) => {
                           const isHiddenTurn = hiddenSpeaker && turn.speaker === hiddenSpeaker;
@@ -1480,7 +1483,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                           Set {i + 1} <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text>
                         </Link>{item.title ? `: ${item.title}` : ''}
                       </Text>
-                      {item.studentInstructions && <Text style={styles.instructions}>{item.studentInstructions}</Text>}
+                      {item.studentInstructions && <PaddedText style={styles.instructions}>{item.studentInstructions}</PaddedText>}
                       <View>
                         {(item.prompts || []).map((p, pi) => (
                           <View key={`wp-${blockIdx}-${i}-${pi}`} style={{ marginBottom: 8 }}>
@@ -1509,7 +1512,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                         {String.fromCharCode(97 + i)}. <Link src={`#solution-${anchorId}`}><Text style={{ color: '#2563eb', textDecoration: 'none', fontSize: 8 }}>{DOWN_ARROW}</Text></Link>
                       </Text>
                       {item.instruction && (
-                        <Text style={styles.instructions}>{item.instruction}</Text>
+                        <PaddedText style={styles.instructions}>{item.instruction}</PaddedText>
                       )}
                       {item.original && (
                         <Text style={styles.text}>Original: {item.original}</Text>
@@ -1517,7 +1520,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                       {hintNumber && <Text style={[styles.inlineText, { fontSize: 9 }]}>Hint [{hintNumber}]</Text>}
                       {renderAnswerLines(item.answer, 2)}
                       {item.context && (
-                        <Text style={styles.context}>Context: {item.context}</Text>
+                        <PaddedText style={styles.context}>Context: {item.context}</PaddedText>
                       )}
                     </View>
                   );
@@ -1538,7 +1541,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                         </Link>
                       </Text>
                       {!errorContextShown && typeof lesson.error_bundles_shared_context === 'string' && lesson.error_bundles_shared_context ? (
-                        (() => { errorContextShown = true; return (<Text style={styles.context}>Context: {lesson.error_bundles_shared_context}</Text>); })()
+                        (() => { errorContextShown = true; return (<PaddedText style={styles.context}>Context: {lesson.error_bundles_shared_context}</PaddedText>); })()
                       ) : null}
                       {!isFix ? (
                         <View style={{ marginLeft: 12 }}>
@@ -1596,7 +1599,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
                         </View>
                       </View>
                       {item.context && (
-                        <Text style={[styles.context, { marginLeft: 16 }]}>Context: {item.context}</Text>
+                        <PaddedText style={[styles.context, { marginLeft: 16 }]}>Context: {item.context}</PaddedText>
                       )}
                     </View>
                   );
