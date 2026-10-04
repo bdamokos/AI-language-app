@@ -708,3 +708,165 @@ test('logout during a local profile commit clears the owned grant and retains an
   assert.equal(saved.idToken, null);
   assert.equal(saved.revocationUnconfirmed, true);
 });
+
+test('failed local callback publication revokes its grant and removes every provisional session', async t => {
+  for (const failurePoint of ['profile rename', 'profile temporary cleanup', 'session rename', 'session temporary cleanup', 'old session removal']) {
+    await t.test(failurePoint, async t => {
+      const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+      await browser.status();
+      const originalCookie = browser.cookie;
+      const directory = await fs.realpath(h.config.authDir);
+      const oldSessionPath = path.join(directory, `${createHash('sha256').update(originalCookie.split('=')[1]).digest('hex')}.session`);
+      const vaultPath = path.join(directory, 'local-profiles.vault');
+      const originalRename = fs.rename, originalRemove = fs.rm;
+      let injected = false;
+      const fail = () => { injected = true; throw Object.assign(new Error('Injected storage failure'), { code: 'EIO' }); };
+      fs.rename = async (source, target) => {
+        if (!injected && h.state.sequence && ((failurePoint === 'profile rename' && target === vaultPath) || (failurePoint === 'session rename' && target.endsWith('.session') && target !== oldSessionPath))) fail();
+        return originalRename(source, target);
+      };
+      fs.rm = async (target, options) => {
+        if (!injected && h.state.sequence && ((failurePoint === 'profile temporary cleanup' && target.startsWith(`${vaultPath}.`)) || (failurePoint === 'session temporary cleanup' && target.includes('.session.') && !target.startsWith(`${oldSessionPath}.`)) || (failurePoint === 'old session removal' && target === oldSessionPath))) fail();
+        return originalRemove(target, options);
+      };
+      t.after(() => { fs.rename = originalRename; fs.rm = originalRemove; });
+      const { response } = await browser.login({ issuedClientId: 'oaiapp_failed_publication' });
+      assert.equal(injected, true);
+      assert.match(response.headers.get('location'), /auth=error$/);
+      assert.equal(browser.cookie, originalCookie);
+      assert.deepEqual(h.state.revokedTokens, ['refresh-1']);
+      assert.equal((await browser.request('/api/token')).status, 401);
+      const status = (await browser.status()).data;
+      assert.equal(status.authenticated, false);
+      assert.equal(status.accounts.length, 1);
+      assert.equal(status.accounts[0].connected, false);
+      assert.deepEqual((await fs.readdir(directory)).filter(name => name.endsWith('.session')), [path.basename(oldSessionPath)]);
+      // A pre-commit failure remains the profile store's last failed write;
+      // shutdown reports it after draining, without inventing a successful write.
+      if (failurePoint === 'profile rename') await assert.rejects(h.auth.close(), { code: 'EIO' });
+      else await h.auth.close();
+      const profile = (await createLocalProfileStore(h.config.authDir)).get(status.accounts[0].id);
+      assert.equal(profile.clientId, 'oaiapp_failed_publication');
+      assert.equal(profile.credentials, null);
+      assert.equal(profile.idToken, null);
+    });
+  }
+});
+
+test('failed local publication preserves another active account and records unsuccessful revocation', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.login({ issuedClientId: 'oaiapp_preserved', subject: 'alice' });
+  const original = (await browser.status()).data;
+  const originalCookie = browser.cookie;
+  const originalRename = fs.rename;
+  let injected = false;
+  fs.rename = async (source, target) => {
+    if (!injected && h.state.sequence === 2 && target.endsWith('.session')) {
+      injected = true;
+      throw Object.assign(new Error('Injected session publication failure'), { code: 'EIO' });
+    }
+    return originalRename(source, target);
+  };
+  t.after(() => { fs.rename = originalRename; });
+  h.state.revokeFailure = true;
+  const { response } = await browser.login({ issuedClientId: 'oaiapp_failed_other', subject: 'bob' });
+  assert.match(response.headers.get('location'), /auth=error$/);
+  assert.equal(injected, true);
+  assert.equal(browser.cookie, originalCookie);
+  assert.deepEqual(h.state.revokedTokens, ['refresh-2', 'refresh-2']);
+  const status = (await browser.status()).data;
+  assert.equal(status.user.id, original.user.id);
+  assert.equal(status.accounts.find(account => account.id === original.user.id).connected, true);
+  const failed = status.accounts.find(account => account.id !== original.user.id);
+  assert.equal(failed.connected, false);
+  assert.deepEqual(await (await browser.request('/api/token')).json(), { token: 'access-1' });
+  h.state.revokeFailure = false;
+  assert.deepEqual(await (await browser.request('/api/auth/logout', { method: 'POST' })).json(), { ok: true, revocationConfirmed: false });
+  await h.auth.close();
+  const profile = (await createLocalProfileStore(h.config.authDir)).get(failed.id);
+  assert.equal(profile.credentials, null);
+  assert.equal(profile.idToken, null);
+  assert.equal(profile.revocationUnconfirmed, true);
+});
+
+test('a cleanup write failure does not prevent revocation or removal of a committed provisional session', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.status();
+  const directory = await fs.realpath(h.config.authDir);
+  const oldSessionPath = path.join(directory, `${createHash('sha256').update(browser.cookie.split('=')[1]).digest('hex')}.session`);
+  const vaultPath = path.join(directory, 'local-profiles.vault');
+  const originalRename = fs.rename, originalRemove = fs.rm;
+  let publicationFailed = false, cleanupFailed = false;
+  fs.rm = async (target, options) => {
+    if (!publicationFailed && h.state.sequence && target.includes('.session.') && !target.startsWith(`${oldSessionPath}.`)) {
+      publicationFailed = true;
+      throw Object.assign(new Error('Injected post-commit publication failure'), { code: 'EIO' });
+    }
+    return originalRemove(target, options);
+  };
+  fs.rename = async (source, target) => {
+    if (publicationFailed && !cleanupFailed && target === vaultPath) {
+      cleanupFailed = true;
+      throw Object.assign(new Error('Injected cleanup write failure'), { code: 'EIO' });
+    }
+    return originalRename(source, target);
+  };
+  t.after(() => { fs.rename = originalRename; fs.rm = originalRemove; });
+  const { response } = await browser.login({ issuedClientId: 'oaiapp_cleanup_disk_failure' });
+  assert.match(response.headers.get('location'), /auth=error$/);
+  assert.equal(publicationFailed, true);
+  assert.equal(cleanupFailed, true);
+  assert.deepEqual(h.state.revokedTokens, ['refresh-1']);
+  assert.deepEqual((await fs.readdir(directory)).filter(name => name.endsWith('.session')), [path.basename(oldSessionPath)]);
+  assert.equal((await browser.request('/api/token')).status, 401);
+  assert.equal((await browser.status()).data.authenticated, false);
+  // The simulated failed cleanup leaves an encrypted copy, but revocation still
+  // invalidates it at the provider. Neither action depends on the other succeeding.
+  const revoked = await h.fetchImpl(`${issuer}/token`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(1_000), headers: {}, body: new URLSearchParams({ grant_type: 'refresh_token', client_id: 'oaiapp_cleanup_disk_failure', refresh_token: 'refresh-1', resource: 'https://api.openai.com/v1' }).toString() });
+  assert.equal(revoked.status, 400);
+  assert.equal((await revoked.json()).error, 'invalid_grant');
+});
+
+test('failed identity validation revokes only a newly issued grant, preserving any reused current grant', async t => {
+  for (const mode of ['hosted', 'local']) {
+    for (const reuse of [false, true]) await t.test(`${mode}, reused grant: ${reuse}`, async t => {
+      const h = await harness(t, { config: { mode } }), browser = h.browser();
+      await browser.login({ issuedClientId: 'oaiapp_preserved_identity', subject: 'alice' });
+      const accountId = (await browser.status()).data.user.id;
+      if (reuse) h.state.reuseRefreshToken = 'refresh-1';
+      const { response } = await browser.login({ claims: { nonce: 'invalid-nonce' } }, { accountId });
+      assert.match(response.headers.get('location'), /auth=error$/);
+      assert.deepEqual(h.state.revokedTokens, reuse ? [] : ['refresh-2']);
+      assert.equal((await browser.status()).data.user.id, accountId);
+      assert.deepEqual(await (await browser.request('/api/token')).json(), { token: 'access-1' });
+    });
+  }
+});
+
+test('failed local replacement never restores a previous grant already revoked before the profile write', async t => {
+  const h = await harness(t, { config: { mode: 'local' } }), browser = h.browser();
+  await browser.login({ issuedClientId: 'oaiapp_retired_grant' });
+  const accountId = (await browser.status()).data.user.id;
+  const vaultPath = path.join(await fs.realpath(h.config.authDir), 'local-profiles.vault');
+  const originalRename = fs.rename;
+  let injected = false;
+  fs.rename = async (source, target) => {
+    if (!injected && h.state.sequence === 2 && target === vaultPath) {
+      injected = true;
+      throw Object.assign(new Error('Injected replacement failure'), { code: 'EIO' });
+    }
+    return originalRename(source, target);
+  };
+  t.after(() => { fs.rename = originalRename; });
+  const { response } = await browser.login({}, { accountId });
+  assert.match(response.headers.get('location'), /auth=error$/);
+  assert.deepEqual(h.state.revokedTokens, ['refresh-1', 'refresh-2']);
+  const status = (await browser.status()).data;
+  assert.equal(status.authenticated, false);
+  assert.equal(status.accounts[0].id, accountId);
+  assert.equal(status.accounts[0].connected, false);
+  await h.auth.close();
+  const profile = (await createLocalProfileStore(h.config.authDir)).get(accountId);
+  assert.equal(profile.credentials, null);
+  assert.equal(profile.idToken, null);
+});

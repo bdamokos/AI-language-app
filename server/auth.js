@@ -457,61 +457,89 @@ export async function createAuth({ config = {}, fetch: fetchImpl = globalThis.fe
               if (!localProfile(pendingProfileId)) await profiles.put({ accountId: pendingProfileId, issuer, clientId: issuedClientId, subject: null, user: null, credentials: null, idToken: null, generation: random() });
             }
             const signInSignal = controller(id, session.expiresAt).signal;
-            const tokens = await exchange({ grant_type: 'authorization_code', code: req.query.code, code_verifier: transaction.verifier, redirect_uri: redirect.href, ...(local || transaction.enableInference ? { resource: RESOURCE } : {}) }, issuedClientId);
-            const identity = await verifyIdentity(tokens.id_token, transaction.nonce, transaction.subject, issuedClientId);
-            let committedProfile;
-            const cancelSignIn = async () => {
-              const confirmed = await revoke(tokens.refresh_token, issuedClientId);
-              if (local && committedProfile) {
-                const current = localProfile(committedProfile.accountId);
-                if (current?.generation === committedProfile.generation) await profiles.put({ ...current, credentials: null, idToken: null, generation: random(), revocationUnconfirmed: Boolean(current.revocationUnconfirmed || !confirmed) });
-                if (session.accountId === committedProfile.accountId) {
-                  // Keep the browser-bound warning reachable by a queued logout,
-                  // even though replacing this registration invalidated its old session.
-                  session.user = null; session.accountId = null;
-                  delete session.credentials; delete session.idToken;
+            let tokens, ownedProfile, retiredProfile, freshId;
+            let retiredSessionGrant = false;
+            const rollbackSignIn = async () => {
+              const candidate = ownedProfile ?? retiredProfile;
+              const current = local && candidate ? localProfile(candidate.accountId) : null;
+              const clearProfile = current && (current.generation === ownedProfile?.generation || current.generation === retiredProfile?.generation) ? current : null;
+              const refreshToken = typeof tokens?.refresh_token === 'string' ? tokens.refresh_token : null;
+              // A rejected identity or pre-commit failure can return the same grant
+              // as a profile we are preserving. Do not revoke that profile's grant.
+              const preservedGrant = refreshToken && (local
+                ? profiles.list().some(profile => profile.issuer === issuer && profile.clientId === issuedClientId && profile.credentials?.refreshToken === refreshToken && !(profile.accountId === clearProfile?.accountId && profile.generation === clearProfile?.generation))
+                : !retiredSessionGrant && session.credentials?.refreshToken === refreshToken);
+              const confirmed = preservedGrant || await revoke(refreshToken, issuedClientId).catch(() => false);
+              session.revocationUnconfirmed = Boolean(session.revocationUnconfirmed || clearProfile?.revocationUnconfirmed || !confirmed);
+              if (clearProfile) {
+                // Fence cleanup to this attempt, including a put that committed
+                // its rename before reporting a temporary-file cleanup error.
+                if (localProfile(clearProfile.accountId)?.generation === clearProfile.generation) {
+                  abortProfile(clearProfile.accountId);
+                  await profiles.put({ ...clearProfile, credentials: null, idToken: null, generation: random(), revocationUnconfirmed: session.revocationUnconfirmed }).catch(() => {});
                 }
               }
-              session.revocationUnconfirmed = Boolean(session.revocationUnconfirmed || !confirmed);
-              await writeSession(id, session);
-              throw error(401, 'sign_in_cancelled', 'Sign-in was cancelled.');
-            };
-            if (signInSignal.aborted) await cancelSignIn();
-            const accountId = digest(`${issuer}\0${issuedClientId}\0${identity.sub}`);
-            const fresh = newSession();
-            fresh.accountId = accountId;
-            fresh.subject = identity.sub;
-            fresh.issuer = issuer;
-            fresh.clientId = issuedClientId;
-            fresh.user = { id: accountId, name: typeof identity.name === 'string' ? identity.name : null, email: typeof identity.email === 'string' ? identity.email : null };
-            fresh.credentials = credentials(tokens);
-            fresh.revocationUnconfirmed = Boolean(session.revocationUnconfirmed);
-            if (local) {
-              const previous = localProfile(accountId);
-              fresh.revocationUnconfirmed = Boolean(previous?.revocationUnconfirmed);
-              fresh.profileGeneration = random();
-              fresh.idToken = tokens.id_token;
-              if (signInSignal.aborted || closed) await cancelSignIn();
-              if (previous?.credentials?.refreshToken && previous.credentials.refreshToken !== fresh.credentials.refreshToken && !await revoke(previous.credentials.refreshToken, issuedClientId)) fresh.revocationUnconfirmed = true;
-              if (signInSignal.aborted || closed) await cancelSignIn();
-              committedProfile = await profiles.put({ accountId, issuer, clientId: issuedClientId, subject: identity.sub, user: fresh.user, credentials: fresh.credentials, idToken: fresh.idToken, revocationUnconfirmed: fresh.revocationUnconfirmed, generation: fresh.profileGeneration, ...(previous?.modelPreference ? { modelPreference: previous.modelPreference } : {}) }, pendingProfileId);
-            }
-            const freshId = random();
-            await writeSession(freshId, fresh);
-            if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
-            const previousRefreshToken = session.credentials?.refreshToken;
-            if (!local && previousRefreshToken && previousRefreshToken !== fresh.credentials.refreshToken) {
-              if (!await revoke(previousRefreshToken)) {
-                fresh.revocationUnconfirmed = true;
-                await store.write(freshId, fresh);
-                session.revocationUnconfirmed = true;
-                await store.write(id, session);
+              if ((clearProfile && session.accountId === clearProfile.accountId) || retiredSessionGrant) {
+                // Never restore a replaced or revoked grant. Keep the warning in
+                // the old browser session so a queued logout can report it.
+                session.user = null; session.accountId = null;
+                delete session.credentials; delete session.idToken;
               }
-              if (signInSignal.aborted) { await drop(freshId); await cancelSignIn(); }
+              // These attempts must remain independent: a disk failure in one
+              // location must not leave another provisional credential usable.
+              if (freshId) await drop(freshId).catch(() => {});
+              await writeSession(id, session).catch(() => {});
+            };
+            const assertSignInActive = () => {
+              if (signInSignal.aborted || closed) throw error(401, 'sign_in_cancelled', 'Sign-in was cancelled.');
+            };
+            try {
+              tokens = await exchange({ grant_type: 'authorization_code', code: req.query.code, code_verifier: transaction.verifier, redirect_uri: redirect.href, ...(local || transaction.enableInference ? { resource: RESOURCE } : {}) }, issuedClientId);
+              const identity = await verifyIdentity(tokens.id_token, transaction.nonce, transaction.subject, issuedClientId);
+              assertSignInActive();
+              const accountId = digest(`${issuer}\0${issuedClientId}\0${identity.sub}`);
+              const fresh = newSession();
+              fresh.accountId = accountId;
+              fresh.subject = identity.sub;
+              fresh.issuer = issuer;
+              fresh.clientId = issuedClientId;
+              fresh.user = { id: accountId, name: typeof identity.name === 'string' ? identity.name : null, email: typeof identity.email === 'string' ? identity.email : null };
+              fresh.credentials = credentials(tokens);
+              fresh.revocationUnconfirmed = Boolean(session.revocationUnconfirmed);
+              if (local) {
+                const previous = localProfile(accountId);
+                fresh.revocationUnconfirmed = Boolean(fresh.revocationUnconfirmed || previous?.revocationUnconfirmed);
+                fresh.profileGeneration = random();
+                fresh.idToken = tokens.id_token;
+                assertSignInActive();
+                if (previous?.credentials?.refreshToken && previous.credentials.refreshToken !== fresh.credentials.refreshToken) {
+                  retiredProfile = previous;
+                  if (!await revoke(previous.credentials.refreshToken, issuedClientId)) fresh.revocationUnconfirmed = session.revocationUnconfirmed = true;
+                }
+                assertSignInActive();
+                ownedProfile = { accountId, generation: fresh.profileGeneration };
+                await profiles.put({ accountId, issuer, clientId: issuedClientId, subject: identity.sub, user: fresh.user, credentials: fresh.credentials, idToken: fresh.idToken, revocationUnconfirmed: fresh.revocationUnconfirmed, generation: fresh.profileGeneration, ...(previous?.modelPreference ? { modelPreference: previous.modelPreference } : {}) }, pendingProfileId);
+              }
+              freshId = random();
+              await writeSession(freshId, fresh);
+              assertSignInActive();
+              const previousRefreshToken = session.credentials?.refreshToken;
+              if (!local && previousRefreshToken && previousRefreshToken !== fresh.credentials.refreshToken) {
+                retiredSessionGrant = true;
+                if (!await revoke(previousRefreshToken)) {
+                  fresh.revocationUnconfirmed = session.revocationUnconfirmed = true;
+                  await store.write(freshId, fresh);
+                  await store.write(id, session);
+                }
+                assertSignInActive();
+              }
+              if (local) abortProfile(accountId);
+              await drop(id);
+              setCookie(res, freshId);
+            } catch (failure) {
+              await rollbackSignIn();
+              throw failure;
             }
-            if (local) abortProfile(accountId);
-            await drop(id);
-            setCookie(res, freshId);
           });
         });
         return finish('success');
