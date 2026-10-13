@@ -324,8 +324,31 @@ echo "📋 Deploying LanguageAIApp to $REMOTE_USER@$REMOTE_HOST..."
 
 # Copy deployment files to remote server
 echo "📦 Copying deployment files to remote server..."
-run_ssh "mkdir -p $DEPLOY_PATH"
-run_scp docker-compose.yml .env $REMOTE_USER@$REMOTE_HOST:$DEPLOY_PATH/
+# Quote for the remote login shell, including paths containing single quotes.
+printf -v remote_deploy_path "'%s'" "${DEPLOY_PATH//\'/\'\\\'\'}"
+run_ssh "set -e; umask 077; test ! -L $remote_deploy_path; mkdir -p -- $remote_deploy_path; chmod 700 $remote_deploy_path"
+run_scp docker-compose.yml "$REMOTE_USER@$REMOTE_HOST:$DEPLOY_PATH/"
+# Stream secrets into private staging; a failed upload leaves the old file intact.
+env_bytes=$(wc -c < .env)
+run_ssh "
+set -e
+umask 077
+env_path=$remote_deploy_path/.env
+if [ -L \"\$env_path\" ] || [ -d \"\$env_path\" ]; then
+    echo 'Refusing a symlink or directory as the hosted configuration.' >&2
+    exit 1
+fi
+env_tmp=\$(mktemp $remote_deploy_path/.env.XXXXXX)
+trap 'rm -f -- \"\$env_tmp\"' EXIT
+trap 'exit 1' HUP INT TERM
+cat > \"\$env_tmp\"
+if [ \"\$(wc -c < \"\$env_tmp\")\" -ne $env_bytes ]; then
+    echo 'Incomplete hosted configuration upload.' >&2
+    exit 1
+fi
+chmod 600 \"\$env_tmp\"
+mv -f -- \"\$env_tmp\" \"\$env_path\"
+" < .env
 
 echo "🔄 Running deployment on remote server..."
 sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=yes "$REMOTE_USER@$REMOTE_HOST" bash -s -- "$DEPLOY_PATH" "$CACHE_HOST_DIR" "$DEPLOY_PORT" "$FULL_IMAGE_NAME" <<'REMOTE_SCRIPT'

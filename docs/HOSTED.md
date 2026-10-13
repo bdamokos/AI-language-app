@@ -17,7 +17,7 @@ See OpenAI's [website sign-in guide](https://developers.openai.com/siwc/website)
 Requires Node.js 22.12 or newer. From the repository root:
 
 ```sh
-cp env.example .env
+install -m 600 env.example .env
 npm ci
 npm run dev:hosted
 ```
@@ -76,7 +76,7 @@ docker compose up --build -d
 
 Configure `APP_ORIGIN` and the approved OAuth client in `.env` first. Adapt the network binding deliberately if the reverse proxy runs elsewhere. No OpenRouter, Runware, fal.ai, or Ollama credentials are used.
 
-The optional `deploy.sh` remote helper requires `REGISTRY_HOST`, including in `--deploy-only` mode. It pulls the selected registry image before replacing the service. SSH requires an already verified host key in `known_hosts`; verify the server fingerprint through a trusted channel before first use. Unknown or changed keys stop deployment. Direct local Compose builds remain supported.
+The optional `deploy.sh` remote helper requires `REGISTRY_HOST`, including in `--deploy-only` mode. It keeps the remote deployment directory owner-only (0700) and atomically replaces `.env` with an owner-only (0600) file after a successful upload. It pulls the selected registry image before replacing the service. SSH requires an already verified host key in `known_hosts`; verify the server fingerprint through a trusted channel before first use. Unknown or changed keys stop deployment. Direct local Compose builds remain supported.
 
 ## Live acceptance before release
 

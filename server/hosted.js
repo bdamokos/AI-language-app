@@ -18,9 +18,20 @@ const server = app.listen(port, process.env.HOST || '0.0.0.0', () => {
 });
 server.requestTimeout = 150_000;
 server.headersTimeout = 20_000;
-for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.once(signal, () => {
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 10_000).unref();
-  });
+let closing = false;
+async function shutdown() {
+  if (closing) return;
+  closing = true;
+  const timeout = setTimeout(() => process.exit(1), 10_000);
+  timeout.unref();
+  try {
+    // A disconnected request can still be persisting rotated credentials.
+    await Promise.all([
+      new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
+      auth.close()
+    ]);
+    clearTimeout(timeout);
+    process.exit(0);
+  } catch { process.exit(1); }
 }
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, shutdown);
