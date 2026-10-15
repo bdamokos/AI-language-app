@@ -125,7 +125,7 @@ export default function App() {
         {loading ? <p role="status" className="py-16 text-center text-gray-600">Checking your connection…</p> : (
           <div className={settingsOpen && session?.authenticated ? 'grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-6 items-start' : ''}>
             {ready ? <Suspense fallback={<p role="status" className="py-12 text-center text-gray-600">Opening language practice…</p>}><AIPracticeApp key={`${session.user?.id || 'connected'}:${lessonKey}`} onNewLesson={() => { window.globalImageStore = {}; setLessonKey(value => value + 1); }} /></Suspense> : (
-              <section className="max-w-xl mx-auto my-10 rounded-xl border border-gray-200 bg-white p-6 sm:p-9 shadow-sm">
+              <section className="max-w-xl mx-auto my-10 rounded-xl border border-gray-200 bg-white p-6 sm:p-9 shadow-xs">
                 <BookOpen className="text-blue-600 mb-5" size={32} />
                 <h1 className="text-3xl font-semibold tracking-tight mb-3">Practice a language with your ChatGPT account</h1>
                 <p className="text-gray-600 leading-relaxed mb-6">Choose your language, level, and topic. Get an explanation, practise with exercises, and check your answers.</p>

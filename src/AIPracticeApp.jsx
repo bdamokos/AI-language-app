@@ -367,94 +367,94 @@ const AIPracticeApp = ({ onNewLesson }) => {
 
   // Create generation controls component
   const renderGenerationControls = () => (
-    <div id="exercise-generation-controls" className="mt-3 p-3 bg-gray-50 rounded">
+    <div id="exercise-generation-controls" className="mt-3 p-3 bg-gray-50 rounded-sm">
       <div className="font-semibold text-gray-800 mb-2">Add content</div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-center">
         <button
           onClick={generateExplanationOnly}
           disabled={loadingLesson || loadingExplOnly || !topic.trim()}
-          className="w-full bg-gray-800 text-white py-2 px-4 rounded hover:bg-gray-900 text-sm"
+          className="w-full bg-gray-800 text-white py-2 px-4 rounded-sm hover:bg-gray-900 text-sm"
         >{loadingLesson || loadingExplOnly ? 'Generating explanation…' : 'Generate Explanation'}</button>
 
         <div className="flex gap-2">
           <button
             onClick={generateFIBOnly}
             disabled={loadingFibOnly || !topic.trim()}
-            className="flex-1 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm"
+            className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-sm hover:bg-blue-700 text-sm"
           >{loadingFibOnly ? (generationStage.fib || 'Generating…') : `Add FIB (${exerciseCount})`}</button>
-          <input type="number" min={1} max={20} value={exerciseCount} onChange={e => setExerciseCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={20} value={exerciseCount} onChange={e => setExerciseCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateMCQOnly}
             disabled={loadingMcqOnly || !topic.trim()}
-            className="flex-1 bg-teal-600 text-white py-2 px-4 rounded hover:bg-teal-700 text-sm"
+            className="flex-1 bg-teal-600 text-white py-2 px-4 rounded-sm hover:bg-teal-700 text-sm"
           >{loadingMcqOnly ? 'Generating...' : `Add MCQ (${mcqCount})`}</button>
-          <input type="number" min={1} max={20} value={mcqCount} onChange={e => setMcqCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={20} value={mcqCount} onChange={e => setMcqCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateClozeOnly}
             disabled={loadingClozeOnly || !topic.trim()}
-            className="flex-1 bg-amber-600 text-white py-2 px-4 rounded hover:bg-amber-700 text-sm"
+            className="flex-1 bg-amber-600 text-white py-2 px-4 rounded-sm hover:bg-amber-700 text-sm"
           >{loadingClozeOnly ? (generationStage.cloze || 'Generating…') : `Add Cloze (${clozeCount})`}</button>
-          <input type="number" min={1} max={10} value={clozeCount} onChange={e => setClozeCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={10} value={clozeCount} onChange={e => setClozeCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateClozeMixOnly}
             disabled={loadingClozeMixOnly || !topic.trim()}
-            className="flex-1 bg-fuchsia-600 text-white py-2 px-4 rounded hover:bg-fuchsia-700 text-sm"
+            className="flex-1 bg-fuchsia-600 text-white py-2 px-4 rounded-sm hover:bg-fuchsia-700 text-sm"
           >{loadingClozeMixOnly ? (generationStage.clozeMixed || 'Generating…') : `Add Cloze-Mixed (${clozeMixCount})`}</button>
-          <input type="number" min={1} max={10} value={clozeMixCount} onChange={e => setClozeMixCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={10} value={clozeMixCount} onChange={e => setClozeMixCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateDialogueOnly}
             disabled={loadingDialogueOnly || !topic.trim()}
-            className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 text-sm"
+            className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-sm hover:bg-indigo-700 text-sm"
           >{loadingDialogueOnly ? 'Generating...' : `Add Guided Dialogues (${dialogueCount})`}</button>
-          <input type="number" min={1} max={10} value={dialogueCount} onChange={e => setDialogueCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={10} value={dialogueCount} onChange={e => setDialogueCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateWritingOnly}
             disabled={loadingWritingOnly || !topic.trim()}
-            className="flex-1 bg-rose-600 text-white py-2 px-4 rounded hover:bg-rose-700 text-sm"
+            className="flex-1 bg-rose-600 text-white py-2 px-4 rounded-sm hover:bg-rose-700 text-sm"
           >{loadingWritingOnly ? 'Generating...' : `Add Writing Prompts (${writingCount})`}</button>
-          <input type="number" min={1} max={10} value={writingCount} onChange={e => setWritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={10} value={writingCount} onChange={e => setWritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateReadingOnly}
             disabled={loadingReadingOnly || !topic.trim()}
-            className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded hover:bg-emerald-700 text-sm"
+            className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded-sm hover:bg-emerald-700 text-sm"
           >{loadingReadingOnly ? (generationStage.reading || 'Generating…') : `Generate Reading Passage (${readingCount})`}</button>
-          <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={5} value={readingCount} onChange={e => setReadingCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateRewritingOnly}
             disabled={loadingRewritingOnly || !topic.trim()}
-            className="flex-1 bg-cyan-600 text-white py-2 px-4 rounded hover:bg-cyan-700 text-sm"
+            className="flex-1 bg-cyan-600 text-white py-2 px-4 rounded-sm hover:bg-cyan-700 text-sm"
           >{loadingRewritingOnly ? (generationStage.rewriting || 'Generating…') : `Add Rewriting (${rewritingCount})`}</button>
-          <input type="number" min={1} max={20} value={rewritingCount} onChange={e => setRewritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={1} max={20} value={rewritingCount} onChange={e => setRewritingCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
 
         <div className="flex gap-2">
           <button
             onClick={generateErrorBundlesOnly}
             disabled={loadingErrorBundlesOnly || !topic.trim()}
-            className="flex-1 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 text-sm"
+            className="flex-1 bg-slate-700 text-white py-2 px-4 rounded-sm hover:bg-slate-800 text-sm"
           >{loadingErrorBundlesOnly ? (generationStage.errorBundle || 'Generating…') : `Add Error Bundles (${errorBundleCount})`}</button>
-          <input type="number" min={2} max={12} value={errorBundleCount} onChange={e => setErrorBundleCount(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm" />
+          <input type="number" min={2} max={12} value={errorBundleCount} onChange={e => setErrorBundleCount(e.target.value)} className="w-16 px-2 py-1 border rounded-sm text-sm" />
         </div>
       </div>
     </div>
@@ -1098,7 +1098,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
           </div>
 
           {errorMsg && (
-            <div role="alert" className="mb-4 bg-red-50 text-red-700 border border-red-200 p-3 rounded">{errorMsg}</div>
+            <div role="alert" className="mb-4 bg-red-50 text-red-700 border border-red-200 p-3 rounded-sm">{errorMsg}</div>
           )}
           {(loadingLesson || loadingExplOnly) && (
             <p role="status" className="mb-4 flex items-center gap-2 text-sm text-blue-700"><RefreshCw size={16} className="animate-spin" />Generating your explanation…</p>
@@ -1134,7 +1134,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
                         id="strictAccents"
                         checked={strictAccents}
                         onChange={(e) => setStrictAccents(e.target.checked)}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
                       />
                       <label htmlFor="strictAccents" className="text-sm text-gray-700">
                         Strict accent checking (á ≠ a)
@@ -1146,7 +1146,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
                         id="showAccentBar"
                         checked={showAccentBar}
                         onChange={(e) => setShowAccentBar(e.target.checked)}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
                       />
                       <label htmlFor="showAccentBar" className="text-sm text-gray-700">
                         Show accent toolbar
@@ -1194,7 +1194,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
                       <button
                         key={char}
                         onClick={() => insertAccent(char)}
-                        className="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-lg font-medium"
+                        className="px-3 py-1 bg-white border border-gray-300 rounded-sm hover:bg-gray-50 text-lg font-medium"
                       >
                         {char}
                       </button>
@@ -1224,8 +1224,8 @@ const AIPracticeApp = ({ onNewLesson }) => {
                               {visibleHintCount > 0 && (
                                 <div className="space-y-1">
                                   {availableHints.slice(0, visibleHintCount).map((hint, hintIndex) => (
-                                    <div key={hintIndex} className="text-sm text-blue-700 bg-blue-50 p-2 rounded flex items-start gap-2">
-                                      <HelpCircle size={14} className="mt-0.5 flex-shrink-0" />
+                                    <div key={hintIndex} className="text-sm text-blue-700 bg-blue-50 p-2 rounded-sm flex items-start gap-2">
+                                      <HelpCircle size={14} className="mt-0.5 shrink-0" />
                                       <span>{hint}</span>
                                     </div>
                                   ))}
@@ -1252,7 +1252,7 @@ const AIPracticeApp = ({ onNewLesson }) => {
                                 {showContext[index] ? 'Hide' : 'Show'} cultural context
                               </button>
                               {showContext[index] && (
-                                <div className="mt-2 text-sm text-purple-700 bg-purple-50 p-3 rounded">
+                                <div className="mt-2 text-sm text-purple-700 bg-purple-50 p-3 rounded-sm">
                                   {exercise.context}
                                 </div>
                               )}

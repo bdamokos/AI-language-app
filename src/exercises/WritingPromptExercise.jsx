@@ -19,10 +19,10 @@ export default function WritingPromptExercise({ item, value, onChange, checked, 
   const [expandedExample, setExpandedExample] = useState({});
 
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
       {item?.studentInstructions && (
-        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2">
+        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1 mb-2">
           {item.studentInstructions}
         </p>
       )}
@@ -37,7 +37,7 @@ export default function WritingPromptExercise({ item, value, onChange, checked, 
               <div className="font-medium text-gray-800">{idx + 1}. {p.question}</div>
               <textarea
                 data-key={`${idPrefix}:${idx}`}
-                className="w-full min-h-[90px] px-2 py-1 border rounded"
+                className="w-full min-h-[90px] px-2 py-1 border rounded-sm"
                 placeholder="Write your response..."
                 value={text}
                 onChange={(e) => onChange(key, e.target.value)}
@@ -47,7 +47,7 @@ export default function WritingPromptExercise({ item, value, onChange, checked, 
                 <div className="text-xs text-green-700">
                   Example answer: <button type="button" className="underline" onClick={() => setExpandedExample(prev => ({ ...prev, [idx]: !prev[idx] }))}>{expandedExample[idx] ? 'Hide' : 'Show'}</button>
                   {expandedExample[idx] && (
-                    <div className="mt-1 text-green-800 bg-green-50 border border-green-200 rounded px-2 py-1 whitespace-pre-wrap">{example}</div>
+                    <div className="mt-1 text-green-800 bg-green-50 border border-green-200 rounded-sm px-2 py-1 whitespace-pre-wrap">{example}</div>
                   )}
                 </div>
               )}

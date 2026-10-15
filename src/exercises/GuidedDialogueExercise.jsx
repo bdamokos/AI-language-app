@@ -34,18 +34,18 @@ export default function GuidedDialogueExercise({ item, value, onChange, checked,
   const showFirstHiddenTurn = turns.findIndex(turn => turn.speaker === hiddenSpeaker) !== -1;
 
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
 
       {item?.conversationContext && (
-        <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded">
+        <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-sm">
           <p className="text-sm font-medium text-gray-700 mb-1">Conversation Context:</p>
           <p className="text-sm text-gray-600">{item.conversationContext}</p>
         </div>
       )}
 
       {item?.studentInstructions && (
-        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2">
+        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1 mb-2">
           {item.studentInstructions}
         </p>
       )}
@@ -57,7 +57,7 @@ export default function GuidedDialogueExercise({ item, value, onChange, checked,
 
           return (
             <div key={idx} className="flex items-start gap-2">
-              <span className="font-semibold text-gray-700 min-w-[3rem]">{turn.speaker || '—'}:</span>
+              <span className="font-semibold text-gray-700 min-w-12">{turn.speaker || '—'}:</span>
               {shouldShowTurn ? (
                 <div className="flex-1 text-gray-800">{turn.text}</div>
               ) : (
@@ -68,11 +68,11 @@ export default function GuidedDialogueExercise({ item, value, onChange, checked,
                     value={String(value?.[String(idx)] || '')}
                     onChange={(e) => onChange(String(idx), e.target.value)}
                     onFocus={() => onFocusKey && onFocusKey(`${idPrefix}:${idx}`)}
-                    className={`w-full max-w-xl px-2 py-1 border rounded ${checked ? 'bg-gray-50' : ''}`}
+                    className={`w-full max-w-xl px-2 py-1 border rounded-sm ${checked ? 'bg-gray-50' : ''}`}
                     placeholder="Write the missing line..."
                   />
                   {checked && (
-                    <div className="mt-1 px-2 py-1 border rounded bg-green-50 text-green-800 text-xs">
+                    <div className="mt-1 px-2 py-1 border rounded-sm bg-green-50 text-green-800 text-xs">
                       Suggested answer: {turn.text}
                     </div>
                   )}
@@ -86,7 +86,7 @@ export default function GuidedDialogueExercise({ item, value, onChange, checked,
                     </button>
                   )}
                   {!checked && showHints[idx] && turn.hint && (
-                    <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                    <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1">
                       {turn.hint}
                     </div>
                   )}
@@ -100,7 +100,7 @@ export default function GuidedDialogueExercise({ item, value, onChange, checked,
                     </button>
                   )}
                   {!checked && showHints[idx] && !turn.hint && Array.isArray(item?.hints) && item.hints.length > 0 && (
-                    <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                    <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1">
                       {item.hints[0]}
                     </div>
                   )}

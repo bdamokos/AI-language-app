@@ -28,9 +28,9 @@ export default function RewritingExercise({ item, value, onChange, checked, stri
   const isWrong = checked && userVal && expected && !isCorrect;
 
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       {showInstruction && item?.instruction && (
-        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2">
+        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1 mb-2">
           {item.instruction}
         </p>
       )}
@@ -44,7 +44,7 @@ export default function RewritingExercise({ item, value, onChange, checked, stri
         <input
           data-key={`${idPrefix}`}
           type="text"
-          className={`w-full px-2 py-1 border rounded ${isCorrect ? 'border-green-500 bg-green-50' : isWrong ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+          className={`w-full px-2 py-1 border rounded-sm ${isCorrect ? 'border-green-500 bg-green-50' : isWrong ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
           placeholder="Rewrite here..."
           value={userVal}
           onChange={(e) => onChange(e.target.value)}
@@ -75,7 +75,7 @@ export default function RewritingExercise({ item, value, onChange, checked, stri
               💡 Hint
             </button>
             {showHint && (
-              <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+              <div className="mt-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1">
                 {firstHint}
               </div>
             )}
@@ -84,7 +84,7 @@ export default function RewritingExercise({ item, value, onChange, checked, stri
       })()}
 
       {item?.context && (
-        <div className="mt-2 text-xs text-purple-800 bg-purple-50 border border-purple-200 rounded px-2 py-1">
+        <div className="mt-2 text-xs text-purple-800 bg-purple-50 border border-purple-200 rounded-sm px-2 py-1">
           Context: {item.context}
         </div>
       )}
