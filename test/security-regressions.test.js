@@ -245,7 +245,7 @@ test('clients behind an explicitly trusted socket peer have independent sign-in 
 });
 
 test('untrusted socket peers cannot rotate forwarded addresses to bypass sign-in limits', async t => {
-  for (const trustedProxyCidrs of ['', '192.0.2.5/32']) {
+  for (const trustedProxyCidrs of ['', '192.0.2.5/32', '::/1', '::/80']) {
     const { request } = await fixture(t, { trustedProxyCidrs, loginRateLimitMax: 1 });
     const login = client => request('/api/auth/login', { account: '', body: {}, headers: { 'x-forwarded-for': client } });
     assert.equal((await login('198.51.100.10')).status, 200);
