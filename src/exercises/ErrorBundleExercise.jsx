@@ -31,7 +31,7 @@ export default function ErrorBundleExercise({ item, value, onChange, checked, st
   if (mode === 'select') {
     const selectedIndex = typeof value === 'number' ? value : null;
     return (
-      <div className="border rounded p-3">
+      <div className="border rounded-sm p-3">
         <p className="font-medium text-gray-800 mb-2">Choose the correct sentence.</p>
         <ul className="space-y-1">
           {sentences.map((s, si) => {
@@ -81,7 +81,7 @@ export default function ErrorBundleExercise({ item, value, onChange, checked, st
   const currentValue = typeof value === 'string' ? value : '';
   const target = sentences[incorrectIndex] || {};
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       <p className="font-medium text-gray-800 mb-2">Fix the sentence. Provide a minimal correction.</p>
       <p className="text-sm text-gray-800 mb-2">Incorrect: <span className="font-medium">{target.text}</span></p>
       <input
@@ -93,7 +93,7 @@ export default function ErrorBundleExercise({ item, value, onChange, checked, st
         }}
         data-key={`${idPrefix}`}
         placeholder="Type the minimal fix"
-        className="w-full border rounded px-2 py-1 text-sm"
+        className="w-full border rounded-sm px-2 py-1 text-sm"
       />
       {checked && (
         <div className="mt-2 space-y-1">

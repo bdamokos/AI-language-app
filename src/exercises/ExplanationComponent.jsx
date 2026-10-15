@@ -40,7 +40,7 @@ export default function ExplanationComponent({ explanation }) {
             // Style tables properly
             table: ({children}) => (
               <div className="overflow-x-auto my-4">
-                <table className="min-w-full border-collapse border border-slate-300 bg-white rounded-lg shadow-sm">
+                <table className="min-w-full border-collapse border border-slate-300 bg-white rounded-lg shadow-xs">
                   {children}
                 </table>
               </div>
@@ -69,7 +69,7 @@ export default function ExplanationComponent({ explanation }) {
             code: ({children, className}) => {
               const isInline = !className;
               return isInline ? (
-                <code className="bg-slate-200 px-1.5 py-0.5 rounded text-sm font-mono text-slate-800">
+                <code className="bg-slate-200 px-1.5 py-0.5 rounded-sm text-sm font-mono text-slate-800">
                   {children}
                 </code>
               ) : (
@@ -88,7 +88,7 @@ export default function ExplanationComponent({ explanation }) {
             type="button"
             onClick={() => sendVote(true)}
             disabled={voted !== null}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${voted === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-slate-300 hover:bg-slate-100'}`}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-sm border ${voted === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-slate-300 hover:bg-slate-100'}`}
             aria-label="Thumbs up"
           >
             <ThumbsUp size={14} /> Like
@@ -97,7 +97,7 @@ export default function ExplanationComponent({ explanation }) {
             type="button"
             onClick={() => sendVote(false)}
             disabled={voted !== null}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${voted === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-slate-300 hover:bg-slate-100'}`}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-sm border ${voted === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-slate-300 hover:bg-slate-100'}`}
             aria-label="Thumbs down"
           >
             <ThumbsDown size={14} /> Dislike

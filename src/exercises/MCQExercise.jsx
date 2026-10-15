@@ -16,7 +16,7 @@ export default function MCQExercise({ item, value, onChange, checked, idPrefix }
   const selectedIndex = typeof value === 'number' ? value : null;
   const options = Array.isArray(item?.options) ? item.options : [];
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       <p className="font-medium text-gray-800 mb-2">{item?.question}</p>
       <ul className="space-y-1">
         {options.map((opt, oi) => {

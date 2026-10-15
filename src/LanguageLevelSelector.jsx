@@ -173,7 +173,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
                 id="challengeMode"
                 checked={challengeMode}
                 onChange={(e) => setChallengeMode(e.target.checked)}
-                className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-amber-300 rounded"
+                className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-amber-300 rounded-sm"
               />
               <label htmlFor="challengeMode" className="text-sm font-medium text-amber-800">
                 Challenge Mode
@@ -196,7 +196,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
               id="strictAccents"
               checked={strictAccents}
               onChange={(e) => setStrictAccents(e.target.checked)}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
             />
             <label htmlFor="strictAccents" className="text-sm text-gray-700">
               Strict accent checking (á ≠ a)
@@ -208,7 +208,7 @@ export default function LanguageLevelSelector({ onStart, isLoading = false }) {
               id="showAccentBar"
               checked={showAccentBar}
               onChange={(e) => setShowAccentBar(e.target.checked)}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
             />
             <label htmlFor="showAccentBar" className="text-sm text-gray-700">
               Show accent toolbar

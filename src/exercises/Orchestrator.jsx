@@ -168,7 +168,7 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
               type="button"
               onClick={() => sendGroupVote(true)}
               disabled={alreadyRated}
-              className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-sm border ${alreadyRated === 'up' ? 'bg-green-100 border-green-300 text-green-700' : 'border-gray-300 hover:bg-gray-100'}`}
               aria-label="Thumbs up"
             >
               <ThumbsUp size={14} /> Like
@@ -177,7 +177,7 @@ export default function Orchestrator({ lesson, values, onChange, checked, strict
               type="button"
               onClick={() => sendGroupVote(false)}
               disabled={alreadyRated}
-              className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-sm border ${alreadyRated === 'down' ? 'bg-red-100 border-red-300 text-red-700' : 'border-gray-300 hover:bg-gray-100'}`}
               aria-label="Thumbs down"
             >
               <ThumbsDown size={14} /> Dislike

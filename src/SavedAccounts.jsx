@@ -20,7 +20,7 @@ export default function SavedAccounts({ accounts, activeAccountId, onConnect, bu
                 aria-label={active ? `${label}, active account` : account.pending ? `Finish signing in to ${label}` : `Continue with ${label}`}
                 className={`w-full flex items-center justify-between gap-3 rounded-lg border p-3 text-left text-sm ${active ? 'border-blue-200 bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50 disabled:opacity-50'}`}
               >
-                <span className="min-w-0 break-words">
+                <span className="min-w-0 wrap-break-word">
                   <span className="block font-medium text-gray-900">{label}</span>
                   {account.email && !label.includes(account.email) && <span className="mt-0.5 block text-xs text-gray-500">{account.email}</span>}
                   {account.pending && <span className="mt-0.5 block text-xs text-gray-500">Sign-in not finished</span>}

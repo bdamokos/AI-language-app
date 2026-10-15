@@ -46,7 +46,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
   const setPP = (i, val) => onChange(`pp:${i}`, val);
 
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       {item?.title && <p className="font-medium text-gray-900 mb-2">{item.title}</p>}
 
       {/* Reading passage */}
@@ -133,7 +133,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
                 <div className="text-sm text-gray-900 mb-1">{qi + 1}. {q.question}</div>
                 <textarea
                   data-key={`${idPrefix}:qa:${qi}`}
-                  className="w-full min-h-[70px] px-2 py-1 border rounded"
+                  className="w-full min-h-[70px] px-2 py-1 border rounded-sm"
                   placeholder="Write your answer..."
                   value={String(value?.[`qa:${qi}`] || '')}
                   onChange={(e) => setQA(qi, e.target.value)}
@@ -159,7 +159,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
                 <div className="text-sm text-gray-900 mb-1">{pi + 1}. {p.prompt}</div>
                 <textarea
                   data-key={`${idPrefix}:pp:${pi}`}
-                  className="w-full min-h-[90px] px-2 py-1 border rounded"
+                  className="w-full min-h-[90px] px-2 py-1 border rounded-sm"
                   placeholder="Write your response..."
                   value={String(value?.[`pp:${pi}`] || '')}
                   onChange={(e) => setPP(pi, e.target.value)}
@@ -185,7 +185,7 @@ export default function ReadingExercise({ item, value, onChange, checked, idPref
                 <div className="text-sm text-gray-900 mb-1">{qi + 1}. {q.question}</div>
                 <textarea
                   data-key={`${idPrefix}:op:${qi}`}
-                  className="w-full min-h-[70px] px-2 py-1 border rounded"
+                  className="w-full min-h-[70px] px-2 py-1 border rounded-sm"
                   placeholder="Write a short, personal answer..."
                   value={String(value?.[`op:${qi}`] || '')}
                   onChange={(e) => onChange(`op:${qi}`, e.target.value)}

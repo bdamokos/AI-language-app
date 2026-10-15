@@ -43,7 +43,7 @@ export default function SettingsPanel({ session, onLogout, onConnect, busy, conn
     <section aria-label="Account settings" className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
       <div>
         <h2 className="font-semibold text-gray-900">Your ChatGPT account</h2>
-        <p className="text-sm text-gray-600 break-words">{activeAccount?.label || session.user?.email || session.user?.name || 'Connected'}</p>
+        <p className="text-sm text-gray-600 wrap-break-word">{activeAccount?.label || session.user?.email || session.user?.name || 'Connected'}</p>
       </div>
       <p className="text-sm text-gray-600">Lessons use your ChatGPT plan. Your plan’s limits apply.</p>
       <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer" className="inline-block text-sm text-blue-700 underline">View ChatGPT usage</a>

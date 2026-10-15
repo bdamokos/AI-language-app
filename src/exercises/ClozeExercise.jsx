@@ -60,7 +60,7 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
             </button>
           )}
           {blank.hint && showHints[i] && !checked && (
-            <div className="ml-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1 mt-1">
+            <div className="ml-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1 mt-1">
               <strong>Hint:</strong> {blank.hint}
             </div>
           )}
@@ -86,7 +86,7 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
         
         if (!isCorrect && blank.rationale && showRationale[i]) {
           nodes.push(
-            <div key={`r-${i}`} className="ml-2 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded px-2 py-1 mt-1 w-full">
+            <div key={`r-${i}`} className="ml-2 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-sm px-2 py-1 mt-1 w-full">
               <strong>Explanation:</strong> {blank.rationale}
             </div>
           );
@@ -96,17 +96,17 @@ export default function ClozeExercise({ item, value, onChange, checked, strictAc
   }
   
   return (
-    <div className="border rounded p-3">
+    <div className="border rounded-sm p-3">
       {item?.title && <p className="font-medium mb-2">{item.title}</p>}
       {item?.studentInstructions && (
-        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2">
+        <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-sm px-2 py-1 mb-2">
           {item.studentInstructions}
         </p>
       )}
       
       {/* Display warnings if there are validation issues */}
       {warnings.length > 0 && (
-        <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+        <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-sm text-sm">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-yellow-700">⚠️</span>
             <span className="font-medium text-yellow-800">Validation Warning</span>
