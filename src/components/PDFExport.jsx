@@ -3,6 +3,7 @@ import { diffChars, diffWordsWithSpace } from 'diff';
 import { Download, FileText, Image as ImageIcon } from 'lucide-react';
 import { Document, Page, Text, View, StyleSheet, pdf, Image, Font, Link } from '@react-pdf/renderer';
 import { PDFDocument } from 'pdf-lib';
+import { countBlanks, splitByBlanks } from '../exercises/utils.js';
 
 // Global image store - this will collect images from all exercise components
 window.globalImageStore = window.globalImageStore || {};
@@ -18,6 +19,62 @@ Font.register({
 const PaddedText = ({ style, children }) => <View style={style}><Text>{children}</Text></View>;
 
 const wrapBlankRuns = (value) => String(value).replace(/_{13,}/g, blank => blank.match(/.{1,12}/g).join(' '));
+
+// Offline exports accept saved data as well as generated lessons. Bound both
+// pages together before constructing any PDF nodes or proportional blanks.
+const FIB_PDF_LIMITS = {
+  items: 256, sentence: 16384, answer: 4096, blanksPerItem: 128,
+  blanks: 2048, expandedCharacters: 262144, lineBreaks: 256
+};
+
+const validateFIBForPDF = (items) => {
+  if (items == null) return;
+  const reject = (index, reason) => {
+    throw new Error(`Cannot export FIB item ${index + 1}: ${reason}`);
+  };
+  if (!Array.isArray(items) || items.length > FIB_PDF_LIMITS.items) {
+    throw new Error(`Cannot export FIB: expected at most ${FIB_PDF_LIMITS.items} items`);
+  }
+  let blanks = 0;
+  let expandedCharacters = 0;
+  let lineBreaks = 0;
+  const countLineBreaks = text => (text.match(/\r\n|[\r\n\u2028\u2029]/g) || []).length;
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    if (typeof item?.sentence !== 'string' || item.sentence.length > FIB_PDF_LIMITS.sentence) {
+      reject(index, `sentence must be a string of at most ${FIB_PDF_LIMITS.sentence} characters`);
+    }
+    const count = countBlanks(item.sentence);
+    if (count === 0 || count > FIB_PDF_LIMITS.blanksPerItem) {
+      reject(index, `expected 1 to ${FIB_PDF_LIMITS.blanksPerItem} blanks`);
+    }
+    if (!Array.isArray(item.answers) || item.answers.length !== count) {
+      reject(index, 'expected exactly one answer per blank');
+    }
+    blanks += count;
+    // Counting the complete sentence twice conservatively includes the literal
+    // text on the worksheet and solutions page, without allocating split parts.
+    expandedCharacters += item.sentence.length * 2;
+    // Forced lines consume page height even when they contain no visible text.
+    // The sentence appears on both pages; answer text appears in solutions.
+    lineBreaks += countLineBreaks(item.sentence) * 2;
+    for (const answer of item.answers) {
+      if (typeof answer !== 'string' || answer.length > FIB_PDF_LIMITS.answer || !answer.trim()) {
+        reject(index, `answers must be nonempty strings of at most ${FIB_PDF_LIMITS.answer} characters`);
+      }
+      const underscores = Math.max(8, Math.round(answer.length * 2.7));
+      const wrappedLength = underscores + Math.floor((underscores - 1) / 12);
+      expandedCharacters += wrappedLength + answer.length + 2;
+      lineBreaks += countLineBreaks(answer);
+    }
+    if (blanks > FIB_PDF_LIMITS.blanks || expandedCharacters > FIB_PDF_LIMITS.expandedCharacters) {
+      reject(index, 'lesson exceeds the FIB PDF expansion budget');
+    }
+    if (lineBreaks > FIB_PDF_LIMITS.lineBreaks) {
+      reject(index, 'lesson exceeds the FIB PDF line-break budget');
+    }
+  }
+};
 
 // PDF Styles
 const styles = StyleSheet.create({
@@ -620,7 +677,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
   const renderBlanks = (text, answers = []) => {
     if (!text) return null;
 
-    const parts = text.split('_____');
+    const parts = splitByBlanks(text);
     const elements = [];
 
     for (let i = 0; i < parts.length; i++) {
@@ -632,7 +689,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         );
       }
       if (i < parts.length - 1) {
-        const expected = Array.isArray(answers) && answers.length > 0 ? (answers[i] || answers[0] || '') : '';
+        const expected = answers[i];
         const underscores = buildBlank(expected);
         elements.push(
           <Text key={`blank-${i}`} style={[styles.inlineText, { fontFamily: 'Courier', maxWidth: '100%' }]}> {underscores}</Text>
@@ -928,8 +985,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
   const renderFIBSolution = (item) => {
     if (!item?.sentence) return null;
 
-    const parts = item.sentence.split('_____');
-    const answers = Array.isArray(item.answers) ? item.answers : [];
+    const parts = splitByBlanks(item.sentence);
+    const answers = item.answers;
     const elements = [];
 
     for (let i = 0; i < parts.length; i++) {
@@ -944,7 +1001,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
 
       // Add answer in green bold instead of blank
       if (i < parts.length - 1) {
-        const answer = answers[i] || answers[0] || '[missing]';
+        const answer = answers[i];
         
         elements.push(
           <Text key={`answer-${i}`} style={[styles.inlineText, { 
@@ -1228,7 +1285,9 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
   };
 
   // PDF Document Component
-  const PDFDocument = () => (
+  const PDFDocument = () => {
+    validateFIBForPDF(lesson.fill_in_blanks);
+    return (
     <Document>
       {/* Main Content Page */}
       <Page size="A4" style={styles.page}>
@@ -1866,6 +1925,7 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
       </Page>
     </Document>
   );
+  };
 
   const generatePDF = async () => {
     if (!lesson) return;
