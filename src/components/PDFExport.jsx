@@ -516,8 +516,8 @@ export default function PDFExport({ lesson, orchestratorValues, strictAccents = 
         
         const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
         
-        // Skip separator rows (contain only dashes and pipes)
-        if (!line.match(/^\s*\|?\s*:?-+:?\s*\|/)) {
+        // Trim first so optional pipes cannot make whitespace quantifiers overlap.
+        if (!line.trimStart().match(/^\|?\s*:?-+:?\s*\|/)) {
           tableRows.push(cells);
         }
         return;
