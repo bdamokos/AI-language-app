@@ -49,9 +49,9 @@ For an interactive demonstration, run `npm run preview:fixture` and open **http:
 
 To inspect the shared hosted protocol against the simulated provider, use `npm run preview:fixture -- --hosted` at **http://127.0.0.1:3001**. This is a test fixture, not a shared website deployment. Both previews use temporary data separate from your real accounts, and neither proves live ChatGPT eligibility.
 
-## Hosted website work
+## Hosted website
 
-Shared website deployment remains in [pending PR #11](https://github.com/bdamokos/AI-language-app/pull/11), awaiting OpenAI approval for website sign-in and ChatGPT plan usage. This local release includes no Docker, reverse-proxy, or remote-deployment setup. Local self-service registration cannot be used to bypass the hosted approval requirement.
+For the optional hosted server, see [Hosted deployment](docs/HOSTED.md). Website sign-in and ChatGPT plan usage require OpenAI approval; live hosted acceptance remains pending.
 
 ## Account and inference boundaries
 
